@@ -34,3 +34,10 @@ Note: automating the Uber portal may conflict with Uber's terms. If Uber grants 
 - **Loans, salary advances and shared costs** (e.g. visa: company 50%, driver 50%) are recovered in monthly instalments on the last day of each month until paid. Cash repayments shorten the plan. The ledger uses account 1170 Driver loans & recoverables.
 - **Paid from "Driver's cash"** on an expense or direct booking puts it on the driver's account instead of the bank. "Card machine" receipts sit in 1120 until a "Card machine settlement to bank" entry.
 - **Collections & cash** shows what each platform collected in the app, the cash drivers kept, what is still due from each platform, trips by payment type, and the cash still held by each driver.
+
+## Card terminals and reconciliation
+
+- **Card terminals**: each payment machine has its terminal ID (TID) and a dated driver assignment. When a machine moves to another driver, save the new driver with the date; earlier payments stay with the earlier driver.
+- **Import trip data → Card terminal statement**: drop the terminal statement CSV from the bank / provider. Match the columns once (date, TID, amount, fee, reference, type) and the mapping is remembered. Declined rows are skipped, refunds and voids are negative, and unknown TIDs are added as new terminals.
+- A card payment is credited to the driver holding the terminal on that day, because he did not keep that money as cash. The ledger posts it as Dr 1120 card receipts / Cr 2100 driver; the card fee goes to 5300. A payment on an unassigned terminal goes to 2150 until the terminal is assigned.
+- **Reconciliation** per driver: Total payment = Payout from application + Card payment + Cash from driver + Difference. The difference is cash still with the driver. Click a driver to see each day; days with more card payments than cash trips are flagged.
