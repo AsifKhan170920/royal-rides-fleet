@@ -162,7 +162,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"",
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:""}, edit:null
@@ -171,7 +171,7 @@ const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["usage","Driver & car usage"],["import","Import trip data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines & drivers"],
-  ["Bank & cash",null],["cashbank","Bank & cash accounts"],["transfers","Inter-account transfers"],
+  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["settlement","Driver settlement"],["driverledger","Driver ledger & loans"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
@@ -249,7 +249,32 @@ const POS_FIELDS = [["ref","Transaction / reference no."],["date","Date (or date
 // machine ↔ statement by terminal number; Excel often drops leading zeros, so they are ignored
 const tidKey = t => norm(t).replace(/^0+/, "");
 const termByTid = tid => Object.values(S.terminals).find(x => tidKey(x.tid) === tidKey(tid));
-function cardDriver(x){ if(x.dr) return x.dr; const tm = termByTid(x.tid); if(!tm) return ""; const a = termAt(termList(tm, TRM_TERMS), x.d); return (a && a.driverId) || ""; }
+/* Car and payment machine are assigned in the driver's form, each change with an effective date
+   (driver.assign = [{from, vehicleId, terminalTid, note}]), so earlier days keep the earlier car and machine.
+   A card payment belongs to the driver holding that terminal number on the payment date. */
+const ASG_KEYS = ["vehicleId","terminalTid"];
+const _asg = new WeakMap();
+function asgList(rec){ let v = _asg.get(rec); if(!v){ v = termList(rec, ASG_KEYS, "assign"); _asg.set(rec, v); } return v; }
+const asgAt = (drId, day) => (S.drivers[drId] && termAt(asgList(S.drivers[drId]), day)) || {};
+const vehAt = (drId, day) => asgAt(drId, day).vehicleId || "";
+function withAssign(rec, next, eff, note){
+  let hist = Array.isArray(rec.assign) && rec.assign.length ? rec.assign.map(x => ({...x}))
+    : (rec.vehicleId || rec.terminalTid ? [{from: BEGIN, vehicleId: rec.vehicleId || "", terminalTid: rec.terminalTid || "", note: "Before history was kept"}] : []);
+  hist.sort((a,b) => a.from.localeCompare(b.from));
+  const was = termAt(hist, eff), same = was ? ASG_KEYS.every(k => String(was[k] ?? "") === String(next[k] ?? "")) : !next.vehicleId && !next.terminalTid;
+  if(!same){ hist = hist.filter(h => h.from !== eff); hist.push({from: eff, ...next, note: note || "", by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}); hist.sort((a,b) => a.from.localeCompare(b.from)); }
+  const now = termAt(hist, iso(new Date())) || {};
+  return {assign: hist, vehicleId: now.vehicleId || "", terminalTid: now.terminalTid || ""};
+}
+const asgText = t => !t ? "—" : [t.vehicleId ? "Car " + vName(t.vehicleId) : "No car", t.terminalTid ? "Machine " + t.terminalTid : "No machine"].join(" · ");
+function cardDriver(x){
+  if(x.dr) return x.dr;
+  const k = tidKey(x.tid); let best = "", bestFrom = "";
+  for(const d of Object.values(S.drivers)){ const a = termAt(asgList(d), x.d); if(a && a.terminalTid && tidKey(a.terminalTid) === k && a.from >= bestFrom){ best = d.id; bestFrom = a.from; } }
+  if(best) return best;
+  // machines assigned on the Machines page before assignment moved to the driver form
+  const tm = termByTid(x.tid); if(!tm) return ""; const a = termAt(termList(tm, TRM_TERMS), x.d); return (a && a.driverId) || "";
+}
 const trmText = t => t && t.driverId ? dName(t.driverId) : "Not assigned";
 function guessPos(h){
   const L = h.map(x => String(x).toLowerCase().trim()), one = (re, not) => { const i = L.findIndex(x => re.test(x) && !(not && not.test(x))); return i < 0 ? "" : h[i]; };
@@ -333,7 +358,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -377,7 +402,7 @@ function acctName(a){
 }
 function vehicleForTrip(t){
   if(t.p){ const v = Object.values(S.vehicles).find(v => norm(v.plate) === norm(t.p)); if(v) return v.id; }
-  const dr = S.drivers[t.dr]; return dr && dr.vehicleId || "";
+  return vehAt(t.dr, t.d);   // the driver's car on the trip date
 }
 /* Terms change over time. Each driver and car keeps a dated history in rec.terms
    ([{from:"YYYY-MM-DD", ...terms, note, by, at}]); a term applies from its date until the next one.
@@ -385,8 +410,8 @@ function vehicleForTrip(t){
 const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary"];
 const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct"];
 const BEGIN = "2000-01-01";
-function termList(rec, keys){
-  if(Array.isArray(rec.terms) && rec.terms.length) return rec.terms.slice().sort((a,b)=>a.from.localeCompare(b.from));
+function termList(rec, keys, field = "terms"){
+  if(Array.isArray(rec[field]) && rec[field].length) return rec[field].slice().sort((a,b)=>a.from.localeCompare(b.from));
   const base = {from: BEGIN}; keys.forEach(k => base[k] = rec[k] ?? ""); return [base];
 }
 function termAt(list, day){ let t = null; for(const x of list){ if(x.from <= day) t = x; else break; } return t; }
@@ -446,7 +471,7 @@ function compute(){
       dayPart += x; (d.byDay[day] ||= {share:0, tip:0, cash:0, n:0}).share += x;
       const use = d.dayNet[day], tot = use ? Object.values(use).reduce((a,b)=>a+b,0) : 0;
       if(use && tot) Object.entries(use).forEach(([vid,n]) => { vday(vid, day).drv += x * n / tot; });
-      else vday(m.vehicleId || "unassigned", day).drv += x;
+      else vday(vehAt(d.id, day) || "unassigned", day).drv += x;
     }
     d.ent = d.entTrip + dayPart;
     d.net = d.fare - d.fee - d.tax; d.daysWorked = d.days.size;
@@ -463,7 +488,7 @@ function compute(){
     d.loanOut = sum(items, it => itemOutstanding(it, to));
     // company costs the driver paid from his cash (+), company money he collected (−)
     d.viaDriver = sum(mine.filter(e => e.paidFrom === "driver" && e.type === "expense"), e => num(e.amount) + num(e.vat)) - sum(mine.filter(e => e.paidFrom === "driver" && e.type === "income"), e => num(e.amount) + num(e.vat));
-    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver + d.card;
+    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver + d.card + (d.books = window.BOOKS ? BOOKS.driverNet(S.entries, d.id) : 0);
     d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) - d.ent;
   }
   // car expenses, by date
@@ -550,6 +575,7 @@ function journal(C){
     else if(e.type === "investor_payout"){ add("2200", a, 0, memo); add(src, 0, a, memo); }
     else if(e.type === "card_settlement"){ add(e.toAccount || "1100", a, 0, memo); add("1120", 0, a, memo); }
     else if(e.type === "transfer"){ const fee = num(e.fee); add(e.toAccount || "1100", a, 0, memo); add(src, 0, a + fee, memo); if(fee) add("5300", fee, 0, "Bank charges – " + memo); }
+    else if(window.BOOKS) BOOKS.post(e, add, {inVatRec});
   }
   day = null;
   // card payments on company terminals: the money goes to the machine's network account, the driver is credited
@@ -661,7 +687,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
+  const fns = {...(window.BOOK_VIEWS || {}), cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -727,7 +753,7 @@ function vTrips(){
     <select id="tdrv" aria-label="Driver filter">${listOpts(S.drivers, d=>d.name||d.id, f.driver, "All drivers")}</select>
     <select id="tveh" aria-label="Car filter">${listOpts(S.vehicles, v=>vName(v.id), f.vehicle, "All cars")}</select></div></div>
   ${rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi?"<th>Platform</th>":""}<th>Driver</th><th>Car</th><th class="num">Fare</th><th class="num">Fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Trip ID</th></tr></thead><tbody>
-  ${shown.map(t=>{ const vid = vehicleForTrip(t)||"unassigned", own = S.drivers[t.dr] && S.drivers[t.dr].vehicleId; return `<tr><td>${esc(t.d)}</td><td>${esc(t.t||"")}</td>${multi?`<td>${esc(pName(plOf(t)))}</td>`:""}<td>${esc(dName(t.dr))}</td><td>${esc(vName(vid))}${own && t.p && vid !== own && vid !== "unassigned" ? ' <span class="pill brass" title="Not this driver\'s assigned car">other car</span>' : ""}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc(t.st ? t.st.replace(/_/g," ") : (t.tr ? "" : "adjustment"))}${t.prod ? ` · ${esc(t.prod)}` : ""}</td><td class="mono small muted">${esc(String(t.tr||t.id).slice(0,13))}</td></tr>`; }).join("")}
+  ${shown.map(t=>{ const vid = vehicleForTrip(t)||"unassigned", own = vehAt(t.dr, t.d); return `<tr><td>${esc(t.d)}</td><td>${esc(t.t||"")}</td>${multi?`<td>${esc(pName(plOf(t)))}</td>`:""}<td>${esc(dName(t.dr))}</td><td>${esc(vName(vid))}${own && t.p && vid !== own && vid !== "unassigned" ? ' <span class="pill brass" title="Not this driver\'s assigned car">other car</span>' : ""}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc(t.st ? t.st.replace(/_/g," ") : (t.tr ? "" : "adjustment"))}${t.prod ? ` · ${esc(t.prod)}` : ""}</td><td class="mono small muted">${esc(String(t.tr||t.id).slice(0,13))}</td></tr>`; }).join("")}
   </tbody><tfoot><tr><td colspan="${multi?5:4}">${new Set(rows.map(t=>t.tr||t.id)).size} trips (${rows.length} rows)${rows.length>500?" – first 500 shown":""}</td><td class="num">${fmt(sum(rows,t=>t.f))}</td><td class="num">${fmt(sum(rows,t=>t.sf))}</td><td class="num">${fmt(sum(rows,t=>t.tx))}</td><td class="num">${fmt(sum(rows,t=>t.tp))}</td><td class="num">${fmt(sum(rows,t=>t.rf))}</td><td class="num">${fmt(sum(rows,t=>t.c))}</td><td class="num">${fmt(sum(rows,t=>(t.f||0)-(t.sf||0)-(t.tx||0)))}</td><td class="num">${fmt(sum(rows,t=>t.km))}</td><td colspan="2"></td></tr></tfoot></table></div>
   ${(()=>{ const po = S.trips.filter(t=>t.po); const a = S.activity||[]; const canc = a.filter(x=>/cancel/.test(x.st||"")).length;
     return `<p class="small muted" style="margin-top:8px">${a.length ? `Trip activity: ${a.length} requests, ${a.filter(x=>x.st==="completed").length} completed, ${canc} cancelled, ${fmt(sum(a,x=>x.km))} km. ` : "No Trip activity report imported for this period – import it to get the car, km and status of each trip. "}${po.length ? `Uber paid ${po.length} transfer(s) to the bank: AED ${fmt(sum(po,t=>t.po))}.` : ""}</p>`; })()}`
@@ -813,7 +839,7 @@ function posPreview(st){
     <div class="row"><button class="btn ghost" id="posCancel">Cancel</button><button class="btn primary" id="posGo" ${rows.length && S.canWrite && S.db && !noTid ? "" : "disabled"}>Import ${rows.length} card payments</button></div></div>
     <div class="kpis"><div class="kpi"><div class="l">Card payments</div><div class="v">${fmt(tot)}</div></div><div class="kpi"><div class="l">Fees</div><div class="v">${fmt(fee)}</div></div><div class="kpi"><div class="l">Net to bank</div><div class="v">${fmt(tot - fee)}</div></div><div class="kpi"><div class="l">Terminals</div><div class="v">${tids.filter(Boolean).length}</div></div></div>
     ${noTid ? `<div class="banner">${noTid} payments have no terminal ID. Choose the terminal ID column below, or type the terminal this whole file belongs to.</div>` : ""}
-    ${unknown.length || unassigned ? `<div class="banner">${unknown.length ? `New terminal(s) ${esc(unknown.join(", "))} will be added. ` : ""}Assign each machine to its driver on the Machines &amp; drivers page – payments follow the assignment, so this can be done after importing.</div>` : ""}
+    ${unknown.length || unassigned ? `<div class="banner">${unknown.length ? `New terminal(s) ${esc(unknown.join(", "))} will be added. ` : ""}Assign each machine in the driver's form (Drivers page) – payments follow the assignment, so this can be done after importing.</div>` : ""}
     <div class="form" style="margin:10px 0"><div class="f"><label for="posTid">Terminal ID for the whole file (only if there is no TID column)</label><input id="posTid" list="tidList" value="${esc(st.fileTid)}"><datalist id="tidList">${Object.values(S.terminals).map(x => `<option value="${esc(x.tid)}">${esc(x.name || "")}</option>`).join("")}</datalist></div></div>
     <div class="mapgrid">${POS_FIELDS.map(([k,l]) => `<div class="form"><div class="f"><label for="pm_${k}">${esc(l)}</label><select id="pm_${k}" data-posmap="${k}"><option value="">— none —</option>${st.headers.map(h => `<option value="${esc(h)}" ${st.map[k] === h ? "selected" : ""}>${esc(h)}</option>`).join("")}</select></div></div>`).join("")}</div>
     <div class="tbl" style="margin-top:12px"><table><thead><tr><th>TID</th><th>Terminal</th><th>Driver</th><th class="num">Payments</th><th class="num">Amount</th></tr></thead><tbody>${byT}</tbody></table></div></div>`;
@@ -921,6 +947,7 @@ function vDrivers(){
 }
 function driverForm(id, d0){
   const d = {...d0, ...latestTerms(d0, DRV_TERMS)};   // the form shows the latest dated terms
+  const al = asgList(d0), asgNow = al[al.length - 1] || {};
   return `<div class="section"><h2>${id ? "Edit driver" : "New driver"}</h2><p class="sub">Commission and salary+commission pay a % of net earnings (fare minus Uber fee and VAT). Rent means the driver keeps net earnings minus a daily rent.</p>
   <form class="form" id="fDriver" data-id="${esc(id)}">
     <div class="f"><label for="dn">Full name</label><input id="dn" name="name" required value="${esc(d.name)}"></div>
@@ -928,7 +955,11 @@ function driverForm(id, d0){
     <div class="f"><label for="du">Uber driver UUID</label><input id="du" name="uberUuid" value="${esc(d.uberUuid)}"></div>
     <div class="f"><label for="dp">Phone</label><input id="dp" name="phone" value="${esc(d.phone)}"></div>
     <div class="f"><label for="dob">Opening balance (+ we owe driver, − driver owes)</label><input id="dob" name="openingBalance" type="number" step="0.01" value="${esc(d.openingBalance ?? "")}"></div>
-    <div class="f"><label for="dv">Assigned car</label><select id="dv" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), d.vehicleId, "None")}</select></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Car & payment machine</b> <span class="small muted">– a change applies from its effective date; earlier trips and card payments stay with the earlier car and machine.</span></div>
+    <div class="f"><label for="dv">Assigned car</label><select id="dv" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), asgNow.vehicleId, "None")}</select></div>
+    <div class="f"><label for="dtm">Payment machine (terminal no.)</label><select id="dtm" name="terminalTid">${opts(Object.fromEntries(Object.values(S.terminals).sort((a,b) => (a.name||a.tid).localeCompare(b.name||b.tid, undefined, {numeric:true})).map(x => [x.tid, (x.name ? x.name + " · " : "") + x.tid])), asgNow.terminalTid, "None")}</select></div>
+    <div class="f"><label for="daf">Car / machine effective from</label><input id="daf" name="asgFrom" type="date" value="${esc(iso(new Date()))}"></div>
+    <div class="f"><label for="dan">Reason (optional)</label><input id="dan" name="asgNote" placeholder="e.g. car swapped, machine replaced"></div>
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
     <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
@@ -939,17 +970,17 @@ function driverForm(id, d0){
     <div class="f"><label for="dtn">Reason for change (optional)</label><input id="dtn" name="termNote" placeholder="e.g. new agreement, promotion"></div>
     <div class="f"><label for="dact">Status</label><select id="dact" name="active">${opts({true:"Active", false:"Inactive"}, String(d.active !== false))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save driver</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="drivers" data-id="${esc(id)}">Delete</button>`:""}</div>
-  </form>${termHistory("drivers", id, d0, DRV_TERMS, drvTermText)}</div>`;
+  </form>${termHistory("drivers", id, d0, DRV_TERMS, drvTermText)}${termHistory("drivers", id, d0, ASG_KEYS, asgText, "assign", "Car & machine history")}</div>`;
 }
 function latestTerms(rec, keys){ const l = termList(rec, keys); return pick(l[l.length-1], keys); }
-function termHistory(col, id, rec, keys, text){
+function termHistory(col, id, rec, keys, text, field = "terms", title = "Terms history"){
   if(!id) return "";
-  const l = termList(rec, keys), today = iso(new Date()), cur = termAt(l, today);
-  return `<h2 style="margin-top:16px">Terms history</h2><div class="tbl"><table><thead><tr><th>Effective from</th><th>Terms</th><th>Reason</th><th>Changed by</th><th></th></tr></thead><tbody>
+  const l = termList(rec, keys, field), today = iso(new Date()), cur = termAt(l, today);
+  return `<h2 style="margin-top:16px">${esc(title)}</h2><div class="tbl"><table><thead><tr><th>Effective from</th><th>Terms</th><th>Reason</th><th>Changed by</th><th></th></tr></thead><tbody>
   ${l.map((t,i) => [t,i]).reverse().map(([t,i]) => `<tr><td>${t.from === BEGIN ? "Start" : esc(dmyS(t.from))}${t === cur ? ' <span class="pill good">Current</span>' : t.from > today ? ' <span class="pill brass">Upcoming</span>' : ""}</td>
     <td style="white-space:normal">${esc(text(t))}</td><td class="small" style="white-space:normal">${esc(t.note||"")}</td><td class="small muted">${esc(t.by||"")}${t.at ? " · " + esc(new Date(t.at).toLocaleDateString("en-GB")) : ""}</td>
-    <td>${Array.isArray(rec.terms) && rec.terms.length > 1 ? `<button class="btn sm danger" data-termdel="${i}" data-col="${col}" data-id="${esc(id)}">Remove</button>` : ""}</td></tr>`).join("")}
-  </tbody></table></div><p class="small muted" style="margin-top:6px">To change terms, save new terms with their effective date – the history keeps every version. “Remove” is only for correcting a mistaken entry.</p>`;
+    <td>${Array.isArray(rec[field]) && rec[field].length > 1 ? `<button class="btn sm danger" data-termdel="${i}" data-field="${field}" data-col="${col}" data-id="${esc(id)}">Remove</button>` : ""}</td></tr>`).join("")}
+  </tbody></table></div><p class="small muted" style="margin-top:6px">To make a change, save it with its effective date – the history keeps every version. “Remove” is only for correcting a mistaken entry.</p>`;
 }
 function vVehicles(){
   const C = compute(); const list = Object.values(S.vehicles).sort((a,b)=>(a.fleetId||a.plate||"").localeCompare(b.fleetId||b.plate||"", undefined, {numeric:true}));
@@ -1008,9 +1039,11 @@ function vUsage(){
   const carLbl = p => carOf(p) ? vName(carOf(p)) : p;
   const D = {}, P = {};
   U.forEach(x => { const d = D[x.dr||"unknown"] ||= {}; d[x.p] = (d[x.p]||0) + 1; const c = P[x.p] ||= {}; c[x.dr||"unknown"] = (c[x.dr||"unknown"]||0) + 1; });
-  const drs = Object.entries(D).map(([id, m]) => { const own = S.drivers[id] && S.drivers[id].vehicleId; const tot = Object.values(m).reduce((a,b)=>a+b,0);
-    const other = Object.entries(m).filter(([p]) => !own || carOf(p) !== own).reduce((a,[,n])=>a+n,0); const top = Object.entries(m).sort((a,b)=>b[1]-a[1])[0][0];
-    return {id, m, own, tot, other: own ? other : 0, top}; }).sort((a,b) => b.other - a.other || dName(a.id).localeCompare(dName(b.id)));
+  // "other car" is judged per trip against the car assigned on that trip's date
+  const otherBy = {}; U.forEach(x => { const own = vehAt(x.dr, x.d); if(own && carOf(x.p) !== own) otherBy[x.dr] = (otherBy[x.dr] || 0) + 1; });
+  const drs = Object.entries(D).map(([id, m]) => { const own = vehAt(id, S.to); const tot = Object.values(m).reduce((a,b)=>a+b,0);
+    const top = Object.entries(m).sort((a,b)=>b[1]-a[1])[0][0];
+    return {id, m, own, tot, other: otherBy[id] || 0, top}; }).sort((a,b) => b.other - a.other || dName(a.id).localeCompare(dName(b.id)));
   const shared = Object.entries(P).filter(([,m]) => Object.keys(m).length > 1);
   return `<div class="banner info">A trip is always booked to the driver who was <b>logged in to the driver app</b>, and the car is the <b>number plate used on that trip</b> – not the car assigned in the platform. So if Ali's car is driven by Ahmed, the trip shows Ahmed as driver and Ali's car plate. The ledger follows the same rule: the money goes to the driver who drove (settlement) and to the car that was used (investor P&L).</div>
   <div class="section"><div class="head"><div><h2>Drivers · cars used</h2><p class="sub">${esc(S.from)} to ${esc(S.to)} · ${U.length} completed trips${done.length ? " (Trip activity report)" : ""}. “Other car” = trips on a car that is not the driver's assigned car.</p></div></div>
@@ -1018,7 +1051,7 @@ function vUsage(){
   ${drs.map(d => `<tr><td>${esc(dName(d.id))}</td><td>${d.own ? esc(vName(d.own)) : '<span class="pill warn">Not set</span>'}</td>
     <td style="white-space:normal">${Object.entries(d.m).sort((a,b)=>b[1]-a[1]).map(([p,n]) => `<span class="${d.own && carOf(p) !== d.own ? "pill brass" : "pill"}">${esc(carLbl(p))} · ${n}</span>`).join(" ")}</td>
     <td class="num">${d.tot}</td><td class="num">${d.other ? `<b>${d.other}</b> <span class="small muted">(${Math.round(100*d.other/d.tot)}%)</span>` : "0"}</td>
-    <td>${S.drivers[d.id] && carOf(d.top) && carOf(d.top) !== d.own && S.canWrite ? `<button class="btn sm" data-assigncar="${esc(carOf(d.top))}" data-id="${esc(d.id)}" title="Make the car this driver used most their assigned car">Assign ${esc(carLbl(d.top))}</button>` : ""}</td></tr>`).join("")}
+    <td>${S.drivers[d.id] && carOf(d.top) && carOf(d.top) !== d.own && S.canWrite ? `<button class="btn sm" data-assigncar="${esc(carOf(d.top))}" data-id="${esc(d.id)}" title="Make the car this driver used most their assigned car from the start of this period">Assign ${esc(carLbl(d.top))} from ${esc(dmyS(S.from))}</button>` : ""}</td></tr>`).join("")}
   </tbody></table></div></div>
   <div class="section"><h2>Cars driven by more than one driver</h2><p class="sub">Each driver's trips on these cars count towards that car's revenue in the investor P&L.</p>
   ${shared.length ? `<div class="tbl"><table><thead><tr><th>Car</th><th>Drivers (trips)</th><th class="num">Trips</th></tr></thead><tbody>
@@ -1132,6 +1165,7 @@ function ledgerLines(drId){
     else if(e.type === "expense"){ if(e.recover) lines.push({date:e.date, desc:cat + " charged to driver" + n, dr:a}); if(e.paidFrom === "driver") lines.push({date:e.date, desc:cat + " paid from driver's cash" + n, cr:a}); }
     else if(e.type === "income" && e.paidFrom === "driver") lines.push({date:e.date, desc:"Direct booking – cash collected by driver" + n, dr:a});
   });
+  if(window.BOOKS) BOOKS.driverLines(L.entries, drId).forEach(l => lines.push(l));
   Object.values(S.ditems).filter(it => it.driverId === drId).forEach(it => itemPlan(it).inst.forEach(x => { if(x.date >= start && x.date <= S.to) lines.push({date:x.date, desc:`Instalment – ${ITEM_KINDS[it.kind] || "Loan"}${it.desc ? " – " + it.desc : ""}`, dr:x.amt}); }));
   lines.sort((a,b) => a.date.localeCompare(b.date) || (b.cr ? 1 : 0) - (a.cr ? 1 : 0));
   const open = num((S.drivers[drId] || {}).openingBalance); let bal = open, before = open; const shown = [];
@@ -1261,23 +1295,26 @@ function vTerminals(){
   <div class="section"><div class="head"><div><h2>Card terminals</h2><p class="sub">Payment machines given to drivers. Card payments in each terminal statement are credited to the driver the terminal was assigned to on that date, so a driver who took a card instead of cash is not charged for that cash.</p></div><button class="btn primary" data-edit="terminal" data-id="">Add terminal</button></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Terminal ID</th><th>Name</th><th>Bank / provider</th><th>Driver now</th><th class="num">Payments</th><th class="num">Amount</th><th></th></tr></thead><tbody>
   ${list.map(x => { const rs = (S.cardtx || []).filter(c => tidKey(c.tid) === tidKey(x.tid)), tl = termList(x, TRM_TERMS), cur = termAt(tl, today);
-    return `<tr><td class="mono">${esc(x.tid)}</td><td>${esc(x.name)}</td><td>${esc(x.provider)}</td><td>${cur && cur.driverId ? esc(dName(cur.driverId)) : '<span class="pill warn">Not assigned</span>'}${tl.length > 1 ? ` <span class="pill">${tl.length} assignments</span>` : ""}</td><td class="num">${rs.length}</td><td class="num">${fmt(sum(rs, c => c.amt))}</td><td><button class="btn sm" data-edit="terminal" data-id="${esc(x.id)}">Edit</button></td></tr>`; }).join("")}
+    return `<tr><td class="mono">${esc(x.tid)}</td><td>${esc(x.name)}</td><td>${esc(x.provider)}</td><td>${(() => { const dn = cardDriver({tid: x.tid, d: today}); return dn ? esc(dName(dn)) : '<span class="pill warn">Not assigned</span>'; })()}</td><td class="num">${rs.length}</td><td class="num">${fmt(sum(rs, c => c.amt))}</td><td><button class="btn sm" data-edit="terminal" data-id="${esc(x.id)}">Edit</button></td></tr>`; }).join("")}
   </tbody></table></div><p class="small muted" style="margin-top:6px">Payments and amounts are for the period at the top.</p>` : `<div class="empty"><b>No terminals yet</b>Add each payment machine with its terminal ID (TID), or import a terminal statement and they are added automatically.</div>`}</div>`;
 }
 function terminalForm(id, x0){
   const x = {...x0, ...latestTerms(x0, TRM_TERMS)};
-  return `<div class="section"><h2>${id ? "Edit terminal" : "New terminal"}</h2><p class="sub">When the machine moves to another driver, choose the new driver and the date – earlier payments stay with the earlier driver.</p>
+  return `<div class="section"><h2>${id ? "Edit terminal" : "New terminal"}</h2><p class="sub">The terminal number must match the statement. Which driver holds the machine is set in the driver's form, with the date.</p>
   <form class="form" id="fTerminal" data-id="${esc(id)}">
     <div class="f"><label for="tt">Terminal number (TID) – as on the statement</label><input id="tt" name="tid" required value="${esc(x.tid)}"></div>
     <div class="f"><label for="tn">Name / label</label><input id="tn" name="name" value="${esc(x.name)}" placeholder="e.g. POS-03"></div>
     <div class="f"><label for="tpv">Bank / provider</label><input id="tpv" name="provider" value="${esc(x.provider)}" placeholder="e.g. Network International"></div>
     <div class="f"><label for="tna">Payments go to (network account)</label><select id="tna" name="networkAcct">${opts(acctOpts(["network"]), x.networkAcct || "1120")}</select></div>
-    <div class="f"><label for="tdr">Assigned driver</label><select id="tdr" name="driverId">${listOpts(S.drivers, d => d.name || d.id, x.driverId, "Not assigned")}</select></div>
-    <div class="f"><label for="ttf">Assigned from</label><input id="ttf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
-    <div class="f"><label for="ttn">Note (optional)</label><input id="ttn" name="termNote" placeholder="e.g. handed over at the office"></div>
     <div class="f"><label for="tac">Status</label><select id="tac" name="active">${opts({true:"Active", false:"Inactive"}, String(x.active !== false))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save terminal</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id ? `<button class="btn danger" type="button" data-del="terminals" data-id="${esc(id)}">Delete</button>` : ""}</div>
-  </form>${termHistory("terminals", id, x0, TRM_TERMS, trmText)}</div>`;
+  </form>${id ? machineHistory(x.tid) : ""}</div>`;
+}
+function machineHistory(tid){
+  const rows = []; Object.values(S.drivers).forEach(d => asgList(d).forEach(a => { if(a.terminalTid && tidKey(a.terminalTid) === tidKey(tid)) rows.push({from: a.from, id: d.id, note: a.note}); }));
+  rows.sort((a,b) => b.from.localeCompare(a.from));
+  return `<h2 style="margin-top:16px">Drivers who held this machine</h2>${rows.length ? `<div class="tbl"><table><thead><tr><th>From</th><th>Driver</th><th>Note</th></tr></thead><tbody>${rows.map(r => `<tr><td>${r.from === BEGIN ? "Start" : esc(dmyS(r.from))}</td><td>${esc(dName(r.id))}</td><td class="small">${esc(r.note || "")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="sub">Not assigned to any driver yet.</p>`}
+  <p class="small muted" style="margin-top:6px">Assign the machine in the driver's form (Drivers page), with the date it was handed over.</p>`;
 }
 
 /* ---------- reconciliation ---------- */
@@ -1311,7 +1348,7 @@ function vRecon(){
     </tbody></table></div></div>`;
   }
   return `<div class="banner info"><b>Total payment = Payout from application + Card payment + Cash from driver + Difference.</b> Total payment is what riders paid for the driver's trips (plus direct bookings he collected). The difference is cash the driver still holds – it is deducted from his pay in the Driver settlement. A negative difference means card and cash are more than his trips: check the terminal assignment or record the booking.</div>
-  ${unas.length ? `<div class="banner">${unas.length} card payments (AED ${fmt(sum(unas, x => x.amt))}) are on terminals with no driver assigned for that date: ${esc([...new Set(unas.map(x => x.tid))].join(", "))}. Assign them on the Payment machines → Machines &amp; drivers page.</div>` : ""}
+  ${unas.length ? `<div class="banner">${unas.length} card payments (AED ${fmt(sum(unas, x => x.amt))}) are on terminals with no driver assigned for that date: ${esc([...new Set(unas.map(x => x.tid))].join(", "))}. Assign them in the driver's form (Drivers page), with the date the machine was handed over.</div>` : ""}
   ${detail}
   <div class="section"><div class="head"><div><h2>Reconciliation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">Click a driver to see each day.</p></div><button class="btn" id="expRecon">Export CSV</button></div>
   ${R.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th class="num">Trips</th><th class="num">Total payment</th><th class="num">Payout from application</th><th class="num">Card payment</th><th class="num">Cash from driver</th><th class="num">Difference</th><th></th></tr></thead><tbody>
@@ -1357,7 +1394,7 @@ function vCollections(){
 function vEntries(){
   const e = S.edit && S.edit.kind === "entry" ? S.edit : {kind:"entry", id:"", data:{date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type:"expense", category:"5200", paidFrom:"1100"}};
   const x = e.data;
-  const list = [...S.entries].reverse();
+  const list = [...S.entries].filter(r => !(window.BOOKS && BOOKS.TYPES.includes(r.type))).reverse();
   return `<div class="section"><h2>${e.id ? "Edit entry" : "Record an expense or payment"}</h2><p class="sub">Link fuel, Salik, fines and repairs to a car so they land in its P&L. Tick "recover from driver" for fines or tolls the driver must pay; they are deducted in the driver's settlement.</p>
   <form class="form" id="fEntry" data-id="${esc(e.id)}">
     <div class="f"><label for="ed">Date</label><input id="ed" name="date" type="date" required value="${esc(x.date)}"></div>
@@ -1395,7 +1432,7 @@ function vSettlement(){
     <div class="ln"><span>Net earnings</span><span>${fmt(d.net)}</span></div>
     <div class="ln"><span>Your share (${esc(d.termsText)}${d.rentDays ? `, rent for ${d.rentDays} days` : ""})</span><span>${fmt(d.ent)}</span></div>
     <div class="ln"><span>Tips</span><span>${fmt(d.tipsDue)}</span></div><div class="ln"><span>Cash you collected</span><span>-${fmt(d.cash)}</span></div>
-    ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.card?`<div class="ln"><span>Card payments on company terminal</span><span>${fmt(d.card)}</span></div>`:""}${d.inst?`<div class="ln"><span>Loan / advance / shared-cost instalments</span><span>-${fmt(d.inst)}</span></div>`:""}${d.viaDriver?`<div class="ln"><span>${d.viaDriver > 0 ? "Company costs you paid from your cash" : "Company money you collected"}</span><span>${d.viaDriver > 0 ? "" : "-"}${fmt(Math.abs(d.viaDriver))}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
+    ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.books?`<div class="ln"><span>Receipts, payments & journal entries</span><span>${d.books < 0 ? "-" : ""}${fmt(Math.abs(d.books))}</span></div>`:""}${d.card?`<div class="ln"><span>Card payments on company terminal</span><span>${fmt(d.card)}</span></div>`:""}${d.inst?`<div class="ln"><span>Loan / advance / shared-cost instalments</span><span>-${fmt(d.inst)}</span></div>`:""}${d.viaDriver?`<div class="ln"><span>${d.viaDriver > 0 ? "Company costs you paid from your cash" : "Company money you collected"}</span><span>${d.viaDriver > 0 ? "" : "-"}${fmt(Math.abs(d.viaDriver))}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
     <div class="ln tot"><span>${d.balance >= 0 ? "Payable to you" : "You owe the company"}</span><span>AED ${fmt(Math.abs(d.balance))}</span></div>${d.loanOut ? `<div class="small muted" style="margin-top:6px">Loan balance still to recover after ${esc(dmyS(S.to))}: AED ${fmt(d.loanOut)}</div>` : ""}</div>`).join("")}</div>`;
 }
 function vInvestorPL(){
@@ -1417,7 +1454,7 @@ function vLedger(){
   const accts = Object.keys(TB).sort();
   const totDr = sum(L,l=>l.dr), totCr = sum(L,l=>l.cr);
   const bal = a => (TB[a] ? TB[a].dr - TB[a].cr : 0);
-  const income = -(bal("4000") + bal("4010") + bal("4100")); const exps = accts.filter(a => a >= "5000").reduce((s,a)=>s+bal(a),0);
+  const income = -accts.filter(a => a >= "4000" && a < "5000").reduce((s,a) => s + bal(a), 0); const exps = accts.filter(a => a >= "5000").reduce((s,a)=>s+bal(a),0);
   const outVat = -bal("2300"), inVat = bal("1300"), uberBal = bal("1150");
   return `<div class="kpis"><div class="kpi"><div class="l">Income</div><div class="v">${fmt(income)}</div></div><div class="kpi"><div class="l">Expenses</div><div class="v">${fmt(exps)}</div></div><div class="kpi"><div class="l">Net profit</div><div class="v ${income-exps<0?"neg":""}">${fmt(income-exps)}</div></div><div class="kpi"><div class="l">VAT payable</div><div class="v">${fmt(outVat-inVat)}</div><div class="n">Output ${fmt(outVat)} − input ${fmt(inVat)}</div></div></div>
   <div class="banner info">Uber balance in the ledger (account 1150): <b class="mono">AED ${fmt(uberBal)}</b>. For a period that matches an Uber Payments report, this equals the report's “Paid to you” total; the Import page shows that total when you import.${accts.filter(a => a !== "1150" && acctName(a).endsWith(" clearing (receivable)")).map(a => ` ${esc(acctName(a))} (${a}): <b class="mono">AED ${fmt(bal(a))}</b>.`).join("")}</div>
@@ -1476,14 +1513,16 @@ document.addEventListener("click", async ev => {
   if(t.dataset.termdel != null && t.dataset.col){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
     const col = t.dataset.col, rec = S[col][t.dataset.id]; if(!rec) return;
-    const keys = col === "drivers" ? DRV_TERMS : col === "platforms" ? PLT_TERMS : col === "terminals" ? TRM_TERMS : VEH_TERMS;
-    const hist = termList(rec, keys).filter((_, i) => i !== +t.dataset.termdel);
+    const field = t.dataset.field || "terms";
+    const keys = field === "assign" ? ASG_KEYS : col === "drivers" ? DRV_TERMS : col === "platforms" ? PLT_TERMS : col === "terminals" ? TRM_TERMS : VEH_TERMS;
+    const hist = termList(rec, keys, field).filter((_, i) => i !== +t.dataset.termdel);
     const now = termAt(hist, iso(new Date())) || hist[0] || {}; const {id:_, ...body} = rec;
-    if(await writeOk(S.db.doc(col + "/" + t.dataset.id).set({...body, ...pick(now, keys), terms: hist}))){ toast("Entry removed."); render(); }
+    if(await writeOk(S.db.doc(col + "/" + t.dataset.id).set({...body, ...pick(now, keys), [field]: hist}))){ toast("Entry removed."); render(); }
     return;
   }
   if(t.dataset.assigncar){ const d = S.drivers[t.dataset.id]; if(!d) return; const {id:_, ...body} = d;
-    if(await writeOk(S.db.doc("drivers/" + t.dataset.id).set({...body, vehicleId: t.dataset.assigncar}))) toast(dName(t.dataset.id) + " → " + vName(t.dataset.assigncar)); return; }
+    const r = withAssign(d, {vehicleId: t.dataset.assigncar, terminalTid: asgAt(d.id, S.from).terminalTid || ""}, S.from, "From the car usage report");
+    if(await writeOk(S.db.doc("drivers/" + t.dataset.id).set({...body, ...r}))) toast(dName(t.dataset.id) + " → " + vName(t.dataset.assigncar) + " from " + dmyS(S.from)); return; }
   if(t.dataset.seedpl){ t.disabled = true;
     for(const [id, name, type, acct] of STD_PLATFORMS){ if(S.platforms[id]) continue; if(!await writeOk(S.db.doc("platforms/" + id).set({name, type, acct, active:true, createdAt: new Date().toISOString()}))) return; }
     toast("Platforms added. Open each one to fill in its contract."); return; }
@@ -1535,7 +1574,7 @@ document.addEventListener("submit", async ev => {
     }
     const prev = (S[col] && S[col][id]) || {}; const {id:_, ...prevBody} = prev;
     if(f.id === "fVehicle" && !fd.investorId && fd.invModel !== "none") fd.invModel = "none";
-    const keys = f.id === "fDriver" ? DRV_TERMS : f.id === "fVehicle" ? VEH_TERMS : f.id === "fPlatform" ? PLT_TERMS : f.id === "fTerminal" ? TRM_TERMS : null;
+    const keys = f.id === "fDriver" ? DRV_TERMS : f.id === "fVehicle" ? VEH_TERMS : f.id === "fPlatform" ? PLT_TERMS : null;
     if(keys){
       const eff = fd.termFrom || iso(new Date()), note = (fd.termNote || "").trim(); delete fd.termFrom; delete fd.termNote;
       // history so far (older records: their terms count as the opening terms)
@@ -1552,6 +1591,16 @@ document.addEventListener("submit", async ev => {
       // top-level fields hold today's terms (used by the lists and the letters)
       const now = termAt(hist, iso(new Date())) || hist[0] || next; keys.forEach(k => fd[k] = now[k]);
       fd.terms = hist;
+    }
+    if(f.id === "fDriver"){
+      const eff = fd.asgFrom || iso(new Date()), note = (fd.asgNote || "").trim(); delete fd.asgFrom; delete fd.asgNote;
+      const next = {vehicleId: fd.vehicleId || "", terminalTid: fd.terminalTid || ""};
+      Object.assign(fd, withAssign(prev, next, eff, note));
+      // a machine has one holder: whoever had it gives it up from the same date
+      if(next.terminalTid) for(const o of Object.values(S.drivers)){
+        if(o.id === id) continue; const oa = termAt(asgList(o), eff);
+        if(oa && oa.terminalTid && tidKey(oa.terminalTid) === tidKey(next.terminalTid)){ const {id:oid, ...ob} = o; await writeOk(S.db.doc("drivers/" + oid).set({...ob, ...withAssign(o, {vehicleId: oa.vehicleId || "", terminalTid: ""}, eff, "Machine moved to " + (fd.name || ""))})); }
+      }
     }
     if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
   }
@@ -1646,5 +1695,6 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=1"></script>
+<script src="books.js?v=1"></script>
 
 </body></html>

@@ -48,3 +48,18 @@ Note: automating the Uber portal may conflict with Uber's terms. If Uber grants 
 - Click an account to see its ledger (money in, money out, running balance, export CSV). Every journal line is now dated, and the journal export uses those dates.
 - **Inter-account transfers**: bank to bank, cash deposit, petty cash top-up, or a card network settling to the bank, with optional bank charges taken from the paying account.
 - Each platform has a "Payouts paid into" account, and each payment machine has a "Payments go to" network account.
+
+## Car and machine assignment
+
+- The driver's form holds the assigned car and payment machine (terminal number), each change with an effective date. Earlier trips and card payments stay with the earlier car and machine, and the history is kept in driver.assign.
+- A machine has one holder. Giving it to a driver ends the previous holder's assignment from the same date.
+- The Machines page shows which drivers held each machine.
+
+## Books (books.js), Manager.io style
+
+- **Receipts** and **Payments**: received in / paid from a bank or cash account, with lines on any account and 5% VAT where needed. To settle an invoice, use 1200 / 2000 and pick the invoice. To pay or receive from a driver, use 2100 with the driver; this shows in the driver's ledger and settlement.
+- **Sales invoices**: numbered automatically (INV-0001…), with due date from the customer's credit days, status (Due / Part paid / Overdue / Paid) and a tax invoice PDF.
+- **Purchase invoices**: supplier's invoice number and due date.
+- **Customers** and **Suppliers**: balances (1200 / 2000), opening balances and statements with unpaid invoices.
+- **Journal entries**: balanced debit and credit lines; lines on 1200, 2000 or 2100 carry the customer, supplier or driver.
+- All documents are stored as rows in entries/{month} and post to the journal, trial balance, VAT and bank ledgers.
