@@ -1,0 +1,803 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Royal Rides Fleet Ledger</title>
+<!-- sign-in and cloud data come from the Fair Tax portal (same Firebase project) -->
+<script src="https://asifkhan170920.github.io/audit-desk/shared/cloud.js?v=9"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+/* Layout: fixed left rail (collapses to a scrolling tab strip on phones) + working canvas with a sticky period bar */
+:root{
+  --bg:#f3f4f6; --panel:#ffffff; --ink:#141b2b; --muted:#5d6678; --line:#dde1e8;
+  --navy:#16213a; --navy-ink:#e8ebf2; --brass:#a87a2a; --brass-soft:#f5ecdb;
+  --good:#1f7a4d; --good-soft:#e3f3ea; --bad:#b3362c; --bad-soft:#fbe7e5; --warn:#9a6a00; --warn-soft:#fdf1d6;
+  --f-display:"Archivo","Segoe UI",system-ui,sans-serif; --f-body:"Public Sans","Segoe UI",system-ui,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1420; --panel:#171e2d; --ink:#e6e9f0; --muted:#97a0b3; --line:#2a3346;
+  --navy:#0a0e17; --navy-ink:#d9dde8; --brass:#d6a64f; --brass-soft:#2c2617;
+  --good:#5cc48e; --good-soft:#15291f; --bad:#ef7d72; --bad-soft:#2f1715; --warn:#e6b84a; --warn-soft:#2c2412; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1420; --panel:#171e2d; --ink:#e6e9f0; --muted:#97a0b3; --line:#2a3346;
+  --navy:#0a0e17; --navy-ink:#d9dde8; --brass:#d6a64f; --brass-soft:#2c2617;
+  --good:#5cc48e; --good-soft:#15291f; --bad:#ef7d72; --bad-soft:#2f1715; --warn:#e6b84a; --warn-soft:#2c2412; color-scheme:dark}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45}
+*{box-sizing:border-box}
+.app{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100%}
+.rail{background:var(--navy);color:var(--navy-ink);padding-block:20px;padding-inline:14px;display:flex;flex-direction:column;gap:18px}
+.brand{font-family:var(--f-display);font-weight:700;font-size:17px;letter-spacing:.01em;line-height:1.15}
+.brand small{display:block;font-family:var(--f-body);font-weight:500;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--brass);margin-top:4px}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav .grp{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;opacity:.55;margin:12px 8px 4px}
+.nav button{all:unset;cursor:pointer;padding:7px 10px;border-radius:6px;font-size:13.5px;color:var(--navy-ink);opacity:.82}
+.nav button:hover{opacity:1;background:rgba(255,255,255,.06)}
+.nav button[aria-current="page"]{opacity:1;background:rgba(255,255,255,.1);box-shadow:inset 3px 0 0 var(--brass)}
+.nav button:focus-visible{outline:2px solid var(--brass)}
+.main{min-width:0;display:flex;flex-direction:column}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding-block:12px;padding-inline:24px;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+.bar h1{font-family:var(--f-display);font-size:20px;font-weight:600;margin:0;flex:1 1 200px;text-wrap:balance}
+.period{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.period label{font-size:12px;color:var(--muted)}
+.content{padding-block:20px 48px;padding-inline:24px;display:flex;flex-direction:column;gap:20px;min-width:0}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible{outline:2px solid var(--brass);outline-offset:1px}
+.btn{font:inherit;font-weight:600;font-size:13px;border-radius:6px;padding:7px 12px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.btn:hover{border-color:var(--brass)}
+.btn.primary{background:var(--brass);border-color:var(--brass);color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#1a1406}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .btn.primary{color:#1a1406}}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--bad)}
+.btn.sm{padding:4px 8px;font-size:12px}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.section h2{font-family:var(--f-display);font-size:15px;font-weight:600;margin:0 0 4px}
+.section .sub{color:var(--muted);font-size:12.5px;margin:0 0 12px;max-width:72ch}
+.head{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;justify-content:space-between}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi .l{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.kpi .v{font-family:var(--f-mono);font-size:20px;font-weight:500;margin-top:4px;font-variant-numeric:tabular-nums}
+.kpi .n{font-size:12px;color:var(--muted);margin-top:2px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;vertical-align:top}
+th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--bg);position:sticky;top:0}
+td.num,th.num{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:none}
+tfoot td{font-weight:600;background:var(--bg)}
+tbody tr:hover td{background:color-mix(in srgb,var(--brass-soft) 45%,transparent)}
+.neg{color:var(--bad)} .pos{color:var(--good)}
+.pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+.pill.good{background:var(--good-soft);color:var(--good);border-color:transparent}
+.pill.bad{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.pill.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.pill.brass{background:var(--brass-soft);color:var(--brass);border-color:transparent}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 12px;align-items:end}
+.form .f{display:flex;flex-direction:column;gap:4px;min-width:0}
+.form .f label{font-size:11.5px;color:var(--muted);font-weight:500}
+.form .wide{grid-column:1/-1}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.drop{border:1.5px dashed var(--line);border-radius:10px;padding:28px 16px;text-align:center;color:var(--muted);background:var(--bg);cursor:pointer}
+.drop.over{border-color:var(--brass);background:var(--brass-soft);color:var(--ink)}
+.drop b{color:var(--ink)}
+.empty{padding:28px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px}
+.empty b{display:block;color:var(--ink);font-family:var(--f-display);font-size:15px;margin-bottom:4px}
+.toast{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));background:var(--navy);color:var(--navy-ink);padding:10px 14px;border-radius:8px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.2);z-index:20;max-width:min(420px,calc(100vw - 32px))}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.statement{border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.statement .ln{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dotted var(--line);padding-block:3px}
+.statement .ln span:last-child{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+.statement .tot{font-weight:700;border-bottom:none;border-top:1.5px solid var(--ink);padding-top:6px}
+.statement h3{font-family:var(--f-display);font-size:14px;margin:0}
+select[multiple]{min-height:96px}
+.mapgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 14px}
+.banner{border-radius:8px;padding:10px 12px;font-size:13px;background:var(--warn-soft);color:var(--warn)}
+.banner.info{background:var(--brass-soft);color:var(--ink)}
+@media (max-width:820px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .rail{padding-block:12px 8px;padding-inline:16px;gap:8px}
+  .nav{flex-direction:row;overflow-x:auto;gap:4px;padding-bottom:4px}
+  .nav .grp{display:none}
+  .nav button{white-space:nowrap}
+  .nav button[aria-current="page"]{box-shadow:inset 0 -2px 0 var(--brass)}
+  .bar,.content{padding-inline:16px}
+}
+.login{position:fixed;inset:0;z-index:30;background:var(--bg);display:grid;place-items:center;padding:16px}
+.lbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px;width:min(380px,100%);display:flex;flex-direction:column;gap:12px}
+.lbox h2{font-family:var(--f-display);margin:0;font-size:20px}
+.lbox label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.lbox form{display:flex;flex-direction:column;gap:10px}
+.who{font-size:12px;opacity:.8;margin-top:auto;display:flex;flex-direction:column;gap:6px}
+.who button{all:unset;cursor:pointer;color:var(--brass);font-size:12px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="app">
+  <aside class="rail">
+    <div class="brand" id="brandName">Royal Rides<small>Fleet ledger</small></div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div class="who" id="who" hidden></div>
+  </aside>
+  <div class="main">
+    <div class="bar">
+      <h1 id="pageTitle">Dashboard</h1>
+      <div class="period" role="group" aria-label="Reporting period">
+        <select id="preset" aria-label="Period preset">
+          <option value="thisweek">This Uber week</option>
+          <option value="lastweek">Last Uber week</option>
+          <option value="thismonth" selected>This month</option>
+          <option value="lastmonth">Last month</option>
+          <option value="ytd">Year to date</option>
+          <option value="custom">Custom</option>
+        </select>
+        <label for="pFrom">From</label><input type="date" id="pFrom">
+        <label for="pTo">To</label><input type="date" id="pTo">
+      </div>
+    </div>
+    <div class="content" id="view"></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<div class="login" id="login" hidden><div class="lbox">
+  <h2>Royal Rides · Fleet ledger</h2>
+  <p class="small muted" style="margin:0">Sign in with your Fair Tax portal account.</p>
+  <form id="fLogin"><label>User ID<input id="lid" autocomplete="username" required></label>
+    <label>Password<input id="lpw" type="password" autocomplete="current-password" required></label>
+    <button class="btn primary" type="submit">Sign in</button></form>
+  <button class="btn ghost" type="button" id="gsign">Admin: sign in with Google</button>
+  <p class="small" id="lmsg" style="margin:0;color:var(--bad)"></p>
+</div></div>
+
+<script>
+/* ============ state ============ */
+const S = {
+  db:null, user:null, downloads:null, canWrite:true, ready:false,
+  view:"dashboard",
+  settings:{}, drivers:{}, vehicles:{}, investors:{},
+  trips:[], entries:[], entryDocs:{},
+  from:null, to:null,
+  importState:null, tripFilter:{q:"",driver:"",vehicle:""}, edit:null
+};
+const VIEWS = [
+  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import Uber data"],
+  ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],
+  ["Money",null],["entries","Expenses & payments"],["settlement","Driver settlement"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
+  ["Setup",null],["settings","Settings"]
+];
+const EXP_CATS = {
+  "5200":"Fuel / EV charging","5210":"Salik / Darb tolls","5220":"RTA & traffic fines","5230":"Maintenance & repairs",
+  "5240":"Insurance","5250":"Registration & permits","5260":"Vehicle lease / rent","5270":"Parking & car wash",
+  "5280":"Driver salaries & visas","5290":"Office & admin","5300":"Bank charges","5310":"Other expenses"
+};
+const ACCT = {
+  "1100":"Bank","1110":"Cash in hand","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1300":"Input VAT",
+  "2100":"Driver payables","2200":"Investor payables","2300":"Output VAT",
+  "4000":"Uber fare revenue","4010":"Toll & fee recoveries","4100":"Direct booking revenue",
+  "5000":"Uber service fee","5010":"Non-recoverable VAT","5100":"Driver earnings share","5900":"Investor profit share",
+  ...EXP_CATS
+};
+const ENTRY_TYPES = {
+  expense:"Expense", income:"Direct booking income", uber_payout:"Uber payout received",
+  driver_advance:"Advance to driver", driver_payment:"Payment to driver", driver_receipt:"Received from driver",
+  investor_payout:"Payout to investor"
+};
+const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
+const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
+
+/* ============ utils ============ */
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = v => { const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/[^0-9.\-]/g,"")); return isFinite(n) ? n : 0; };
+const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+const fmt = n => { n = r2(n||0); const s = Math.abs(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); return n < 0 ? "-" + s : s; };
+const aed = n => `<span class="${(n||0) < 0 ? "neg" : ""}">${fmt(n)}</span>`;
+const iso = d => { const z = new Date(d.getTime() - d.getTimezoneOffset()*60000); return z.toISOString().slice(0,10); };
+const parseD = s => { const [y,m,d] = s.split("-").map(Number); return new Date(y, m-1, d); };
+const addDays = (s, n) => { const d = parseD(s); d.setDate(d.getDate()+n); return iso(d); };
+const daysBetween = (a, b) => Math.round((parseD(b) - parseD(a)) / 86400000) + 1;
+const dim = s => { const d = parseD(s); return new Date(d.getFullYear(), d.getMonth()+1, 0).getDate(); };
+const norm = s => String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+const uid = () => Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
+function prorate(monthly, from, to){ if(!monthly) return 0; let t = 0; for(let d = from; d <= to; d = addDays(d,1)) t += monthly / dim(d); return t; }
+function toast(msg){ const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(()=> t.hidden = true, 3800); }
+function sum(arr, f){ return arr.reduce((a,x)=> a + (f(x)||0), 0); }
+
+/* Parse many Uber date formats -> {date:"YYYY-MM-DD", time:"HH:MM"} */
+function parseTripDate(v){
+  const s = String(v||"").trim(); if(!s) return null;
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ]?(\d{2}):?(\d{2})?/);
+  if(m) return {date:`${m[1]}-${m[2]}-${m[3]}`, time: m[4] ? `${m[4]}:${m[5]||"00"}` : ""};
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return {date:s, time:""};
+  m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:[ ,T]+(\d{1,2}):(\d{2}))?/);
+  if(m){ let d = +m[1], mo = +m[2]; if(mo > 12){ [d,mo] = [mo,d]; } return {date:`${m[3]}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`, time: m[4] ? `${m[4].padStart(2,"0")}:${m[5]}` : ""}; }
+  const d = new Date(s); if(!isNaN(d)) return {date: iso(d), time: d.toTimeString().slice(0,5)};
+  return null;
+}
+
+/* ============ period ============ */
+function uberWeek(offset){ const d = new Date(); const day = (d.getDay()+6)%7; d.setDate(d.getDate() - day + offset*7); const a = iso(d); return [a, addDays(a,6)]; }
+function setPreset(p){
+  const t = new Date(); let a, b;
+  if(p === "thisweek") [a,b] = uberWeek(0);
+  else if(p === "lastweek") [a,b] = uberWeek(-1);
+  else if(p === "thismonth"){ a = iso(new Date(t.getFullYear(), t.getMonth(), 1)); b = iso(new Date(t.getFullYear(), t.getMonth()+1, 0)); }
+  else if(p === "lastmonth"){ a = iso(new Date(t.getFullYear(), t.getMonth()-1, 1)); b = iso(new Date(t.getFullYear(), t.getMonth(), 0)); }
+  else if(p === "ytd"){ a = iso(new Date(t.getFullYear(), 0, 1)); b = iso(t); }
+  else return;
+  S.from = a; S.to = b; $("#pFrom").value = a; $("#pTo").value = b;
+}
+
+/* ============ data layer ============ */
+async function boot(){
+  renderNav(); setPreset("thismonth"); render();
+  if(!window.FT){ S.ready = true; showLogin("Could not reach the Fair Tax portal. Check the internet connection and reload."); return; }
+  try{
+    await FT.init();
+    const me = await FT.currentUser();
+    if(!me || me.missing){ S.ready = true; showLogin(""); return; }
+    if(!me.active || !FT.canOpen(me, "fleet")){ S.ready = true; showLogin("This user has no access to the Fleet Ledger. Ask the admin to tick Fleet for this user."); return; }
+    S.user = me;
+    // all fleet data lives under apps/fleet/store/rr in the portal's Firestore
+    const base = FT.db.collection("apps").doc("fleet").collection("store").doc("rr");
+    S.db = { collection: n => base.collection(n), doc: p => { const [c, id] = p.split("/"); return base.collection(c).doc(id); } };
+    showUser(me);
+  }catch(e){ S.ready = true; showLogin(FT.friendlyError ? FT.friendlyError(e) : String(e)); return; }
+  const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
+    const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
+  }, e => console.warn(col, e));
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors");
+  S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
+  await loadPeriod(); S.ready = true; render();
+}
+/* Don't wipe a form someone is typing in when live data arrives; redraw once they leave it. */
+function softRender(){ const a = document.activeElement; if(a && a.closest && a.closest("#view form")){ S.pending = true; return; } render(); }
+document.addEventListener("focusout", () => { if(S.pending){ setTimeout(() => { const a = document.activeElement; if(!(a && a.closest && a.closest("#view form"))){ S.pending = false; render(); } }, 0); } });
+function applyBrand(){ const n = S.settings.company || "Royal Rides"; $("#brandName").innerHTML = `${esc(n)}<small>Fleet ledger</small>`; }
+const months = (a,b) => { const out = []; let d = parseD(a); d.setDate(1); const end = parseD(b); while(d <= end){ out.push(iso(d).slice(0,7)); d.setMonth(d.getMonth()+1); } return out; };
+async function loadPeriod(){
+  if(!S.db) return;
+  try{
+    const ts = await S.db.collection("trips").where("date",">=",S.from).where("date","<=",S.to).get();
+    const trips = []; ts.docs.forEach(d => { const rows = (d.data()||{}).rows || {}; Object.entries(rows).forEach(([id,r]) => trips.push({id, ...r})); });
+    trips.sort((a,b)=> (a.d+a.t).localeCompare(b.d+b.t));
+    S.trips = trips;
+    const ms = months(S.from, S.to); const ents = []; S.entryDocs = {};
+    for(const m of ms){ const d = await S.db.doc("entries/"+m).get(); const rows = d.exists ? (d.data().rows||[]) : []; S.entryDocs[m] = rows; rows.forEach(r => { if(r.date >= S.from && r.date <= S.to) ents.push(r); }); }
+    ents.sort((a,b)=> a.date.localeCompare(b.date)); S.entries = ents;
+  }catch(e){ console.warn(e); toast("Couldn't load this period. Check your connection and change the dates to retry."); }
+}
+async function writeOk(p){ try{ await p; return true; }catch(e){ if(e && (e.code === "invalid_argument" || e.code === "permission-denied")){ S.canWrite = false; toast("You have view-only access, so changes can't be saved."); } else if(e && (e.code === "quota_exceeded" || e.code === "resource-exhausted")){ toast("Storage limit reached. Try again later."); } else toast("Save failed. Try again."); render(); return false; } }
+
+/* ============ calculations ============ */
+const setting = (k, d) => S.settings[k] ?? d;
+function vehicleForTrip(t){
+  if(t.p){ const v = Object.values(S.vehicles).find(v => norm(v.plate) === norm(t.p)); if(v) return v.id; }
+  const dr = S.drivers[t.dr]; return dr && dr.vehicleId || "";
+}
+function compute(){
+  const from = S.from, to = S.to, calDays = daysBetween(from,to);
+  const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
+  const tips2drv = setting("tipsToDriver", true);
+  const D = {}, V = {};
+  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, n:0, km:0, days:new Set(), byV:{}};
+  const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[]};
+  for(const t of S.trips){
+    const d = dget(t.dr||"unknown"); const vid = vehicleForTrip(t) || "unassigned"; const v = vget(vid);
+    d.fare += t.f||0; d.fee += t.sf||0; d.tax += t.tx||0; d.tip += t.tp||0; d.ref += t.rf||0; d.cash += t.c||0; d.n++; d.km += t.km||0; d.days.add(t.d);
+    const net = (t.f||0) - (t.sf||0) - (t.tx||0); d.byV[vid] = (d.byV[vid]||0) + net;
+    v.fare += t.f||0; v.fee += t.sf||0; v.tax += t.tx||0; v.ref += t.rf||0; v.n++; v.km += t.km||0;
+  }
+  Object.keys(S.drivers).forEach(id => dget(id));
+  // driver entitlements & settlement
+  for(const d of Object.values(D)){
+    const m = S.drivers[d.id] || {}; const model = m.payModel || "commission"; const pct = num(m.commissionPct);
+    d.net = d.fare - d.fee - d.tax; d.daysWorked = d.days.size;
+    let ent = 0;
+    if(model === "commission") ent = d.net * pct/100;
+    else if(model === "rent"){ const days = m.rentBasis === "calendar" ? calDays : d.daysWorked; ent = d.net - num(m.rentPerDay)*days; d.rentDays = days; }
+    else if(model === "salary") ent = prorate(num(m.salary), from, to);
+    else if(model === "salary_comm") ent = prorate(num(m.salary), from, to) + d.net*pct/100;
+    d.ent = ent; d.model = model;
+    const mine = S.entries.filter(e => e.driverId === d.id);
+    d.deduct = sum(mine.filter(e => e.type === "expense" && e.recover), e => num(e.amount) + num(e.vat));
+    d.adv = sum(mine.filter(e => e.type === "driver_advance"), e => num(e.amount));
+    d.paid = sum(mine.filter(e => e.type === "driver_payment"), e => num(e.amount));
+    d.recv = sum(mine.filter(e => e.type === "driver_receipt"), e => num(e.amount));
+    d.tipsDue = tips2drv ? d.tip : 0;
+    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv;
+    d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) - d.ent;
+    // allocate driver cost to vehicles by net share
+    const tot = Object.values(d.byV).reduce((a,b)=>a+b,0);
+    Object.entries(d.byV).forEach(([vid,n]) => { vget(vid).drvCost += tot ? d.ent * n / tot : 0; });
+    if(!tot && d.ent && m.vehicleId) vget(m.vehicleId).drvCost += d.ent;
+  }
+  // vehicle expenses
+  for(const e of S.entries){ if(e.type !== "expense" || e.recover) continue; const cost = num(e.amount) + (inVatRec ? 0 : num(e.vat)); if(e.vehicleId){ const v = vget(e.vehicleId); v.exp += cost; v.expList.push(e); } }
+  Object.keys(S.vehicles).forEach(id => vget(id));
+  for(const v of Object.values(V)){
+    const m = S.vehicles[v.id] || {};
+    const fareRev = fareStd ? v.fare/1.05 : v.fare;
+    v.fareRev = fareRev;
+    v.op = fareRev - v.fee - (feeVatRec ? 0 : v.tax) + v.ref - v.drvCost - v.exp;
+    v.mgmt = prorate(num(m.mgmtFixed), from, to) + fareRev * num(m.mgmtPct)/100;
+    const model = m.investorId ? (m.invModel || "profit_share") : "none";
+    v.after = v.op - v.mgmt;
+    v.invShare = model === "profit_share" ? v.after * num(m.invPct)/100 : model === "fixed" ? prorate(num(m.invFixed), from, to) : 0;
+    v.company = v.op - v.invShare; v.invModel = model; v.investorId = m.investorId || "";
+  }
+  // investors
+  const I = {};
+  for(const inv of Object.values(S.investors)){
+    const vs = Object.values(V).filter(v => v.investorId === inv.id);
+    const payouts = sum(S.entries.filter(e => e.type === "investor_payout" && e.investorId === inv.id), e => num(e.amount));
+    I[inv.id] = {id:inv.id, vs, share: sum(vs, v=>v.invShare), payouts, balance: sum(vs, v=>v.invShare) - payouts};
+  }
+  return {D, V, I, calDays};
+}
+
+function journal(C){
+  const L = []; const add = (acct, dr, cr, memo) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo}); };
+  const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
+  const tips2drv = setting("tipsToDriver", true);
+  const T = {f:sum(S.trips,t=>t.f), sf:sum(S.trips,t=>t.sf), tx:sum(S.trips,t=>t.tx), tp:sum(S.trips,t=>t.tp), rf:sum(S.trips,t=>t.rf), c:sum(S.trips,t=>t.c)};
+  const memoT = "Uber trips";
+  add("1150", T.f + T.tp + T.rf - T.sf - T.tx - T.c, 0, memoT);
+  add("1160", T.c, 0, memoT);
+  add("5000", T.sf, 0, memoT);
+  add(feeVatRec ? "1300" : "5010", T.tx, 0, memoT);
+  if(fareStd){ add("4000", 0, T.f/1.05, memoT); add("2300", 0, T.f - T.f/1.05, memoT); } else add("4000", 0, T.f, memoT);
+  add(tips2drv ? "2100" : "4000", 0, T.tp, "Tips");
+  add("4010", 0, T.rf, memoT);
+  const ent = sum(Object.values(C.D), d => d.ent); const negEnt = ent < 0;
+  if(negEnt){ add("2100", -ent, 0, "Driver rent exceeds earnings share"); add("5100", 0, -ent, "Driver rent exceeds earnings share"); }
+  else { add("5100", ent, 0, "Driver earnings share"); add("2100", 0, ent, "Driver earnings share"); }
+  add("2100", T.c, 0, "Cash kept by drivers"); add("1160", 0, T.c, "Cash kept by drivers");
+  const inv = sum(Object.values(C.V), v => v.invShare);
+  if(inv >= 0){ add("5900", inv, 0, "Investor share"); add("2200", 0, inv, "Investor share"); } else { add("2200", -inv, 0, "Investor share (loss)"); add("5900", 0, -inv, "Investor share (loss)"); }
+  for(const e of S.entries){
+    const a = num(e.amount), vat = num(e.vat), src = e.paidFrom || "1100", memo = `${ENTRY_TYPES[e.type]||e.type}${e.note ? " – " + e.note : ""}`;
+    if(e.type === "expense"){
+      add(e.category || "5310", a + (inVatRec ? 0 : vat), 0, memo); if(inVatRec) add("1300", vat, 0, memo); add(src, 0, a + vat, memo);
+      if(e.recover){ add("2100", a + vat, 0, "Recovered from driver"); add(e.category || "5310", 0, a + vat, "Recovered from driver"); }
+    }
+    else if(e.type === "income"){ add(src, a + vat, 0, memo); add("4100", 0, a, memo); add("2300", 0, vat, memo); }
+    else if(e.type === "uber_payout"){ add(src, a, 0, memo); add("1150", 0, a, memo); }
+    else if(e.type === "driver_advance" || e.type === "driver_payment"){ add("2100", a, 0, memo); add(src, 0, a, memo); }
+    else if(e.type === "driver_receipt"){ add(src, a, 0, memo); add("2100", 0, a, memo); }
+    else if(e.type === "investor_payout"){ add("2200", a, 0, memo); add(src, 0, a, memo); }
+  }
+  return L;
+}
+
+/* ============ rendering ============ */
+function renderNav(){
+  $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<div class="grp">${esc(k)}</div>` : `<button data-nav="${k}" ${S.view===k?'aria-current="page"':""}>${esc(l)}</button>`).join("");
+}
+function render(){
+  renderNav();
+  const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
+  const el = $("#view");
+  if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
+  const fns = {dashboard:vDashboard, trips:vTrips, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings};
+  let html = "";
+  if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
+  else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
+  const focus = document.activeElement && document.activeElement.id; const sel = focus && document.activeElement.selectionStart;
+  el.innerHTML = html + fns[S.view]();
+  if(focus){ const f = document.getElementById(focus); if(f && f !== document.body){ f.focus(); try{ if(sel != null) f.setSelectionRange(sel, sel); }catch(e){} } }
+}
+const dName = id => (S.drivers[id] && S.drivers[id].name) || (id === "unknown" ? "Unknown driver" : id);
+const vName = id => { const v = S.vehicles[id]; return v ? `${v.fleetId ? v.fleetId + " · " : ""}${v.plate||""}` : (id === "unassigned" ? "No car linked" : id); };
+const iName = id => (S.investors[id] && S.investors[id].name) || "—";
+const opts = (obj, sel, blank) => (blank != null ? `<option value="">${esc(blank)}</option>` : "") + Object.entries(obj).map(([k,v]) => `<option value="${esc(k)}" ${k===sel?"selected":""}>${esc(v)}</option>`).join("");
+const listOpts = (map, label, sel, blank) => opts(Object.fromEntries(Object.values(map).sort((a,b)=>label(a).localeCompare(label(b))).map(x => [x.id, label(x)])), sel, blank);
+
+function vDashboard(){
+  const C = compute(); const T = S.trips;
+  const fare = sum(T,t=>t.f), fee = sum(T,t=>t.sf), tax = sum(T,t=>t.tx), cash = sum(T,t=>t.c), tips = sum(T,t=>t.tp);
+  const exp = sum(S.entries.filter(e=>e.type==="expense"), e=>num(e.amount)+num(e.vat));
+  const company = sum(Object.values(C.V), v=>v.company);
+  const drvDue = sum(Object.values(C.D), d=>d.balance);
+  const needTerms = Object.values(S.drivers).filter(d => !d.payModel || (["commission","salary_comm"].includes(d.payModel) && !num(d.commissionPct) ) ).length;
+  const noCar = Object.values(S.vehicles).filter(v => !v.investorId && v.invModel !== "none").length;
+  const topV = Object.values(C.V).filter(v=>v.n).sort((a,b)=>b.company-a.company);
+  if(!T.length && !Object.keys(S.drivers).length) return `<div class="empty"><b>No trips for this period yet</b>Download the <i>Payments Transaction</i> report from Uber Fleet Hub, then drop it on the Import page. Each trip becomes one row here.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" data-nav="import">Import Uber data</button></div></div>`;
+  return `
+  <div class="kpis">
+    <div class="kpi"><div class="l">Gross fares</div><div class="v">${fmt(fare)}</div><div class="n">${T.length} trips · AED</div></div>
+    <div class="kpi"><div class="l">Uber fee + VAT</div><div class="v">${fmt(fee+tax)}</div><div class="n">${fare ? (100*(fee+tax)/fare).toFixed(1) : 0}% of fares</div></div>
+    <div class="kpi"><div class="l">Cash kept by drivers</div><div class="v">${fmt(cash)}</div><div class="n">Settled against driver pay</div></div>
+    <div class="kpi"><div class="l">Expenses</div><div class="v">${fmt(exp)}</div><div class="n">${S.entries.filter(e=>e.type==="expense").length} entries</div></div>
+    <div class="kpi"><div class="l">Company profit</div><div class="v ${company<0?"neg":""}">${fmt(company)}</div><div class="n">After drivers & investors</div></div>
+    <div class="kpi"><div class="l">Owed to drivers</div><div class="v ${drvDue<0?"neg":""}">${fmt(drvDue)}</div><div class="n">Negative = drivers owe you</div></div>
+  </div>
+  ${needTerms || noCar ? `<div class="banner">${needTerms ? `${needTerms} driver(s) have no pay terms yet. ` : ""}${noCar ? `${noCar} car(s) have no investor or "company-owned" setting. ` : ""}Fix these on the Drivers and Vehicles pages so profit splits are correct.</div>` : ""}
+  <div class="grid2">
+    <div class="section"><h2>Profit by car</h2><p class="sub">Operating profit after Uber fee, driver share and car expenses, then split with the investor.</p>
+      <div class="tbl"><table><thead><tr><th>Car</th><th class="num">Trips</th><th class="num">Operating</th><th class="num">Investor</th><th class="num">Company</th></tr></thead><tbody>
+      ${topV.slice(0,12).map(v=>`<tr><td>${esc(vName(v.id))}</td><td class="num">${v.n}</td><td class="num">${aed(v.op)}</td><td class="num">${aed(v.invShare)}</td><td class="num">${aed(v.company)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No trips in this period.</td></tr>`}
+      </tbody></table></div></div>
+    <div class="section"><h2>Drivers</h2><p class="sub">Net earnings (fare minus Uber fee and VAT) and what each driver is owed after cash and deductions.</p>
+      <div class="tbl"><table><thead><tr><th>Driver</th><th class="num">Trips</th><th class="num">Net</th><th class="num">Cash held</th><th class="num">Balance</th></tr></thead><tbody>
+      ${Object.values(C.D).filter(d=>d.n).sort((a,b)=>b.net-a.net).map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="num">${d.n}</td><td class="num">${fmt(d.net)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${aed(d.balance)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No trips in this period.</td></tr>`}
+      </tbody></table></div></div>
+  </div>
+  <p class="small muted">Tips this period: AED ${fmt(tips)}. Period ${esc(S.from)} to ${esc(S.to)}.</p>`;
+}
+
+function vTrips(){
+  const f = S.tripFilter; const q = f.q.toLowerCase();
+  const rows = S.trips.filter(t => (!f.driver || t.dr === f.driver) && (!f.vehicle || vehicleForTrip(t) === f.vehicle) && (!q || (t.id+" "+dName(t.dr)+" "+(t.p||"")).toLowerCase().includes(q)));
+  const shown = rows.slice(0, 500);
+  return `<div class="section"><div class="head"><div><h2>Trips</h2><p class="sub">Every Uber trip in the period, one row each. Net = fare − Uber fee − VAT on fee. Cash = amount the driver collected from the rider.</p></div>
+    <div class="row"><input id="tq" placeholder="Search trip, driver, plate" value="${esc(f.q)}" aria-label="Search trips">
+    <select id="tdrv" aria-label="Driver filter">${listOpts(S.drivers, d=>d.name||d.id, f.driver, "All drivers")}</select>
+    <select id="tveh" aria-label="Car filter">${listOpts(S.vehicles, v=>vName(v.id), f.vehicle, "All cars")}</select></div></div>
+  ${rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Driver</th><th>Car</th><th class="num">Fare</th><th class="num">Uber fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th>Trip ID</th></tr></thead><tbody>
+  ${shown.map(t=>`<tr><td>${esc(t.d)}</td><td>${esc(t.t||"")}</td><td>${esc(dName(t.dr))}</td><td>${esc(vName(vehicleForTrip(t)||"unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="mono small muted">${esc(String(t.id).slice(0,13))}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="4">${rows.length} trips${rows.length>500?" (first 500 shown)":""}</td><td class="num">${fmt(sum(rows,t=>t.f))}</td><td class="num">${fmt(sum(rows,t=>t.sf))}</td><td class="num">${fmt(sum(rows,t=>t.tx))}</td><td class="num">${fmt(sum(rows,t=>t.tp))}</td><td class="num">${fmt(sum(rows,t=>t.rf))}</td><td class="num">${fmt(sum(rows,t=>t.c))}</td><td class="num">${fmt(sum(rows,t=>(t.f||0)-(t.sf||0)-(t.tx||0)))}</td><td></td></tr></tfoot></table></div>`
+  : `<div class="empty"><b>No trips match</b>Change the period at the top, clear the filters, or import the Payments Transaction report.</div>`}</div>`;
+}
+
+/* ---------- import ---------- */
+const FIELDS = [
+  ["tripId","Trip ID",false],["date","Trip date / time",false],["driverUuid","Driver UUID",false],["driverFirst","Driver first name",false],["driverLast","Driver surname",false],["driverName","Driver full name",false],["plate","Vehicle plate",false],
+  ["fare","Fare (all fare parts are added)",true],["fee","Uber service fee",true],["tax","Taxes / VAT on fee",true],["tip","Tip",true],["refund","Refunds & expenses (tolls, airport)",true],["cash","Cash collected",true],["km","Distance (km)",true]
+];
+function guessMap(h){
+  const L = h.map(x => x.toLowerCase());
+  const one = re => { const i = L.findIndex(x => re.test(x)); return i < 0 ? [] : [h[i]]; };
+  const many = (re, not) => h.filter((x,i) => re.test(L[i]) && !(not && not.test(L[i])));
+  const total = /^(total|paid to you)$|^paid to you\s*:\s*your earnings$|^paid to you\s*:\s*trip balance$/;
+  return {
+    tripId: one(/trip.*(uuid|id)|^uuid$/), date: one(/^(trip request time|request time|trip date|date|vs reporting|reporting time|transaction time|local time|trip time|time)$/).concat(one(/date|time|reporting/)).filter((x,i,a)=>a.indexOf(x)===i && !/fare|wait|earning|paid|amount|fee|tip/i.test(x)).slice(0,1), driverUuid: one(/driver.*uuid/),
+    driverFirst: one(/first ?name/), driverLast: one(/surname|last ?name/), driverName: one(/^(driver ?(full ?)?name|driver)$/), plate: one(/plate|licen[cs]e/),
+    fare: many(/fare|surge|wait time|time at stop|cancell|premium/, /service|tax|vat|adjust|refund|payout/).filter(x=>!total.test(x.toLowerCase())),
+    fee: many(/service fee|commission|uber fee/, /tax|vat/), tax: many(/tax|vat/, /fare|refund/), tip: many(/\btip/),
+    refund: many(/refund|toll|airport|expense/, /payout|cash/), cash: many(/cash/), km: many(/distance|km/)
+  };
+}
+function vImport(){
+  const st = S.importState;
+  let body = `<div class="section"><h2>Import Uber trips</h2>
+  <p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report → Payments Transaction</b>, pick the dates, then <b>Download</b>. Drop one or more CSV files below. Trips already imported are skipped by Trip ID, so overlapping files are safe.</p>
+  <label class="drop" id="drop" for="file"><b>Drop Uber CSV files here</b><br>or click to choose files<input type="file" id="file" accept=".csv,text/csv" multiple hidden></label></div>`;
+  if(st){
+    const m = st.map; const prev = previewRows();
+    const T = {f:sum(prev,t=>t.f), sf:sum(prev,t=>t.sf), tx:sum(prev,t=>t.tx), tp:sum(prev,t=>t.tp), rf:sum(prev,t=>t.rf), c:sum(prev,t=>t.c)};
+    const days = [...new Set(prev.map(t=>t.d))].sort();
+    const bad = prev.filter(t=>!t.d).length;
+    body += `<div class="section"><div class="head"><div><h2>Check the column mapping</h2><p class="sub">${st.files.join(", ")} · ${st.rows.length} rows. Each field reads from the column(s) selected; numbers in several columns are added together. Compare the totals with Fleet Hub → Earnings before importing.</p></div>
+    <div class="row"><button class="btn ghost" id="impCancel">Cancel</button><button class="btn primary" id="impGo" ${prev.length && S.canWrite && S.db ? "" : "disabled"}>Import ${prev.length} trips</button></div></div>
+    <div class="kpis" style="margin-bottom:14px">
+      <div class="kpi"><div class="l">Fare</div><div class="v">${fmt(T.f)}</div></div><div class="kpi"><div class="l">Uber fee</div><div class="v">${fmt(T.sf)}</div></div>
+      <div class="kpi"><div class="l">VAT on fee</div><div class="v">${fmt(T.tx)}</div></div><div class="kpi"><div class="l">Tips</div><div class="v">${fmt(T.tp)}</div></div>
+      <div class="kpi"><div class="l">Refunds</div><div class="v">${fmt(T.rf)}</div></div><div class="kpi"><div class="l">Cash</div><div class="v">${fmt(T.c)}</div></div>
+    </div>
+    ${days.length ? `<p class="small muted">Trip dates ${esc(days[0])} to ${esc(days[days.length-1])}.${bad ? ` <span class="pill bad">${bad} rows have no readable date and will be skipped</span>` : ""}</p>` : ""}
+    <div class="mapgrid">${FIELDS.map(([k,l,multi]) => `<div class="form"><div class="f"><label for="map_${k}">${esc(l)}</label><select id="map_${k}" data-map="${k}" ${multi?"multiple":""}>${multi?"":`<option value="">— none —</option>`}${st.headers.map(h=>`<option value="${esc(h)}" ${(m[k]||[]).includes(h)?"selected":""}>${esc(h)}</option>`).join("")}</select></div></div>`).join("")}</div>
+    <h2 style="margin-top:16px">First rows</h2><div class="tbl"><table><thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th class="num">Fare</th><th class="num">Fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refund</th><th class="num">Cash</th><th>Trip ID</th></tr></thead><tbody>
+    ${prev.slice(0,8).map(t=>`<tr><td>${esc(t.d+" "+(t.t||""))}</td><td>${esc(t.name)}</td><td>${esc(t.p||"")}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="mono small">${esc(String(t.id).slice(0,13))}</td></tr>`).join("")}
+    </tbody></table></div></div>`;
+  }
+  const log = (S.settings.importLog||[]).slice(-8).reverse();
+  body += `<div class="section"><h2>Import history</h2>${log.length ? `<div class="tbl"><table><thead><tr><th>When</th><th>Files</th><th class="num">New trips</th><th class="num">Skipped duplicates</th><th>Dates</th></tr></thead><tbody>${log.map(l=>`<tr><td>${esc(l.at)}</td><td>${esc(l.files)}</td><td class="num">${l.added}</td><td class="num">${l.dup}</td><td>${esc(l.range)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="sub">Nothing imported yet.</p>`}
+  <p class="small muted" style="margin-top:10px">Daily automation: the Uber Sync program on the office PC downloads each day's Payments Transaction report and imports it here. You can still drop a CSV by hand; duplicates are skipped automatically.</p></div>`;
+  return body;
+}
+function handleFiles(files){
+  const list = [...files].filter(f => /\.csv$/i.test(f.name) || f.type.includes("csv")); if(!list.length){ toast("Choose a .csv file exported from Uber Fleet Hub."); return; }
+  let rows = [], headers = null, names = [], done = 0;
+  list.forEach(file => Papa.parse(file, {header:true, skipEmptyLines:true, complete: res => {
+    names.push(file.name); rows = rows.concat(res.data); headers = headers || res.meta.fields; done++;
+    if(done === list.length){
+      const sig = headers.join("|"); const saved = (S.settings.mappings||{})[norm(sig).slice(0,180)];
+      S.importState = {rows, headers, files:names, map: saved || guessMap(headers), sig};
+      render();
+    }}, error: () => toast(`Couldn't read ${file.name}. Make sure it is the CSV from Fleet Hub.`)}));
+}
+function previewRows(){
+  const st = S.importState; if(!st) return []; const m = st.map;
+  const g = (r, k) => (m[k]||[]).map(c => r[c]).find(v => v != null && String(v).trim() !== "");
+  const s = (r, k, abs) => sum(m[k]||[], c => abs ? Math.abs(num(r[c])) : num(r[c]));
+  const out = [];
+  st.rows.forEach((r, i) => {
+    const f = s(r,"fare"), sf = s(r,"fee",true), tx = s(r,"tax",true), tp = s(r,"tip"), rf = s(r,"refund"), c = s(r,"cash",true), km = s(r,"km");
+    if(!f && !sf && !tp && !rf && !c) return;
+    const dt = parseTripDate(g(r,"date"));
+    const name = (g(r,"driverName") || [g(r,"driverFirst"), g(r,"driverLast")].filter(Boolean).join(" ") || "").trim();
+    let id = g(r,"tripId"); if(!id) id = "row-" + norm(JSON.stringify(r)).slice(0,40) + "-" + i;
+    out.push({id:String(id), d: dt ? dt.date : "", t: dt ? dt.time : "", uuid: g(r,"driverUuid")||"", name, p: g(r,"plate")||"", f:r2(f), sf:r2(sf), tx:r2(tx), tp:r2(tp), rf:r2(rf), c:r2(c), km:r2(km)});
+  });
+  return out;
+}
+async function runImport(){
+  const rows = previewRows().filter(t => t.d); if(!rows.length) return;
+  $("#impGo").disabled = true; $("#impGo").textContent = "Importing…";
+  // match or create drivers
+  const byUuid = {}, byName = {};
+  Object.values(S.drivers).forEach(d => { if(d.uberUuid) byUuid[d.uberUuid] = d.id; byName[norm(d.name)] = d.id; });
+  const newDrivers = {};
+  for(const t of rows){
+    let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]);
+    if(!id){ id = "d-" + (norm(t.uuid).slice(0,12) || norm(t.name).slice(0,20) || uid()); byUuid[t.uuid] = id; byName[norm(t.name)] = id; newDrivers[id] = {name: t.name || "Unnamed driver", uberUuid: t.uuid || "", payModel:"", commissionPct:0, active:true, createdFromImport:true}; }
+    else if(t.uuid && S.drivers[id] && !S.drivers[id].uberUuid) newDrivers[id] = {...S.drivers[id], uberUuid:t.uuid};
+    t.dr = id;
+  }
+  for(const [id, d] of Object.entries(newDrivers)){ const {id:_, ...body} = d; if(!await writeOk(S.db.doc("drivers/"+id).set(body))) return; }
+  // vehicles from plates
+  const plates = {}; Object.values(S.vehicles).forEach(v => plates[norm(v.plate)] = v.id);
+  for(const t of rows){ if(t.p && !plates[norm(t.p)]){ const id = "v-" + norm(t.p).slice(0,20); plates[norm(t.p)] = id; if(!await writeOk(S.db.doc("vehicles/"+id).set({plate:t.p, fleetId:"", model:"", investorId:"", active:true, createdFromImport:true}))) return; } }
+  // write per-day documents, skipping known trip ids
+  const byDay = {}; rows.forEach(t => (byDay[t.d] ||= []).push(t));
+  let added = 0, dup = 0;
+  for(const [day, list] of Object.entries(byDay)){
+    const ref = S.db.doc("trips/"+day); const snap = await ref.get(); const existing = snap.exists ? (snap.data().rows||{}) : {};
+    const merged = {...existing};
+    for(const t of list){ if(existing[t.id]){ dup++; continue; } merged[t.id] = {d:t.d, t:t.t, dr:t.dr, p:t.p, f:t.f, sf:t.sf, tx:t.tx, tp:t.tp, rf:t.rf, c:t.c, km:t.km}; added++; }
+    if(!await writeOk(ref.set({date:day, rows:merged}))) return;
+  }
+  const days = Object.keys(byDay).sort();
+  const mappings = {...(S.settings.mappings||{}), [norm(S.importState.sig).slice(0,180)]: S.importState.map};
+  const log = [...(S.settings.importLog||[]), {at: new Date().toLocaleString("en-GB"), files: S.importState.files.join(", ").slice(0,120), added, dup, range: `${days[0]} → ${days[days.length-1]}`}].slice(-30);
+  await writeOk(S.db.doc("settings/main").set({...S.settings, mappings, importLog: log}));
+  S.importState = null; await loadPeriod(); render();
+  toast(`Imported ${added} new trips. ${dup} already existed and were skipped.`);
+}
+
+/* ---------- masters ---------- */
+function vDrivers(){
+  const C = compute(); const list = Object.values(S.drivers).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const e = S.edit && S.edit.kind === "driver" ? S.edit : null; const d = e ? (S.drivers[e.id] || {}) : null;
+  return `${e ? driverForm(e.id, d) : ""}
+  <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th></th></tr></thead><tbody>
+  ${list.map(x=>{ const c = C.D[x.id] || {}; const terms = !x.payModel ? `<span class="pill warn">Terms needed</span>` : x.payModel==="commission" ? `${num(x.commissionPct)}% commission` : x.payModel==="rent" ? `Rent ${fmt(num(x.rentPerDay))}/day` : x.payModel==="salary" ? `Salary ${fmt(num(x.salary))}/mo` : `Salary ${fmt(num(x.salary))} + ${num(x.commissionPct)}%`;
+    return `<tr><td>${esc(x.name)} ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${x.vehicleId?esc(vName(x.vehicleId)):'<span class="muted">—</span>'}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button></td></tr>`;}).join("")}
+  </tbody></table></div>` : `<div class="empty"><b>No drivers yet</b>Add a driver, or import an Uber report and drivers are created from it.</div>`}</div>`;
+}
+function driverForm(id, d){
+  return `<div class="section"><h2>${id ? "Edit driver" : "New driver"}</h2><p class="sub">Commission and salary+commission pay a % of net earnings (fare minus Uber fee and VAT). Rent means the driver keeps net earnings minus a daily rent.</p>
+  <form class="form" id="fDriver" data-id="${esc(id)}">
+    <div class="f"><label for="dn">Full name</label><input id="dn" name="name" required value="${esc(d.name)}"></div>
+    <div class="f"><label for="dc">Fleet code (e.g. RR-002)</label><input id="dc" name="code" value="${esc(d.code)}"></div>
+    <div class="f"><label for="du">Uber driver UUID</label><input id="du" name="uberUuid" value="${esc(d.uberUuid)}"></div>
+    <div class="f"><label for="dp">Phone</label><input id="dp" name="phone" value="${esc(d.phone)}"></div>
+    <div class="f"><label for="dv">Assigned car</label><select id="dv" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), d.vehicleId, "None")}</select></div>
+    <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
+    <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
+    <div class="f"><label for="drent">Rent per day (AED)</label><input id="drent" name="rentPerDay" type="number" step="0.01" value="${esc(d.rentPerDay ?? "")}"></div>
+    <div class="f"><label for="drb">Rent charged for</label><select id="drb" name="rentBasis">${opts({worked:"Days with trips", calendar:"Every calendar day"}, d.rentBasis||"worked")}</select></div>
+    <div class="f"><label for="dsal">Monthly salary (AED)</label><input id="dsal" name="salary" type="number" step="0.01" value="${esc(d.salary ?? "")}"></div>
+    <div class="f"><label for="dact">Status</label><select id="dact" name="active">${opts({true:"Active", false:"Inactive"}, String(d.active !== false))}</select></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save driver</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="drivers" data-id="${esc(id)}">Delete</button>`:""}</div>
+  </form></div>`;
+}
+function vVehicles(){
+  const C = compute(); const list = Object.values(S.vehicles).sort((a,b)=>(a.fleetId||a.plate||"").localeCompare(b.fleetId||b.plate||"", undefined, {numeric:true}));
+  const e = S.edit && S.edit.kind === "vehicle" ? S.edit : null;
+  return `${e ? vehicleForm(e.id, S.vehicles[e.id] || {}) : ""}
+  <div class="section"><div class="head"><div><h2>Vehicles</h2><p class="sub">Link each car to its investor and terms. Trips are matched to cars by plate; if the Uber file has no plate, the driver's assigned car is used.</p></div><button class="btn primary" data-edit="vehicle" data-id="">Add vehicle</button></div>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Fleet ID</th><th>Plate</th><th>Model</th><th>Investor</th><th>Terms</th><th class="num">Trips</th><th class="num">Operating profit</th><th></th></tr></thead><tbody>
+  ${list.map(v=>{ const c = C.V[v.id] || {}; const t = !v.investorId ? (v.invModel==="none" ? '<span class="pill">Company-owned</span>' : '<span class="pill warn">Set investor</span>') : `${v.invModel==="fixed" ? `Fixed ${fmt(num(v.invFixed))}/mo` : `${num(v.invPct)}% profit`}${num(v.mgmtFixed)?` · fee ${fmt(num(v.mgmtFixed))}/mo`:""}${num(v.mgmtPct)?` · ${num(v.mgmtPct)}% rev`:""}`;
+    return `<tr><td>${esc(v.fleetId)}</td><td class="mono">${esc(v.plate)}</td><td>${esc(v.model)}</td><td>${esc(v.investorId ? iName(v.investorId) : "—")}</td><td>${t}</td><td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
+  </tbody></table></div>` : `<div class="empty"><b>No vehicles yet</b>Add your cars with their plate numbers, or import an Uber report with plates.</div>`}</div>`;
+}
+function vehicleForm(id, v){
+  return `<div class="section"><h2>${id ? "Edit vehicle" : "New vehicle"}</h2><p class="sub">Management charges come off first (fixed per month and/or % of fare revenue). The investor then gets either a % of what is left or a fixed monthly payment. The company keeps the rest.</p>
+  <form class="form" id="fVehicle" data-id="${esc(id)}">
+    <div class="f"><label for="vf">Fleet ID (e.g. RR12)</label><input id="vf" name="fleetId" value="${esc(v.fleetId)}"></div>
+    <div class="f"><label for="vp">Plate</label><input id="vp" name="plate" required value="${esc(v.plate)}"></div>
+    <div class="f"><label for="vm">Model</label><input id="vm" name="model" value="${esc(v.model)}"></div>
+    <div class="f"><label for="vvin">VIN</label><input id="vvin" name="vin" value="${esc(v.vin)}"></div>
+    <div class="f"><label for="vi">Investor</label><select id="vi" name="investorId">${listOpts(S.investors, i=>i.name||i.id, v.investorId, "None (company-owned)")}</select></div>
+    <div class="f"><label for="vim">Investor terms</label><select id="vim" name="invModel">${opts(INV_MODELS, v.invModel || (v.investorId ? "profit_share" : "none"))}</select></div>
+    <div class="f"><label for="vpct">Investor profit share %</label><input id="vpct" name="invPct" type="number" step="0.01" value="${esc(v.invPct ?? "")}"></div>
+    <div class="f"><label for="vfix">Fixed payment to investor / month</label><input id="vfix" name="invFixed" type="number" step="0.01" value="${esc(v.invFixed ?? "")}"></div>
+    <div class="f"><label for="vmf">Management fee fixed / month</label><input id="vmf" name="mgmtFixed" type="number" step="0.01" value="${esc(v.mgmtFixed ?? "")}"></div>
+    <div class="f"><label for="vmp">Management fee % of fare revenue</label><input id="vmp" name="mgmtPct" type="number" step="0.01" value="${esc(v.mgmtPct ?? "")}"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save vehicle</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="vehicles" data-id="${esc(id)}">Delete</button>`:""}</div>
+  </form></div>`;
+}
+function vInvestors(){
+  const list = Object.values(S.investors).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const e = S.edit && S.edit.kind === "investor" ? S.edit : null; const x = e ? (S.investors[e.id]||{}) : null;
+  return `${e ? `<div class="section"><h2>${e.id?"Edit investor":"New investor"}</h2><form class="form" id="fInvestor" data-id="${esc(e.id)}">
+    <div class="f"><label for="in">Name</label><input id="in" name="name" required value="${esc(x.name)}"></div>
+    <div class="f"><label for="ip">Phone</label><input id="ip" name="phone" value="${esc(x.phone)}"></div>
+    <div class="f"><label for="ie">Email</label><input id="ie" name="email" value="${esc(x.email)}"></div>
+    <div class="f"><label for="ib">Bank / IBAN note</label><input id="ib" name="bank" value="${esc(x.bank)}"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save investor</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${e.id?`<button class="btn danger" type="button" data-del="investors" data-id="${esc(e.id)}">Delete</button>`:""}</div></form></div>` : ""}
+  <div class="section"><div class="head"><div><h2>Investors</h2><p class="sub">Terms are set per car on the Vehicles page, so one investor can hold cars on different terms.</p></div><button class="btn primary" data-edit="investor" data-id="">Add investor</button></div>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td>${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate)).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
+}
+
+/* ---------- entries ---------- */
+function vEntries(){
+  const e = S.edit && S.edit.kind === "entry" ? S.edit : {kind:"entry", id:"", data:{date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type:"expense", category:"5200", paidFrom:"1100"}};
+  const x = e.data;
+  const list = [...S.entries].reverse();
+  return `<div class="section"><h2>${e.id ? "Edit entry" : "Record an expense or payment"}</h2><p class="sub">Link fuel, Salik, fines and repairs to a car so they land in its P&L. Tick "recover from driver" for fines or tolls the driver must pay; they are deducted in the driver's settlement.</p>
+  <form class="form" id="fEntry" data-id="${esc(e.id)}">
+    <div class="f"><label for="ed">Date</label><input id="ed" name="date" type="date" required value="${esc(x.date)}"></div>
+    <div class="f"><label for="et">Type</label><select id="et" name="type">${opts(ENTRY_TYPES, x.type)}</select></div>
+    <div class="f"><label for="ec">Expense category</label><select id="ec" name="category">${opts(EXP_CATS, x.category)}</select></div>
+    <div class="f"><label for="ea">Amount excl. VAT (AED)</label><input id="ea" name="amount" type="number" step="0.01" required value="${esc(x.amount ?? "")}"></div>
+    <div class="f"><label for="ev">VAT (AED)</label><input id="ev" name="vat" type="number" step="0.01" value="${esc(x.vat ?? "")}"></div>
+    <div class="f"><label for="ep">Paid from / into</label><select id="ep" name="paidFrom">${opts({"1100":"Bank","1110":"Cash in hand"}, x.paidFrom)}</select></div>
+    <div class="f"><label for="ev2">Car</label><select id="ev2" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), x.vehicleId, "—")}</select></div>
+    <div class="f"><label for="edr">Driver</label><select id="edr" name="driverId">${listOpts(S.drivers, d=>d.name||d.id, x.driverId, "—")}</select></div>
+    <div class="f"><label for="ei">Investor</label><select id="ei" name="investorId">${listOpts(S.investors, i=>i.name||i.id, x.investorId, "—")}</select></div>
+    <div class="f"><label for="er">Recover from driver?</label><select id="er" name="recover">${opts({false:"No, company cost", true:"Yes, deduct from driver"}, String(!!x.recover))}</select></div>
+    <div class="f wide"><label for="en">Note / reference</label><input id="en" name="note" value="${esc(x.note)}" placeholder="e.g. ENOC invoice 4471, Salik Sep, RTA fine 12345"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>${e.id?"Save changes":"Add entry"}</button>${e.id?`<button class="btn ghost" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" data-delentry="${esc(e.id)}" data-month="${esc(x.date.slice(0,7))}">Delete</button>`:""}</div>
+  </form></div>
+  <div class="section"><h2>Entries this period</h2>${list.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Car</th><th>Driver / investor</th><th class="num">Amount</th><th class="num">VAT</th><th>Note</th><th></th></tr></thead><tbody>
+  ${list.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(ENTRY_TYPES[r.type])}${r.recover?' <span class="pill brass">From driver</span>':""}</td><td>${r.type==="expense"?esc(EXP_CATS[r.category]||""):"—"}</td><td>${r.vehicleId?esc(vName(r.vehicleId)):"—"}</td><td>${esc(r.driverId?dName(r.driverId):r.investorId?iName(r.investorId):"—")}</td><td class="num">${fmt(num(r.amount))}</td><td class="num">${fmt(num(r.vat))}</td><td>${esc(r.note)}</td><td><button class="btn sm" data-editentry="${esc(r.id)}">Edit</button></td></tr>`).join("")}
+  </tbody></table></div>` : `<div class="empty"><b>No entries in this period</b>Add fuel, Salik, fines, Uber payouts received in the bank, and payments to drivers and investors.</div>`}</div>`;
+}
+
+/* ---------- statements ---------- */
+function vSettlement(){
+  const C = compute(); const ds = Object.values(C.D).filter(d => d.n || d.adv || d.paid || d.deduct || d.recv || (S.drivers[d.id] && S.drivers[d.id].active !== false && d.ent)).sort((a,b)=>dName(a.id).localeCompare(dName(b.id)));
+  if(!ds.length) return `<div class="empty"><b>Nothing to settle for this period</b>Import Uber trips for these dates first.</div>`;
+  return `<div class="section"><div class="head"><div><h2>Driver settlement · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Positive balance = pay the driver. Negative = the driver holds more cash than they earned and owes the company.</p></div><button class="btn" id="expSettle">Export CSV</button></div>
+  <div class="tbl"><table><thead><tr><th>Driver</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare</th><th class="num">Uber fee+VAT</th><th class="num">Net</th><th class="num">Driver share</th><th class="num">Tips</th><th class="num">Cash held</th><th class="num">Deductions</th><th class="num">Advances</th><th class="num">Paid</th><th class="num">Received</th><th class="num">Balance</th><th class="num">Company contribution</th></tr></thead><tbody>
+  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small">${S.drivers[d.id] && S.drivers[d.id].payModel ? esc(PAY_MODELS[d.model].split(" (")[0]) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(ds,d=>d.n)}</td><td class="num">${fmt(sum(ds,d=>d.fare))}</td><td class="num">${fmt(sum(ds,d=>d.fee+d.tax))}</td><td class="num">${fmt(sum(ds,d=>d.net))}</td><td class="num">${fmt(sum(ds,d=>d.ent))}</td><td class="num">${fmt(sum(ds,d=>d.tipsDue))}</td><td class="num">${fmt(sum(ds,d=>d.cash))}</td><td class="num">${fmt(sum(ds,d=>d.deduct))}</td><td class="num">${fmt(sum(ds,d=>d.adv))}</td><td class="num">${fmt(sum(ds,d=>d.paid))}</td><td class="num">${fmt(sum(ds,d=>d.recv))}</td><td class="num">${fmt(sum(ds,d=>d.balance))}</td><td class="num">${fmt(sum(ds,d=>d.contrib))}</td></tr></tfoot></table></div>
+  <p class="small muted" style="margin-top:8px">Balance = driver share + tips − cash held − deductions − advances − payments + amounts received from the driver. Company contribution = net + refunds − driver share.</p></div>
+  <div class="grid2">${ds.filter(d=>d.n).map(d=>`<div class="statement"><h3>${esc(dName(d.id))}</h3><div class="small muted">${esc(S.from)} to ${esc(S.to)} · ${d.n} trips · ${d.daysWorked} days</div>
+    <div class="ln"><span>Fares</span><span>${fmt(d.fare)}</span></div><div class="ln"><span>Uber service fee</span><span>-${fmt(d.fee)}</span></div><div class="ln"><span>VAT on fee</span><span>-${fmt(d.tax)}</span></div>
+    <div class="ln"><span>Net earnings</span><span>${fmt(d.net)}</span></div>
+    <div class="ln"><span>Your share (${esc(d.model==="rent" ? `net − rent ${fmt(num((S.drivers[d.id]||{}).rentPerDay))} × ${d.rentDays} days` : d.model==="commission" ? num((S.drivers[d.id]||{}).commissionPct)+"%" : d.model==="salary" ? "salary" : "salary + "+num((S.drivers[d.id]||{}).commissionPct)+"%")})</span><span>${fmt(d.ent)}</span></div>
+    <div class="ln"><span>Tips</span><span>${fmt(d.tipsDue)}</span></div><div class="ln"><span>Cash you collected</span><span>-${fmt(d.cash)}</span></div>
+    ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
+    <div class="ln tot"><span>${d.balance >= 0 ? "Payable to you" : "You owe the company"}</span><span>AED ${fmt(Math.abs(d.balance))}</span></div></div>`).join("")}</div>`;
+}
+function vInvestorPL(){
+  const C = compute(); const invs = Object.values(C.I);
+  const company = Object.values(C.V).filter(v => !v.investorId && (v.n || v.exp));
+  const card = (title, vs, I) => `<div class="section"><div class="head"><div><h2>${esc(title)}</h2><p class="sub">${esc(S.from)} to ${esc(S.to)}${I && S.investors[I.id] && S.investors[I.id].phone ? " · " + esc(S.investors[I.id].phone) : ""}</p></div></div>
+    <div class="tbl"><table><thead><tr><th>Car</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare revenue</th><th class="num">Uber fee+VAT</th><th class="num">Refunds</th><th class="num">Driver cost</th><th class="num">Car expenses</th><th class="num">Operating profit</th><th class="num">Mgmt fee</th><th class="num">Investor share</th><th class="num">Company</th></tr></thead><tbody>
+    ${vs.map(v=>{ const m = S.vehicles[v.id]||{}; const terms = v.invModel==="fixed" ? `Fixed ${fmt(num(m.invFixed))}/mo` : v.invModel==="profit_share" ? `${num(m.invPct)}% of profit` : "Company"; const fees = setting("feeVatRecoverable",false) ? v.fee : v.fee+v.tax;
+      return `<tr><td>${esc(vName(v.id))}</td><td class="small">${terms}${num(m.mgmtFixed)?` · fee ${fmt(num(m.mgmtFixed))}/mo`:""}${num(m.mgmtPct)?` · ${num(m.mgmtPct)}%`:""}</td><td class="num">${v.n}</td><td class="num">${fmt(v.fareRev)}</td><td class="num">-${fmt(fees)}</td><td class="num">${fmt(v.ref)}</td><td class="num">${aed(-v.drvCost)}</td><td class="num">-${fmt(v.exp)}</td><td class="num">${aed(v.op)}</td><td class="num">${fmt(v.mgmt)}</td><td class="num"><b>${aed(v.invShare)}</b></td><td class="num">${aed(v.company)}</td></tr>`;}).join("")}
+    </tbody>${vs.length>1?`<tfoot><tr><td colspan="3">Total</td><td class="num">${fmt(sum(vs,v=>v.fareRev))}</td><td></td><td class="num">${fmt(sum(vs,v=>v.ref))}</td><td class="num">${fmt(-sum(vs,v=>v.drvCost))}</td><td class="num">-${fmt(sum(vs,v=>v.exp))}</td><td class="num">${fmt(sum(vs,v=>v.op))}</td><td class="num">${fmt(sum(vs,v=>v.mgmt))}</td><td class="num">${fmt(sum(vs,v=>v.invShare))}</td><td class="num">${fmt(sum(vs,v=>v.company))}</td></tr></tfoot>`:""}</table></div>
+    ${I ? `<div class="row" style="margin-top:10px;gap:18px"><span>Investor share <b class="mono">${fmt(I.share)}</b></span><span>Paid this period <b class="mono">${fmt(I.payouts)}</b></span><span>Balance due <b class="mono ${I.balance<0?"neg":""}">${fmt(I.balance)}</b></span></div>` : ""}</div>`;
+  if(!invs.length && !company.length) return `<div class="empty"><b>No investor results yet</b>Add investors, link their cars on the Vehicles page, and import trips for the period.</div>`;
+  return invs.map(I => card(iName(I.id), I.vs, I)).join("") + (company.length ? card("Company-owned cars", company, null) : "")
+    + `<p class="small muted">Operating profit = fare revenue − Uber fee${setting("feeVatRecoverable",false)?"":" and its VAT"} + refunds − driver cost (allocated by each driver's net on that car) − car expenses not recovered from drivers. Mgmt fee = fixed monthly (pro-rated by day) + % of fare revenue. Profit-share investors receive their % of operating profit after the mgmt fee; fixed investors receive the pro-rated fixed amount.</p>`;
+}
+function vLedger(){
+  const C = compute(); const L = journal(C);
+  const TB = {}; L.forEach(l => { const t = TB[l.acct] ||= {dr:0, cr:0}; t.dr += l.dr; t.cr += l.cr; });
+  const accts = Object.keys(TB).sort();
+  const totDr = sum(L,l=>l.dr), totCr = sum(L,l=>l.cr);
+  const bal = a => (TB[a] ? TB[a].dr - TB[a].cr : 0);
+  const income = -(bal("4000") + bal("4010") + bal("4100")); const exps = accts.filter(a => a >= "5000").reduce((s,a)=>s+bal(a),0);
+  const outVat = -bal("2300"), inVat = bal("1300");
+  return `<div class="kpis"><div class="kpi"><div class="l">Income</div><div class="v">${fmt(income)}</div></div><div class="kpi"><div class="l">Expenses</div><div class="v">${fmt(exps)}</div></div><div class="kpi"><div class="l">Net profit</div><div class="v ${income-exps<0?"neg":""}">${fmt(income-exps)}</div></div><div class="kpi"><div class="l">VAT payable</div><div class="v">${fmt(outVat-inVat)}</div><div class="n">Output ${fmt(outVat)} − input ${fmt(inVat)}</div></div></div>
+  <div class="section"><div class="head"><div><h2>Trial balance · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Built automatically from imported trips, driver and investor terms, and your entries. ${Math.abs(totDr-totCr) < 0.02 ? '<span class="pill good">Balanced</span>' : '<span class="pill bad">Out of balance</span>'}</p></div><div class="row"><button class="btn" id="expJournal">Export journal CSV</button></div></div>
+  <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
+  ${accts.map(a=>`<tr><td class="mono">${a}</td><td>${esc(ACCT[a]||a)}</td><td class="num">${fmt(TB[a].dr)}</td><td class="num">${fmt(TB[a].cr)}</td><td class="num">${aed(TB[a].dr-TB[a].cr)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>`}
+  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${fmt(totDr)}</td><td class="num">${fmt(totCr)}</td><td></td></tr></tfoot></table></div></div>
+  <div class="section"><h2>VAT working</h2><p class="sub">Fare treatment: <b>${setting("fareVat","exempt")==="standard" ? "standard-rated 5% (VAT inside the fare)" : "exempt local passenger transport"}</b>. Uber fee VAT: <b>${setting("feeVatRecoverable",false) ? "recoverable" : "not recoverable (cost)"}</b>. Change these in Settings after confirming the position for this business.</p>
+  <div class="tbl"><table><tbody>
+   <tr><td>Output VAT on Uber fares</td><td class="num">${fmt(setting("fareVat","exempt")==="standard" ? sum(S.trips,t=>t.f) - sum(S.trips,t=>t.f)/1.05 : 0)}</td></tr>
+   <tr><td>Output VAT on direct bookings</td><td class="num">${fmt(sum(S.entries.filter(e=>e.type==="income"),e=>num(e.vat)))}</td></tr>
+   <tr><td>Input VAT on Uber service fee</td><td class="num">${fmt(setting("feeVatRecoverable",false) ? sum(S.trips,t=>t.tx) : 0)}</td></tr>
+   <tr><td>Input VAT on expenses</td><td class="num">${fmt(setting("inputVatRecoverable",false) ? sum(S.entries.filter(e=>e.type==="expense"),e=>num(e.vat)) : 0)}</td></tr>
+   <tr><td><b>Net VAT payable / (refundable)</b></td><td class="num"><b>${fmt(outVat-inVat)}</b></td></tr>
+  </tbody></table></div></div>`;
+}
+function vSettings(){
+  const s = S.settings;
+  return `<div class="section"><h2>Company & tax settings</h2><p class="sub">These rules drive every calculation. Confirm the VAT position for limousine fares with the firm's tax adviser before filing.</p>
+  <form class="form" id="fSettings">
+    <div class="f"><label for="sc">Company name</label><input id="sc" name="company" value="${esc(s.company || "Royal Rides Limousine LLC")}"></div>
+    <div class="f"><label for="sfv">Uber fares VAT treatment</label><select id="sfv" name="fareVat">${opts({exempt:"Exempt (local passenger transport)", standard:"Standard 5% (VAT inside fare)"}, s.fareVat || "exempt")}</select></div>
+    <div class="f"><label for="sfr">VAT on Uber service fee</label><select id="sfr" name="feeVatRecoverable">${opts({false:"Not recoverable (cost)", true:"Recoverable input VAT"}, String(!!s.feeVatRecoverable))}</select></div>
+    <div class="f"><label for="sir">VAT on expenses</label><select id="sir" name="inputVatRecoverable">${opts({false:"Not recoverable (cost)", true:"Recoverable input VAT"}, String(!!s.inputVatRecoverable))}</select></div>
+    <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
+  </form></div>
+  <div class="section"><h2>How data flows</h2><div class="tbl"><table><thead><tr><th>Source</th><th>Where it goes</th></tr></thead><tbody>
+   <tr><td>Uber Payments Transaction CSV</td><td>Import page → one row per trip → driver, car, ledger</td></tr>
+   <tr><td>Uber Sync program (daily, on the office PC)</td><td>Downloads the Payments Transaction report from Fleet Hub and saves the trips here automatically (duplicates skipped)</td></tr>
+   <tr><td>Fuel, Salik, fines, repairs</td><td>Expenses & payments → car P&L, or deducted from the driver</td></tr>
+   <tr><td>Uber payout to Wio</td><td>Entry "Uber payout received" → clears Uber receivable</td></tr>
+   <tr><td>Journal export</td><td>Ledger page → CSV for Manager.io or your auditor</td></tr>
+  </tbody></table></div></div>`;
+}
+
+/* ============ events ============ */
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest("button,[data-nav]"); if(!t) return;
+  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
+  if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
+  if(t.dataset.del){
+    if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
+    if(await writeOk(S.db.doc(t.dataset.del + "/" + t.dataset.id).delete())){ S.edit = null; toast("Deleted."); render(); } return;
+  }
+  if(t.dataset.editentry){ const r = S.entries.find(x => x.id === t.dataset.editentry); if(r){ S.edit = {kind:"entry", id:r.id, data:{...r}}; render(); window.scrollTo(0,0); } return; }
+  if(t.dataset.delentry){
+    if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
+    const m = t.dataset.month; const rows = (S.entryDocs[m]||[]).filter(r => r.id !== t.dataset.delentry);
+    if(await writeOk(S.db.doc("entries/"+m).set({month:m, rows}))){ S.edit = null; await loadPeriod(); render(); toast("Entry deleted."); } return;
+  }
+  if(t.id === "impCancel"){ S.importState = null; render(); return; }
+  if(t.id === "impGo"){ runImport(); return; }
+  if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [S.to, l.acct, ACCT[l.acct]||l.acct, l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
+  if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
+});
+async function saveCsv(name, rows){
+  const csv = rows.map(r => r.map(c => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }).join(",")).join("\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], {type:"text/csv"})); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000); toast("Saved " + name);
+}
+document.addEventListener("submit", async ev => {
+  ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
+  const numF = ["commissionPct","rentPerDay","salary","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat"];
+  numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? 0 : num(fd[k]); });
+  ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
+  if(!S.db) return;
+  if(f.id === "fDriver" || f.id === "fVehicle" || f.id === "fInvestor"){
+    const col = {fDriver:"drivers", fVehicle:"vehicles", fInvestor:"investors"}[f.id];
+    const id = f.dataset.id || (col[0] + "-" + uid());
+    const prev = (S[col] && S[col][id]) || {}; const {id:_, ...prevBody} = prev;
+    if(f.id === "fVehicle" && !fd.investorId && fd.invModel !== "none") fd.invModel = "none";
+    if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
+  }
+  if(f.id === "fEntry"){
+    const m = fd.date.slice(0,7); const oldId = f.dataset.id; const ref = S.db.doc("entries/"+m);
+    if(oldId){ const old = S.entries.find(x=>x.id===oldId); if(old && old.date.slice(0,7) !== m){ const om = old.date.slice(0,7); const s0 = await S.db.doc("entries/"+om).get(); const r0 = (s0.exists ? s0.data().rows : []).filter(r=>r.id!==oldId); if(!await writeOk(S.db.doc("entries/"+om).set({month:om, rows:r0}))) return; } }
+    const snap = await ref.get(); let rows = snap.exists ? (snap.data().rows||[]) : [];
+    const row = {id: oldId || uid(), ...fd}; rows = rows.filter(r => r.id !== row.id); rows.push(row);
+    if(await writeOk(ref.set({month:m, rows}))){ S.edit = null; await loadPeriod(); render(); toast(oldId ? "Entry updated." : "Entry added."); }
+  }
+  if(f.id === "fSettings"){ if(await writeOk(S.db.doc("settings/main").set({...S.settings, ...fd}))) toast("Settings saved."); }
+});
+document.addEventListener("input", ev => {
+  const t = ev.target;
+  if(t.id === "tq"){ S.tripFilter.q = t.value; clearTimeout(S._q); S._q = setTimeout(render, 200); }
+});
+document.addEventListener("change", async ev => {
+  const t = ev.target;
+  if(t.id === "preset"){ if(t.value !== "custom"){ setPreset(t.value); await loadPeriod(); render(); } return; }
+  if(t.id === "pFrom" || t.id === "pTo"){ $("#preset").value = "custom"; const a = $("#pFrom").value, b = $("#pTo").value; if(a && b && a <= b){ S.from = a; S.to = b; await loadPeriod(); render(); } return; }
+  if(t.id === "tdrv"){ S.tripFilter.driver = t.value; render(); return; }
+  if(t.id === "tveh"){ S.tripFilter.vehicle = t.value; render(); return; }
+  if(t.id === "file"){ handleFiles(t.files); t.value = ""; return; }
+  if(t.dataset.map && S.importState){ S.importState.map[t.dataset.map] = [...t.selectedOptions].map(o=>o.value).filter(Boolean); render(); return; }
+});
+["dragenter","dragover"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("#drop"); if(d){ ev.preventDefault(); d.classList.add("over"); } }));
+["dragleave","drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("#drop"); if(d){ ev.preventDefault(); d.classList.remove("over"); if(n === "drop") handleFiles(ev.dataTransfer.files); } }));
+
+/* ============ sign-in ============ */
+function showLogin(msg){ $("#login").hidden = false; $("#lmsg").textContent = msg || ""; render(); }
+function showUser(me){
+  const w = $("#who"); w.hidden = false;
+  w.innerHTML = `<span>${esc(me.name || me.id)}</span><button type="button" id="signout">Sign out</button>`;
+}
+document.addEventListener("submit", async ev => {
+  if(ev.target.id !== "fLogin") return;
+  ev.preventDefault(); ev.stopImmediatePropagation();
+  $("#lmsg").textContent = "Signing in…";
+  try{ await FT.signIn($("#lid").value, $("#lpw").value); location.reload(); }
+  catch(e){ $("#lmsg").textContent = FT.friendlyError(e); }
+}, true);
+document.addEventListener("click", async ev => {
+  const t = ev.target;
+  if(t.id === "gsign"){ $("#lmsg").textContent = "Opening Google…"; try{ await FT.signInAdmin(); location.reload(); }catch(e){ $("#lmsg").textContent = FT.friendlyError(e); } }
+  if(t.id === "signout"){ await FT.auth.signOut(); location.reload(); }
+}, true);
+
+boot();
+</script>
+
+</body></html>

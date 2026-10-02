@@ -1,0 +1,16 @@
+{
+  "name": "royal-rides-uber-sync",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Downloads the Uber Fleet Hub Payments Transaction report and saves the trips in the Royal Rides Fleet Ledger",
+  "scripts": {
+    "sync": "node --env-file-if-exists=.env sync.js",
+    "login": "node --env-file-if-exists=.env sync.js --login"
+  },
+  "dependencies": {
+    "firebase": "^11.10.0",
+    "papaparse": "^5.7.0",
+    "playwright-core": "^1.63.0"
+  }
+}
