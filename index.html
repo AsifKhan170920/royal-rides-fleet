@@ -287,13 +287,44 @@ function vehicleForTrip(t){
   if(t.p){ const v = Object.values(S.vehicles).find(v => norm(v.plate) === norm(t.p)); if(v) return v.id; }
   const dr = S.drivers[t.dr]; return dr && dr.vehicleId || "";
 }
+/* Terms change over time. Each driver and car keeps a dated history in rec.terms
+   ([{from:"YYYY-MM-DD", ...terms, note, by, at}]); a term applies from its date until the next one.
+   Records without a history use their top-level fields as terms that always applied. */
+const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary"];
+const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct"];
+const BEGIN = "2000-01-01";
+function termList(rec, keys){
+  if(Array.isArray(rec.terms) && rec.terms.length) return rec.terms.slice().sort((a,b)=>a.from.localeCompare(b.from));
+  const base = {from: BEGIN}; keys.forEach(k => base[k] = rec[k] ?? ""); return [base];
+}
+function termAt(list, day){ let t = null; for(const x of list){ if(x.from <= day) t = x; else break; } return t; }
+const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? ""]));
+const dmyS = s => s.split("-").reverse().join("/");
+function drvTermText(t){
+  if(!t || !t.payModel) return "No terms";
+  return t.payModel==="commission" ? num(t.commissionPct)+"% commission" : t.payModel==="rent" ? "Rent "+fmt(num(t.rentPerDay))+"/day"+(t.rentBasis==="calendar"?" (every day)":"")
+    : t.payModel==="salary" ? "Salary "+fmt(num(t.salary))+"/mo" : "Salary "+fmt(num(t.salary))+" + "+num(t.commissionPct)+"%";
+}
+function vehTermText(t){
+  if(!t) return "—";
+  const inv = !t.investorId ? "Company-owned" : (S.investors[t.investorId] ? S.investors[t.investorId].name : "Investor") + ": " + ((t.invModel||"profit_share")==="fixed" ? "fixed "+fmt(num(t.invFixed))+"/mo" : num(t.invPct)+"% of profit");
+  return inv + (num(t.mgmtFixed) ? " · fee "+fmt(num(t.mgmtFixed))+"/mo" : "") + (num(t.mgmtPct) ? " · "+num(t.mgmtPct)+"% of revenue" : "");
+}
+// the terms in force during [from,to], e.g. "35% commission → 40% commission from 15/09/2026"
+function termsInPeriod(list, from, to, text){
+  const used = list.filter((x,i) => x.from <= to && (i === list.length-1 || list[i+1].from > from));
+  if(!used.length) return text(null);
+  return used.map((x,i) => text(x) + (i && x.from > from ? " from " + dmyS(x.from) : "")).join(" → ");
+}
 function compute(){
   const from = S.from, to = S.to, calDays = daysBetween(from,to);
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
   const tips2drv = setting("tipsToDriver", true);
-  const D = {}, V = {};
-  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set()};
-  const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set()};
+  const D = {}, V = {}, DT = {};
+  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0};
+  const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set(), seg:{}};
+  const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0};
+  const dTerms = id => DT[id] ||= termList(S.drivers[id] || {}, DRV_TERMS);
   for(const t of S.trips){
     const d = dget(t.dr||"unknown"); const vid = vehicleForTrip(t) || "unassigned"; const v = vget(vid);
     const trip = t.tr || ((t.f||t.sf||t.tp) ? t.id : ""), firstRow = trip && !d.trips.has(trip);
@@ -301,18 +332,31 @@ function compute(){
     if(trip){ d.trips.add(trip); d.days.add(t.d); } if(firstRow) d.km += t.km||0; d.n = d.trips.size;
     const net = (t.f||0) - (t.sf||0) - (t.tx||0); d.byV[vid] = (d.byV[vid]||0) + net;
     v.fare += t.f||0; v.fee += t.sf||0; v.tax += t.tx||0; v.ref += t.rf||0; if(firstRow) v.km += t.km||0; if(trip) v.trips.add(trip); v.n = v.trips.size;
+    // the driver's share of this trip under the terms in force on the trip date
+    const tm = termAt(dTerms(t.dr||"unknown"), t.d) || {}; const model = tm.payModel || "commission";
+    const share = (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct)/100 : model === "rent" ? net : 0;
+    d.entTrip += share;
+    if(net){ const u = d.dayNet[t.d] ||= {}; u[vid] = (u[vid]||0) + net; }
+    const b = vday(vid, t.d); b.fare += t.f||0; b.fee += t.sf||0; b.tax += t.tx||0; b.ref += t.rf||0; b.drv += share;
   }
   Object.keys(S.drivers).forEach(id => dget(id));
-  // driver entitlements & settlement
+  // day-based pay (rent, salary) under the terms of each day; booked to the cars the driver used that day
   for(const d of Object.values(D)){
-    const m = S.drivers[d.id] || {}; const model = m.payModel || "commission"; const pct = num(m.commissionPct);
+    const m = S.drivers[d.id] || {}, list = dTerms(d.id); let dayPart = 0;
+    for(let day = from; day <= to; day = addDays(day,1)){
+      const tm = termAt(list, day) || {}; const model = tm.payModel || "commission"; let x = 0;
+      if(model === "rent"){ if(d.days.has(day) || tm.rentBasis === "calendar"){ x = -num(tm.rentPerDay); d.rentDays++; } }
+      else if(model === "salary" || model === "salary_comm") x = num(tm.salary) / dim(day);
+      if(!x) continue;
+      dayPart += x;
+      const use = d.dayNet[day], tot = use ? Object.values(use).reduce((a,b)=>a+b,0) : 0;
+      if(use && tot) Object.entries(use).forEach(([vid,n]) => { vday(vid, day).drv += x * n / tot; });
+      else vday(m.vehicleId || "unassigned", day).drv += x;
+    }
+    d.ent = d.entTrip + dayPart;
     d.net = d.fare - d.fee - d.tax; d.daysWorked = d.days.size;
-    let ent = 0;
-    if(model === "commission") ent = d.net * pct/100;
-    else if(model === "rent"){ const days = m.rentBasis === "calendar" ? calDays : d.daysWorked; ent = d.net - num(m.rentPerDay)*days; d.rentDays = days; }
-    else if(model === "salary") ent = prorate(num(m.salary), from, to);
-    else if(model === "salary_comm") ent = prorate(num(m.salary), from, to) + d.net*pct/100;
-    d.ent = ent; d.model = model;
+    const cur = termAt(list, to) || {}; d.model = cur.payModel || "commission";
+    d.termsText = termsInPeriod(list, from, to, drvTermText);
     const mine = S.entries.filter(e => e.driverId === d.id);
     d.deduct = sum(mine.filter(e => e.type === "expense" && e.recover), e => num(e.amount) + num(e.vat));
     d.adv = sum(mine.filter(e => e.type === "driver_advance"), e => num(e.amount));
@@ -321,35 +365,46 @@ function compute(){
     d.tipsDue = tips2drv ? d.tip : 0;
     d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv;
     d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) - d.ent;
-    // allocate driver cost to vehicles by net share
-    const tot = Object.values(d.byV).reduce((a,b)=>a+b,0);
-    Object.entries(d.byV).forEach(([vid,n]) => { vget(vid).drvCost += tot ? d.ent * n / tot : 0; });
-    if(!tot && d.ent && m.vehicleId) vget(m.vehicleId).drvCost += d.ent;
   }
-  // vehicle expenses
-  for(const e of S.entries){ if(e.type !== "expense" || e.recover) continue; const cost = num(e.amount) + (inVatRec ? 0 : num(e.vat)); if(e.vehicleId){ const v = vget(e.vehicleId); v.exp += cost; v.expList.push(e); } }
+  // car expenses, by date
+  for(const e of S.entries){ if(e.type !== "expense" || e.recover || !e.vehicleId) continue; const cost = num(e.amount) + (inVatRec ? 0 : num(e.vat)); vday(e.vehicleId, e.date).exp += cost; vget(e.vehicleId).expList.push(e); }
   Object.keys(S.vehicles).forEach(id => vget(id));
+  // each car: split the period where its terms (investor, shares, fees) change
   for(const v of Object.values(V)){
-    const m = S.vehicles[v.id] || {};
-    const fareRev = fareStd ? v.fare/1.05 : v.fare;
-    v.fareRev = fareRev;
-    v.op = fareRev - v.fee - (feeVatRec ? 0 : v.tax) + v.ref - v.drvCost - v.exp;
-    v.mgmt = prorate(num(m.mgmtFixed), from, to) + fareRev * num(m.mgmtPct)/100;
-    const model = m.investorId ? (m.invModel || "profit_share") : "none";
-    v.after = v.op - v.mgmt;
-    v.invShare = model === "profit_share" ? v.after * num(m.invPct)/100 : model === "fixed" ? prorate(num(m.invFixed), from, to) : 0;
-    v.company = v.op - v.invShare; v.invModel = model; v.investorId = m.investorId || "";
+    const list = termList(S.vehicles[v.id] || {}, VEH_TERMS);
+    v.fareRev = 0; v.op = 0; v.mgmt = 0; v.invShare = 0; v.drvCost = 0; v.exp = 0; v.byInv = {}; v.segments = [];
+    let seg = null;
+    for(let day = from; day <= to; day = addDays(day,1)){
+      const tm = termAt(list, day);
+      if(!seg || seg.tm !== tm){ seg = {from:day, to:day, tm, fare:0, fee:0, tax:0, ref:0, drv:0, exp:0, mgmtFix:0, invFix:0}; v.segments.push(seg); }
+      seg.to = day;
+      const b = v.seg[day]; if(b){ seg.fare += b.fare; seg.fee += b.fee; seg.tax += b.tax; seg.ref += b.ref; seg.drv += b.drv; seg.exp += b.exp; }
+      const t = tm || {}; seg.mgmtFix += num(t.mgmtFixed) / dim(day); seg.invFix += num(t.invFixed) / dim(day);
+    }
+    for(const g of v.segments){
+      const t = g.tm || {};
+      const fareRev = fareStd ? g.fare/1.05 : g.fare;
+      g.op = fareRev - g.fee - (feeVatRec ? 0 : g.tax) + g.ref - g.drv - g.exp;
+      g.mgmt = g.mgmtFix + fareRev * num(t.mgmtPct)/100;
+      const model = t.investorId ? (t.invModel || "profit_share") : "none";
+      g.inv = model === "profit_share" ? (g.op - g.mgmt) * num(t.invPct)/100 : model === "fixed" ? g.invFix : 0;
+      v.fareRev += fareRev; v.op += g.op; v.mgmt += g.mgmt; v.invShare += g.inv; v.drvCost += g.drv; v.exp += g.exp;
+      if(t.investorId) v.byInv[t.investorId] = (v.byInv[t.investorId] || 0) + g.inv;
+    }
+    v.after = v.op - v.mgmt; v.company = v.op - v.invShare;
+    const cur = termAt(list, to) || {}; v.investorId = cur.investorId || ""; v.invModel = v.investorId ? (cur.invModel || "profit_share") : "none";
+    v.termsText = termsInPeriod(list, from, to, vehTermText);
   }
-  // investors
+  // investors: their share from every car they held during the period
   const I = {};
   for(const inv of Object.values(S.investors)){
-    const vs = Object.values(V).filter(v => v.investorId === inv.id);
+    const vs = Object.values(V).filter(v => v.investorId === inv.id || inv.id in v.byInv);
+    const share = sum(vs, v => v.byInv[inv.id] || 0);
     const payouts = sum(S.entries.filter(e => e.type === "investor_payout" && e.investorId === inv.id), e => num(e.amount));
-    I[inv.id] = {id:inv.id, vs, share: sum(vs, v=>v.invShare), payouts, balance: sum(vs, v=>v.invShare) - payouts};
+    I[inv.id] = {id:inv.id, vs, share, payouts, balance: share - payouts};
   }
   return {D, V, I, calDays};
 }
-
 function journal(C){
   const L = []; const add = (acct, dr, cr, memo) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo}); };
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
@@ -593,11 +648,12 @@ function vDrivers(){
   return `${e ? driverForm(e.id, d) : ""}
   <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th></th></tr></thead><tbody>
-  ${list.map(x=>{ const c = C.D[x.id] || {}; const terms = !x.payModel ? `<span class="pill warn">Terms needed</span>` : x.payModel==="commission" ? `${num(x.commissionPct)}% commission` : x.payModel==="rent" ? `Rent ${fmt(num(x.rentPerDay))}/day` : x.payModel==="salary" ? `Salary ${fmt(num(x.salary))}/mo` : `Salary ${fmt(num(x.salary))} + ${num(x.commissionPct)}%`;
+  ${list.map(x=>{ const c = C.D[x.id] || {}; const tl = termList(x, DRV_TERMS), cur = termAt(tl, iso(new Date())); const terms = !(cur && cur.payModel) ? `<span class="pill warn">Terms needed</span>` : esc(drvTermText(cur)) + (tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : "");
     return `<tr><td>${esc(x.name)} ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${x.vehicleId?esc(vName(x.vehicleId)):'<span class="muted">—</span>'}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No drivers yet</b>Add a driver, or import an Uber report and drivers are created from it.</div>`}</div>`;
 }
-function driverForm(id, d){
+function driverForm(id, d0){
+  const d = {...d0, ...latestTerms(d0, DRV_TERMS)};   // the form shows the latest dated terms
   return `<div class="section"><h2>${id ? "Edit driver" : "New driver"}</h2><p class="sub">Commission and salary+commission pay a % of net earnings (fare minus Uber fee and VAT). Rent means the driver keeps net earnings minus a daily rent.</p>
   <form class="form" id="fDriver" data-id="${esc(id)}">
     <div class="f"><label for="dn">Full name</label><input id="dn" name="name" required value="${esc(d.name)}"></div>
@@ -605,14 +661,27 @@ function driverForm(id, d){
     <div class="f"><label for="du">Uber driver UUID</label><input id="du" name="uberUuid" value="${esc(d.uberUuid)}"></div>
     <div class="f"><label for="dp">Phone</label><input id="dp" name="phone" value="${esc(d.phone)}"></div>
     <div class="f"><label for="dv">Assigned car</label><select id="dv" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), d.vehicleId, "None")}</select></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
     <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
     <div class="f"><label for="drent">Rent per day (AED)</label><input id="drent" name="rentPerDay" type="number" step="0.01" value="${esc(d.rentPerDay ?? "")}"></div>
     <div class="f"><label for="drb">Rent charged for</label><select id="drb" name="rentBasis">${opts({worked:"Days with trips", calendar:"Every calendar day"}, d.rentBasis||"worked")}</select></div>
     <div class="f"><label for="dsal">Monthly salary (AED)</label><input id="dsal" name="salary" type="number" step="0.01" value="${esc(d.salary ?? "")}"></div>
+    <div class="f"><label for="dtf">Terms effective from</label><input id="dtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
+    <div class="f"><label for="dtn">Reason for change (optional)</label><input id="dtn" name="termNote" placeholder="e.g. new agreement, promotion"></div>
     <div class="f"><label for="dact">Status</label><select id="dact" name="active">${opts({true:"Active", false:"Inactive"}, String(d.active !== false))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save driver</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="drivers" data-id="${esc(id)}">Delete</button>`:""}</div>
-  </form></div>`;
+  </form>${termHistory("drivers", id, d0, DRV_TERMS, drvTermText)}</div>`;
+}
+function latestTerms(rec, keys){ const l = termList(rec, keys); return pick(l[l.length-1], keys); }
+function termHistory(col, id, rec, keys, text){
+  if(!id) return "";
+  const l = termList(rec, keys), today = iso(new Date()), cur = termAt(l, today);
+  return `<h2 style="margin-top:16px">Terms history</h2><div class="tbl"><table><thead><tr><th>Effective from</th><th>Terms</th><th>Reason</th><th>Changed by</th><th></th></tr></thead><tbody>
+  ${l.map((t,i) => [t,i]).reverse().map(([t,i]) => `<tr><td>${t.from === BEGIN ? "Start" : esc(dmyS(t.from))}${t === cur ? ' <span class="pill good">Current</span>' : t.from > today ? ' <span class="pill brass">Upcoming</span>' : ""}</td>
+    <td style="white-space:normal">${esc(text(t))}</td><td class="small" style="white-space:normal">${esc(t.note||"")}</td><td class="small muted">${esc(t.by||"")}${t.at ? " · " + esc(new Date(t.at).toLocaleDateString("en-GB")) : ""}</td>
+    <td>${Array.isArray(rec.terms) && rec.terms.length > 1 ? `<button class="btn sm danger" data-termdel="${i}" data-col="${col}" data-id="${esc(id)}">Remove</button>` : ""}</td></tr>`).join("")}
+  </tbody></table></div><p class="small muted" style="margin-top:6px">To change terms, save new terms with their effective date – the history keeps every version. “Remove” is only for correcting a mistaken entry.</p>`;
 }
 function vVehicles(){
   const C = compute(); const list = Object.values(S.vehicles).sort((a,b)=>(a.fleetId||a.plate||"").localeCompare(b.fleetId||b.plate||"", undefined, {numeric:true}));
@@ -620,25 +689,29 @@ function vVehicles(){
   return `${e ? vehicleForm(e.id, S.vehicles[e.id] || {}) : ""}
   <div class="section"><div class="head"><div><h2>Vehicles</h2><p class="sub">Link each car to its investor and terms. Trips are matched to cars by plate; if the Uber file has no plate, the driver's assigned car is used.</p></div><button class="btn primary" data-edit="vehicle" data-id="">Add vehicle</button></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Fleet ID</th><th>Plate</th><th>Model</th><th>Investor</th><th>Terms</th><th class="num">Trips</th><th class="num">Operating profit</th><th></th></tr></thead><tbody>
-  ${list.map(v=>{ const c = C.V[v.id] || {}; const t = !v.investorId ? (v.invModel==="none" ? '<span class="pill">Company-owned</span>' : '<span class="pill warn">Set investor</span>') : `${v.invModel==="fixed" ? `Fixed ${fmt(num(v.invFixed))}/mo` : `${num(v.invPct)}% profit`}${num(v.mgmtFixed)?` · fee ${fmt(num(v.mgmtFixed))}/mo`:""}${num(v.mgmtPct)?` · ${num(v.mgmtPct)}% rev`:""}`;
-    return `<tr><td>${esc(v.fleetId)}</td><td class="mono">${esc(v.plate)}</td><td>${esc(v.model)}</td><td>${esc(v.investorId ? iName(v.investorId) : "—")}</td><td>${t}</td><td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
+  ${list.map(v=>{ const c = C.V[v.id] || {}; const vl = termList(v, VEH_TERMS), vc = termAt(vl, iso(new Date())) || {}; const t = !vc.investorId ? (vc.invModel==="none" ? '<span class="pill">Company-owned</span>' : '<span class="pill warn">Set investor</span>') : esc(vehTermText(vc).replace(/^[^:]*: /,"")) + (vl.length > 1 ? ` <span class="pill">${vl.length} versions</span>` : "");
+    return `<tr><td>${esc(v.fleetId)}</td><td class="mono">${esc(v.plate)}</td><td>${esc(v.model)}</td><td>${esc(vc.investorId ? iName(vc.investorId) : "—")}</td><td>${t}</td><td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No vehicles yet</b>Add your cars with their plate numbers, or import an Uber report with plates.</div>`}</div>`;
 }
-function vehicleForm(id, v){
+function vehicleForm(id, v0){
+  const v = {...v0, ...latestTerms(v0, VEH_TERMS)};
   return `<div class="section"><h2>${id ? "Edit vehicle" : "New vehicle"}</h2><p class="sub">Management charges come off first (fixed per month and/or % of fare revenue). The investor then gets either a % of what is left or a fixed monthly payment. The company keeps the rest.</p>
   <form class="form" id="fVehicle" data-id="${esc(id)}">
     <div class="f"><label for="vf">Fleet ID (e.g. RR12)</label><input id="vf" name="fleetId" value="${esc(v.fleetId)}"></div>
     <div class="f"><label for="vp">Plate</label><input id="vp" name="plate" required value="${esc(v.plate)}"></div>
     <div class="f"><label for="vm">Model</label><input id="vm" name="model" value="${esc(v.model)}"></div>
     <div class="f"><label for="vvin">VIN</label><input id="vvin" name="vin" value="${esc(v.vin)}"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Investor and fee terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="vi">Investor</label><select id="vi" name="investorId">${listOpts(S.investors, i=>i.name||i.id, v.investorId, "None (company-owned)")}</select></div>
     <div class="f"><label for="vim">Investor terms</label><select id="vim" name="invModel">${opts(INV_MODELS, v.invModel || (v.investorId ? "profit_share" : "none"))}</select></div>
     <div class="f"><label for="vpct">Investor profit share %</label><input id="vpct" name="invPct" type="number" step="0.01" value="${esc(v.invPct ?? "")}"></div>
     <div class="f"><label for="vfix">Fixed payment to investor / month</label><input id="vfix" name="invFixed" type="number" step="0.01" value="${esc(v.invFixed ?? "")}"></div>
     <div class="f"><label for="vmf">Management fee fixed / month</label><input id="vmf" name="mgmtFixed" type="number" step="0.01" value="${esc(v.mgmtFixed ?? "")}"></div>
     <div class="f"><label for="vmp">Management fee % of fare revenue</label><input id="vmp" name="mgmtPct" type="number" step="0.01" value="${esc(v.mgmtPct ?? "")}"></div>
+    <div class="f"><label for="vtf">Terms effective from</label><input id="vtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
+    <div class="f"><label for="vtn">Reason for change (optional)</label><input id="vtn" name="termNote" placeholder="e.g. car sold to a new investor"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save vehicle</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="vehicles" data-id="${esc(id)}">Delete</button>`:""}</div>
-  </form></div>`;
+  </form>${termHistory("vehicles", id, v0, VEH_TERMS, vehTermText)}</div>`;
 }
 function vInvestors(){
   const list = Object.values(S.investors).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
@@ -684,25 +757,25 @@ function vSettlement(){
   if(!ds.length) return `<div class="empty"><b>Nothing to settle for this period</b>Import Uber trips for these dates first.</div>`;
   return `<div class="section"><div class="head"><div><h2>Driver settlement · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Positive balance = pay the driver. Negative = the driver holds more cash than they earned and owes the company.</p></div><button class="btn" id="expSettle">Export CSV</button></div>
   <div class="tbl"><table><thead><tr><th>Driver</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare</th><th class="num">Uber fee+VAT</th><th class="num">Net</th><th class="num">Driver share</th><th class="num">Tips</th><th class="num">Cash held</th><th class="num">Deductions</th><th class="num">Advances</th><th class="num">Paid</th><th class="num">Received</th><th class="num">Balance</th><th class="num">Company contribution</th></tr></thead><tbody>
-  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small">${S.drivers[d.id] && S.drivers[d.id].payModel ? esc(PAY_MODELS[d.model].split(" (")[0]) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
+  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small" style="white-space:normal;min-width:160px">${d.termsText && d.termsText !== "No terms" ? esc(d.termsText) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
   </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(ds,d=>d.n)}</td><td class="num">${fmt(sum(ds,d=>d.fare))}</td><td class="num">${fmt(sum(ds,d=>d.fee+d.tax))}</td><td class="num">${fmt(sum(ds,d=>d.net))}</td><td class="num">${fmt(sum(ds,d=>d.ent))}</td><td class="num">${fmt(sum(ds,d=>d.tipsDue))}</td><td class="num">${fmt(sum(ds,d=>d.cash))}</td><td class="num">${fmt(sum(ds,d=>d.deduct))}</td><td class="num">${fmt(sum(ds,d=>d.adv))}</td><td class="num">${fmt(sum(ds,d=>d.paid))}</td><td class="num">${fmt(sum(ds,d=>d.recv))}</td><td class="num">${fmt(sum(ds,d=>d.balance))}</td><td class="num">${fmt(sum(ds,d=>d.contrib))}</td></tr></tfoot></table></div>
   <p class="small muted" style="margin-top:8px">Balance = driver share + tips − cash held − deductions − advances − payments + amounts received from the driver. Company contribution = net + refunds − driver share.</p></div>
   <div class="grid2">${ds.filter(d=>d.n).map(d=>`<div class="statement"><h3>${esc(dName(d.id))}</h3><div class="small muted">${esc(S.from)} to ${esc(S.to)} · ${d.n} trips · ${d.daysWorked} days</div>
     <div class="ln"><span>Fares</span><span>${fmt(d.fare)}</span></div><div class="ln"><span>Uber service fee</span><span>-${fmt(d.fee)}</span></div><div class="ln"><span>VAT on fee</span><span>-${fmt(d.tax)}</span></div>
     <div class="ln"><span>Net earnings</span><span>${fmt(d.net)}</span></div>
-    <div class="ln"><span>Your share (${esc(d.model==="rent" ? `net − rent ${fmt(num((S.drivers[d.id]||{}).rentPerDay))} × ${d.rentDays} days` : d.model==="commission" ? num((S.drivers[d.id]||{}).commissionPct)+"%" : d.model==="salary" ? "salary" : "salary + "+num((S.drivers[d.id]||{}).commissionPct)+"%")})</span><span>${fmt(d.ent)}</span></div>
+    <div class="ln"><span>Your share (${esc(d.termsText)}${d.rentDays ? `, rent for ${d.rentDays} days` : ""})</span><span>${fmt(d.ent)}</span></div>
     <div class="ln"><span>Tips</span><span>${fmt(d.tipsDue)}</span></div><div class="ln"><span>Cash you collected</span><span>-${fmt(d.cash)}</span></div>
     ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
     <div class="ln tot"><span>${d.balance >= 0 ? "Payable to you" : "You owe the company"}</span><span>AED ${fmt(Math.abs(d.balance))}</span></div></div>`).join("")}</div>`;
 }
 function vInvestorPL(){
   const C = compute(); const invs = Object.values(C.I);
-  const company = Object.values(C.V).filter(v => !v.investorId && (v.n || v.exp));
+  const company = Object.values(C.V).filter(v => !Object.keys(v.byInv).length && !v.investorId && (v.n || v.exp));
   const card = (title, vs, I) => `<div class="section"><div class="head"><div><h2>${esc(title)}</h2><p class="sub">${esc(S.from)} to ${esc(S.to)}${I && S.investors[I.id] && S.investors[I.id].phone ? " · " + esc(S.investors[I.id].phone) : ""}</p></div></div>
     <div class="tbl"><table><thead><tr><th>Car</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare revenue</th><th class="num">Uber fee+VAT</th><th class="num">Refunds</th><th class="num">Driver cost</th><th class="num">Car expenses</th><th class="num">Operating profit</th><th class="num">Mgmt fee</th><th class="num">Investor share</th><th class="num">Company</th></tr></thead><tbody>
-    ${vs.map(v=>{ const m = S.vehicles[v.id]||{}; const terms = v.invModel==="fixed" ? `Fixed ${fmt(num(m.invFixed))}/mo` : v.invModel==="profit_share" ? `${num(m.invPct)}% of profit` : "Company"; const fees = setting("feeVatRecoverable",false) ? v.fee : v.fee+v.tax;
-      return `<tr><td>${esc(vName(v.id))}</td><td class="small">${terms}${num(m.mgmtFixed)?` · fee ${fmt(num(m.mgmtFixed))}/mo`:""}${num(m.mgmtPct)?` · ${num(m.mgmtPct)}%`:""}</td><td class="num">${v.n}</td><td class="num">${fmt(v.fareRev)}</td><td class="num">-${fmt(fees)}</td><td class="num">${fmt(v.ref)}</td><td class="num">${aed(-v.drvCost)}</td><td class="num">-${fmt(v.exp)}</td><td class="num">${aed(v.op)}</td><td class="num">${fmt(v.mgmt)}</td><td class="num"><b>${aed(v.invShare)}</b></td><td class="num">${aed(v.company)}</td></tr>`;}).join("")}
-    </tbody>${vs.length>1?`<tfoot><tr><td colspan="3">Total</td><td class="num">${fmt(sum(vs,v=>v.fareRev))}</td><td></td><td class="num">${fmt(sum(vs,v=>v.ref))}</td><td class="num">${fmt(-sum(vs,v=>v.drvCost))}</td><td class="num">-${fmt(sum(vs,v=>v.exp))}</td><td class="num">${fmt(sum(vs,v=>v.op))}</td><td class="num">${fmt(sum(vs,v=>v.mgmt))}</td><td class="num">${fmt(sum(vs,v=>v.invShare))}</td><td class="num">${fmt(sum(vs,v=>v.company))}</td></tr></tfoot>`:""}</table></div>
+    ${vs.map(v=>{ const terms = esc(v.termsText || ""); const fees = setting("feeVatRecoverable",false) ? v.fee : v.fee+v.tax; const own = I ? (v.byInv[I.id] || 0) : v.invShare;
+      return `<tr><td>${esc(vName(v.id))}</td><td class="small" style="white-space:normal;min-width:220px">${terms}</td><td class="num">${v.n}</td><td class="num">${fmt(v.fareRev)}</td><td class="num">-${fmt(fees)}</td><td class="num">${fmt(v.ref)}</td><td class="num">${aed(-v.drvCost)}</td><td class="num">-${fmt(v.exp)}</td><td class="num">${aed(v.op)}</td><td class="num">${fmt(v.mgmt)}</td><td class="num"><b>${aed(own)}</b></td><td class="num">${aed(v.company)}</td></tr>`;}).join("")}
+    </tbody>${vs.length>1?`<tfoot><tr><td colspan="3">Total</td><td class="num">${fmt(sum(vs,v=>v.fareRev))}</td><td></td><td class="num">${fmt(sum(vs,v=>v.ref))}</td><td class="num">${fmt(-sum(vs,v=>v.drvCost))}</td><td class="num">-${fmt(sum(vs,v=>v.exp))}</td><td class="num">${fmt(sum(vs,v=>v.op))}</td><td class="num">${fmt(sum(vs,v=>v.mgmt))}</td><td class="num">${fmt(sum(vs,v=>I ? (v.byInv[I.id]||0) : v.invShare))}</td><td class="num">${fmt(sum(vs,v=>v.company))}</td></tr></tfoot>`:""}</table></div>
     ${I ? `<div class="row" style="margin-top:10px;gap:18px"><span>Investor share <b class="mono">${fmt(I.share)}</b></span><span>Paid this period <b class="mono">${fmt(I.payouts)}</b></span><span>Balance due <b class="mono ${I.balance<0?"neg":""}">${fmt(I.balance)}</b></span></div>` : ""}</div>`;
   if(!invs.length && !company.length) return `<div class="empty"><b>No investor results yet</b>Add investors, link their cars on the Vehicles page, and import trips for the period.</div>`;
   return invs.map(I => card(iName(I.id), I.vs, I)).join("") + (company.length ? card("Company-owned cars", company, null) : "")
@@ -769,6 +842,15 @@ document.addEventListener("click", async ev => {
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
     if(await writeOk(S.db.doc(t.dataset.del + "/" + t.dataset.id).delete())){ S.edit = null; toast("Deleted."); render(); } return;
   }
+  if(t.dataset.termdel != null && t.dataset.col){
+    if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
+    const col = t.dataset.col, rec = S[col][t.dataset.id]; if(!rec) return;
+    const keys = col === "drivers" ? DRV_TERMS : VEH_TERMS;
+    const hist = termList(rec, keys).filter((_, i) => i !== +t.dataset.termdel);
+    const now = termAt(hist, iso(new Date())) || hist[0] || {}; const {id:_, ...body} = rec;
+    if(await writeOk(S.db.doc(col + "/" + t.dataset.id).set({...body, ...pick(now, keys), terms: hist}))){ toast("Entry removed."); render(); }
+    return;
+  }
   if(t.dataset.editentry){ const r = S.entries.find(x => x.id === t.dataset.editentry); if(r){ S.edit = {kind:"entry", id:r.id, data:{...r}}; render(); window.scrollTo(0,0); } return; }
   if(t.dataset.delentry){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
@@ -797,6 +879,24 @@ document.addEventListener("submit", async ev => {
     const id = f.dataset.id || (col[0] + "-" + uid());
     const prev = (S[col] && S[col][id]) || {}; const {id:_, ...prevBody} = prev;
     if(f.id === "fVehicle" && !fd.investorId && fd.invModel !== "none") fd.invModel = "none";
+    const keys = f.id === "fDriver" ? DRV_TERMS : f.id === "fVehicle" ? VEH_TERMS : null;
+    if(keys){
+      const eff = fd.termFrom || iso(new Date()), note = (fd.termNote || "").trim(); delete fd.termFrom; delete fd.termNote;
+      // history so far (older records: their terms count as the opening terms)
+      let hist = Array.isArray(prev.terms) && prev.terms.length ? prev.terms.map(x => ({...x})) : (keys.some(k => prev[k]) ? [{from: BEGIN, ...pick(prev, keys), note:"Terms before history was kept"}] : []);
+      hist.sort((a,b) => a.from.localeCompare(b.from));
+      const next = pick(fd, keys), was = termAt(hist, eff);
+      if(!was || keys.some(k => String(was[k] ?? "") !== String(next[k] ?? ""))){
+        // a new record's first terms apply from the start
+        const from = !hist.length ? BEGIN : eff;
+        hist = hist.filter(h => h.from !== from);
+        hist.push({from, ...next, note, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()});
+        hist.sort((a,b) => a.from.localeCompare(b.from));
+      }
+      // top-level fields hold today's terms (used by the lists and the letters)
+      const now = termAt(hist, iso(new Date())) || hist[0] || next; keys.forEach(k => fd[k] = now[k]);
+      fd.terms = hist;
+    }
     if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
   }
   if(f.id === "fEntry"){
