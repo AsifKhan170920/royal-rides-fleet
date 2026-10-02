@@ -161,6 +161,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:""}, edit:null
@@ -168,7 +169,7 @@ const S = {
 const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["usage","Driver & car usage"],["import","Import trip data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
-  ["Money",null],["entries","Expenses & payments"],["settlement","Driver settlement"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
+  ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["settlement","Driver settlement"],["driverledger","Driver ledger & loans"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
 ];
@@ -178,16 +179,16 @@ const EXP_CATS = {
   "5280":"Driver salaries & visas","5290":"Office & admin","5300":"Bank charges","5310":"Other expenses"
 };
 const ACCT = {
-  "1100":"Bank","1110":"Cash in hand","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1300":"Input VAT",
-  "2100":"Driver payables","2200":"Investor payables","2300":"Output VAT",
+  "1100":"Bank","1110":"Cash in hand","1120":"Card machine receipts (not yet in bank)","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1170":"Driver loans & recoverables","1300":"Input VAT",
+  "2100":"Driver accounts (payable / receivable)","2200":"Investor payables","2300":"Output VAT",
   "4000":"Ride fare revenue (platforms)","4010":"Toll & fee recoveries","4020":"Platform other earnings / incentives","4100":"Direct booking revenue",
   "5000":"Platform service fee / commission","5010":"Non-recoverable VAT","5100":"Driver earnings share","5900":"Investor profit share",
   ...EXP_CATS
 };
 const ENTRY_TYPES = {
   expense:"Expense", income:"Direct booking income", uber_payout:"Platform payout received",
-  driver_advance:"Advance to driver", driver_payment:"Payment to driver", driver_receipt:"Received from driver",
-  investor_payout:"Payout to investor"
+  driver_advance:"Advance to driver (deducted in full)", driver_payment:"Payment to driver", driver_receipt:"Received from driver (cash handover)",
+  investor_payout:"Payout to investor", card_settlement:"Card machine settlement to bank"
 };
 const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
 const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
@@ -197,6 +198,30 @@ const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payme
 const PLT_TYPES = {ride:"Ride-hailing platform", booking:"Booking / transfer platform", corporate:"Corporate client", supplier:"Supplier / partner"};
 const PAY_CYCLES = {weekly:"Weekly", biweekly:"Every 2 weeks", monthly:"Monthly", per_trip:"Per trip / on invoice"};
 const PLT_TERMS = ["commissionPct","feeVat","payCycle","creditDays"];
+/* Driver accounts. Loans, salary advances and the driver's part of shared costs (visa, medical,
+   licence…) are kept as items in driverItems and recovered in monthly instalments – on the last
+   day of each month from the start month – until paid. A cash repayment shortens the plan.
+   "Driver's cash" as paid-from means the driver paid a company cost, or collected company money,
+   out of the cash he holds; it goes to his account instead of the bank. */
+const ITEM_KINDS = {loan:"Loan", advance:"Salary advance", shared:"Shared expense (visa, medical, licence…)", other:"Other amount to recover"};
+const PAID_FROM = {"1100":"Bank","1110":"Cash in hand","1120":"Card machine (settles to bank later)","driver":"Driver's cash (driver paid / collected it)"};
+const srcAcct = p => p === "driver" ? "2100" : (p || "1100");
+const monthEnd = m => { const [y,mo] = m.split("-").map(Number); return iso(new Date(y, mo, 0)); };
+const nextMonth = m => { const [y,mo] = m.split("-").map(Number); return iso(new Date(y, mo, 1)).slice(0,7); };
+const weekEnd = s => { const d = parseD(s); d.setDate(d.getDate() + 6 - ((d.getDay()+6)%7)); return iso(d); };
+function itemPlan(it){
+  const total = r2(num(it.driverAmount)), reps = (it.repayments||[]).map(r => ({...r})).sort((a,b)=>a.date.localeCompare(b.date));
+  const inst = num(it.installment) > 0 ? num(it.installment) : total, out = [];
+  let left = total, m = it.startMonth || String(it.date||"").slice(0,7), ri = 0, g = 0;
+  while(m && left > 0.004 && g++ < 360){
+    const end = monthEnd(m);
+    while(ri < reps.length && reps[ri].date <= end){ left = r2(left - num(reps[ri].amount)); ri++; }
+    if(left <= 0.004) break;
+    const a = r2(Math.min(inst, left)); out.push({date:end, amt:a}); left = r2(left - a); m = nextMonth(m);
+  }
+  return {inst:out, reps};
+}
+function itemOutstanding(it, day){ const p = itemPlan(it); return r2(num(it.driverAmount) - sum(p.inst.filter(x=>x.date<=day), x=>x.amt) - sum(p.reps.filter(x=>x.date<=day), x=>num(x.amount))); }
 const STD_PLATFORMS = [["uber","Uber","ride","1150"],["bolt","Bolt","ride","1151"],["yango","Yango","ride","1152"],["yay","YAY","ride","1153"],["welcome","Welcome Pickups","booking","1154"]];
 
 /* ============ utils ============ */
@@ -260,7 +285,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -271,6 +296,7 @@ function applyBrand(){ const n = S.settings.company || "Royal Rides"; $("#brandN
 const months = (a,b) => { const out = []; let d = parseD(a); d.setDate(1); const end = parseD(b); while(d <= end){ out.push(iso(d).slice(0,7)); d.setMonth(d.getMonth()+1); } return out; };
 async function loadPeriod(){
   if(!S.db) return;
+  S.ledger = null;   // the driver ledger reloads its history on the next visit
   try{
     const ts = await S.db.collection("trips").where("date",">=",S.from).where("date","<=",S.to).get();
     const trips = []; ts.docs.forEach(d => { const rows = (d.data()||{}).rows || {}; Object.entries(rows).forEach(([id,r]) => trips.push({id, ...r})); });
@@ -336,7 +362,7 @@ function compute(){
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
   const tips2drv = setting("tipsToDriver", true);
   const D = {}, V = {}, DT = {};
-  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0};
+  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0, byDay:{}};
   const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set(), seg:{}};
   const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0};
   const dTerms = id => DT[id] ||= termList(S.drivers[id] || {}, DRV_TERMS);
@@ -351,6 +377,7 @@ function compute(){
     const tm = termAt(dTerms(t.dr||"unknown"), t.d) || {}; const model = tm.payModel || "commission";
     const share = (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct)/100 : model === "rent" ? net : 0;
     d.entTrip += share;
+    const bd = d.byDay[t.d] ||= {share:0, tip:0, cash:0, n:0}; bd.share += share; bd.tip += t.tp||0; bd.cash += t.c||0; if(firstRow) bd.n++;
     if(net){ const u = d.dayNet[t.d] ||= {}; u[vid] = (u[vid]||0) + net; }
     const b = vday(vid, t.d); b.fare += t.f||0; b.fee += t.sf||0; b.tax += t.tx||0; b.ref += t.rf||0; b.drv += share;
   }
@@ -363,7 +390,7 @@ function compute(){
       if(model === "rent"){ if(d.days.has(day) || tm.rentBasis === "calendar"){ x = -num(tm.rentPerDay); d.rentDays++; } }
       else if(model === "salary" || model === "salary_comm") x = num(tm.salary) / dim(day);
       if(!x) continue;
-      dayPart += x;
+      dayPart += x; (d.byDay[day] ||= {share:0, tip:0, cash:0, n:0}).share += x;
       const use = d.dayNet[day], tot = use ? Object.values(use).reduce((a,b)=>a+b,0) : 0;
       if(use && tot) Object.entries(use).forEach(([vid,n]) => { vday(vid, day).drv += x * n / tot; });
       else vday(m.vehicleId || "unassigned", day).drv += x;
@@ -378,7 +405,12 @@ function compute(){
     d.paid = sum(mine.filter(e => e.type === "driver_payment"), e => num(e.amount));
     d.recv = sum(mine.filter(e => e.type === "driver_receipt"), e => num(e.amount));
     d.tipsDue = tips2drv ? d.tip : 0;
-    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv;
+    const items = Object.values(S.ditems||{}).filter(it => it.driverId === d.id);
+    d.inst = sum(items, it => sum(itemPlan(it).inst.filter(x => x.date >= from && x.date <= to), x => x.amt));
+    d.loanOut = sum(items, it => itemOutstanding(it, to));
+    // company costs the driver paid from his cash (+), company money he collected (−)
+    d.viaDriver = sum(mine.filter(e => e.paidFrom === "driver" && e.type === "expense"), e => num(e.amount) + num(e.vat)) - sum(mine.filter(e => e.paidFrom === "driver" && e.type === "income"), e => num(e.amount) + num(e.vat));
+    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver;
     d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) - d.ent;
   }
   // car expenses, by date
@@ -448,7 +480,7 @@ function journal(C){
   const inv = sum(Object.values(C.V), v => v.invShare);
   if(inv >= 0){ add("5900", inv, 0, "Investor share"); add("2200", 0, inv, "Investor share"); } else { add("2200", -inv, 0, "Investor share (loss)"); add("5900", 0, -inv, "Investor share (loss)"); }
   for(const e of S.entries){
-    const a = num(e.amount), vat = num(e.vat), src = e.paidFrom || "1100", memo = `${ENTRY_TYPES[e.type]||e.type}${e.note ? " – " + e.note : ""}`;
+    const a = num(e.amount), vat = num(e.vat), src = srcAcct(e.paidFrom), memo = `${ENTRY_TYPES[e.type]||e.type}${e.note ? " – " + e.note : ""}`;
     if(e.type === "expense"){
       add(e.category || "5310", a + (inVatRec ? 0 : vat), 0, memo); if(inVatRec) add("1300", vat, 0, memo); add(src, 0, a + vat, memo);
       if(e.recover){ add("2100", a + vat, 0, "Recovered from driver"); add(e.category || "5310", 0, a + vat, "Recovered from driver"); }
@@ -458,6 +490,18 @@ function journal(C){
     else if(e.type === "driver_advance" || e.type === "driver_payment"){ add("2100", a, 0, memo); add(src, 0, a, memo); }
     else if(e.type === "driver_receipt"){ add(src, a, 0, memo); add("2100", 0, a, memo); }
     else if(e.type === "investor_payout"){ add("2200", a, 0, memo); add(src, 0, a, memo); }
+    else if(e.type === "card_settlement"){ add("1100", a, 0, memo); add("1120", 0, a, memo); }
+  }
+  // loans, advances and shared costs: given → 1170; instalments move them to the driver's account
+  for(const it of Object.values(S.ditems||{})){
+    const memo = `${ITEM_KINDS[it.kind] || "Loan"} – ${dName(it.driverId)}${it.desc ? " – " + it.desc : ""}`, da = num(it.driverAmount);
+    if(it.date >= S.from && it.date <= S.to){
+      if(it.kind === "shared"){ const amt = num(it.amount), vat = num(it.vat); add(it.category || "5280", (inVatRec ? amt : amt + vat) - da, 0, memo); if(inVatRec) add("1300", vat, 0, memo); add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, amt + vat, memo); }
+      else { add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, da, memo); }
+    }
+    const p = itemPlan(it);
+    p.inst.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add("2100", x.amt, 0, "Instalment – " + memo); add("1170", 0, x.amt, "Instalment – " + memo); });
+    p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo); add("1170", 0, num(x.amount), "Repayment – " + memo); });
   }
   return L;
 }
@@ -471,7 +515,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
+  const fns = {collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -702,6 +746,7 @@ function driverForm(id, d0){
     <div class="f"><label for="dc">Fleet code (e.g. RR-002)</label><input id="dc" name="code" value="${esc(d.code)}"></div>
     <div class="f"><label for="du">Uber driver UUID</label><input id="du" name="uberUuid" value="${esc(d.uberUuid)}"></div>
     <div class="f"><label for="dp">Phone</label><input id="dp" name="phone" value="${esc(d.phone)}"></div>
+    <div class="f"><label for="dob">Opening balance (+ we owe driver, − driver owes)</label><input id="dob" name="openingBalance" type="number" step="0.01" value="${esc(d.openingBalance ?? "")}"></div>
     <div class="f"><label for="dv">Assigned car</label><select id="dv" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), d.vehicleId, "None")}</select></div>
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
@@ -863,6 +908,149 @@ function platformForm(id, p0){
   </form>${termHistory("platforms", id, p0, PLT_TERMS, pltTermText)}</div>`;
 }
 
+/* ---------- driver ledger & loans ---------- */
+/* A running account per driver from the ledger start date: earnings share, tips and cash collected
+   from trips, plus advances, payments, charges and loan instalments. Positive balance = the company
+   owes the driver. Loans are shown separately: they move into the account as instalments fall due. */
+async function loadLedger(){
+  const start = setting("ledgerStart", "2026-09-01"), to = S.to, key = start + "|" + to;
+  S.ledger = {key, loading:true};
+  try{
+    const trips = [], ents = [];
+    if(start <= to){
+      const ts = await S.db.collection("trips").where("date",">=",start).where("date","<=",to).get();
+      ts.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([id,r]) => trips.push({id, ...r})));
+      for(const m of months(start, to)){ const d = await S.db.doc("entries/"+m).get(); (d.exists ? (d.data().rows || []) : []).forEach(r => { if(r.date >= start && r.date <= to) ents.push(r); }); }
+    }
+    if(S.ledger && S.ledger.key === key) S.ledger = {key, trips, entries: ents};
+  }catch(e){ console.warn(e); S.ledger = {key, error:true}; }
+  render();
+}
+function ledgerLines(drId){
+  const L = S.ledger, start = setting("ledgerStart", "2026-09-01"), tips2drv = setting("tipsToDriver", true);
+  const keep = {trips:S.trips, entries:S.entries, from:S.from};
+  S.trips = L.trips; S.entries = L.entries; S.from = start;
+  let C; try{ C = compute(); } finally { S.trips = keep.trips; S.entries = keep.entries; S.from = keep.from; }
+  const d = C.D[drId] || {byDay:{}}, lines = [], G = {};
+  const gk = day => { let k = S.ledgerGroup === "day" ? day : S.ledgerGroup === "month" ? monthEnd(day.slice(0,7)) : weekEnd(day);
+    if(day < S.from && k >= S.from) k = addDays(S.from, -1); if(k > S.to) k = S.to; return k; };
+  Object.entries(d.byDay).forEach(([day, b]) => { const g = G[gk(day)] ||= {share:0, tip:0, cash:0, n:0, a:day, z:day}; g.share += b.share; g.tip += b.tip; g.cash += b.cash; g.n += b.n; if(day < g.a) g.a = day; if(day > g.z) g.z = day; });
+  Object.entries(G).forEach(([k, g]) => { const per = g.a === g.z ? dmyS(g.a) : dmyS(g.a) + " – " + dmyS(g.z);
+    if(r2(g.share)) lines.push({date:k, desc:`${g.share >= 0 ? "Earnings share" : "Rent / charges over earnings"} · ${g.n} trips · ${per}`, ...(g.share >= 0 ? {cr:g.share} : {dr:-g.share})});
+    if(tips2drv && r2(g.tip)) lines.push({date:k, desc:`Tips · ${per}`, cr:g.tip});
+    if(r2(g.cash)) lines.push({date:k, desc:`Cash collected from riders · ${per}`, dr:g.cash}); });
+  L.entries.filter(e => e.driverId === drId).forEach(e => {
+    const a = num(e.amount) + (e.type === "expense" || e.type === "income" ? num(e.vat) : 0), n = e.note ? " – " + e.note : "", cat = EXP_CATS[e.category] || "Expense";
+    if(e.type === "driver_advance") lines.push({date:e.date, desc:"Advance" + n, dr:a});
+    else if(e.type === "driver_payment") lines.push({date:e.date, desc:"Payment to driver" + n, dr:a});
+    else if(e.type === "driver_receipt") lines.push({date:e.date, desc:"Received from driver" + n, cr:a});
+    else if(e.type === "expense"){ if(e.recover) lines.push({date:e.date, desc:cat + " charged to driver" + n, dr:a}); if(e.paidFrom === "driver") lines.push({date:e.date, desc:cat + " paid from driver's cash" + n, cr:a}); }
+    else if(e.type === "income" && e.paidFrom === "driver") lines.push({date:e.date, desc:"Direct booking – cash collected by driver" + n, dr:a});
+  });
+  Object.values(S.ditems).filter(it => it.driverId === drId).forEach(it => itemPlan(it).inst.forEach(x => { if(x.date >= start && x.date <= S.to) lines.push({date:x.date, desc:`Instalment – ${ITEM_KINDS[it.kind] || "Loan"}${it.desc ? " – " + it.desc : ""}`, dr:x.amt}); }));
+  lines.sort((a,b) => a.date.localeCompare(b.date) || (b.cr ? 1 : 0) - (a.cr ? 1 : 0));
+  const open = num((S.drivers[drId] || {}).openingBalance); let bal = open, before = open; const shown = [];
+  lines.forEach(l => { bal = r2(bal + (l.cr || 0) - (l.dr || 0)); l.bal = bal; if(l.date < S.from) before = bal; else shown.push(l); });
+  return {open, before, shown, closing: bal};
+}
+function vDriverLedger(){
+  const start = setting("ledgerStart", "2026-09-01"), key = start + "|" + S.to;
+  const drs = Object.values(S.drivers).sort((a,b) => (a.name||"").localeCompare(b.name||""));
+  if(!S.drivers[S.ledgerDriver]) S.ledgerDriver = (drs[0] || {}).id || "";
+  const id = S.ledgerDriver; if(!id) return `<div class="empty"><b>No drivers yet</b>Add drivers or import trips first.</div>`;
+  const e = S.edit && ["ditem","drep"].includes(S.edit.kind) ? S.edit : null;
+  let led;
+  if(!S.db) led = `<p class="sub">Sign in to load the ledger.</p>`;
+  else if(!S.ledger || S.ledger.key !== key){ loadLedger(); led = `<p class="sub">Loading the driver's history…</p>`; }
+  else if(S.ledger.loading) led = `<p class="sub">Loading the driver's history…</p>`;
+  else if(S.ledger.error) led = `<p class="sub">Couldn't load the history. Change the dates to retry.</p>`;
+  else { const R = ledgerLines(id);
+    led = `<div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit (driver owes)</th><th class="num">Credit (owed to driver)</th><th class="num">Balance</th></tr></thead><tbody>
+    <tr><td>${esc(dmyS(S.from < start ? start : S.from))}</td><td><b>${S.from <= start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= start ? R.open : R.before)}</b></td></tr>
+    ${R.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td colspan="2">Closing balance ${esc(dmyS(S.to))} – ${R.closing >= 0 ? "payable to driver" : "driver owes the company"}</td><td class="num">${fmt(sum(R.shown, l => l.dr))}</td><td class="num">${fmt(sum(R.shown, l => l.cr))}</td><td class="num"><b>${aed(R.closing)}</b></td></tr></tfoot></table></div>`; }
+  const items = Object.values(S.ditems).filter(it => it.driverId === id).sort((a,b) => (b.date||"").localeCompare(a.date||""));
+  const loanOut = sum(items, it => itemOutstanding(it, S.to));
+  const ilist = items.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Type</th><th>Description</th><th class="num">Total cost</th><th class="num">Company bears</th><th class="num">Driver pays</th><th>Recovery</th><th class="num">Recovered</th><th class="num">Outstanding</th><th></th></tr></thead><tbody>
+    ${items.map(it => { const p = itemPlan(it), out = itemOutstanding(it, S.to), next = p.inst.find(x => x.date > S.to), cost = num(it.amount) + num(it.vat);
+      return `<tr><td>${esc(dmyS(it.date))}</td><td>${esc(ITEM_KINDS[it.kind] || "")}</td><td style="white-space:normal">${esc(it.desc)}${(it.repayments||[]).length ? `<div class="small muted">${(it.repayments||[]).length} cash repayment(s)</div>` : ""}</td>
+      <td class="num">${fmt(it.kind === "shared" ? cost : num(it.driverAmount))}</td><td class="num">${it.kind === "shared" ? fmt(cost - num(it.driverAmount)) : "—"}</td><td class="num">${fmt(num(it.driverAmount))}</td>
+      <td class="small">${num(it.installment) > 0 && num(it.installment) < num(it.driverAmount) ? fmt(num(it.installment)) + "/month from " + esc(it.startMonth) : "In full, " + esc(it.startMonth)}${next && out > 0 ? `<div class="muted">Next ${esc(dmyS(next.date))}: ${fmt(next.amt)}</div>` : ""}</td>
+      <td class="num">${fmt(num(it.driverAmount) - out)}</td><td class="num">${out > 0.004 ? `<b>${fmt(out)}</b>` : '<span class="pill good">Cleared</span>'}</td>
+      <td class="row"><button class="btn sm" data-edit="ditem" data-id="${esc(it.id)}">Edit</button>${out > 0.004 ? `<button class="btn sm" data-edit="drep" data-id="${esc(it.id)}">Repayment</button>` : ""}</td></tr>`; }).join("")}
+    </tbody></table></div>` : `<p class="sub">No loans, advances or shared costs for this driver.</p>`;
+  return `<div class="section"><div class="head"><div><h2>Driver ledger</h2><p class="sub">Running account from ${esc(dmyS(start))} (change in Settings). Positive = the company owes the driver; negative = the driver owes the company. Use the period at the top to choose which lines to show.</p></div>
+    <div class="row"><select id="ldrv" aria-label="Driver">${listOpts(S.drivers, d => d.name || d.id, id)}</select><select id="lgrp" aria-label="Group trips">${opts({day:"Trips by day", week:"Trips by week", month:"Trips by month"}, S.ledgerGroup)}</select><button class="btn" id="expLedger" ${S.ledger && S.ledger.trips ? "" : "disabled"}>Export CSV</button></div></div>
+    ${led}</div>
+  ${e ? (e.kind === "drep" ? repForm(e.id) : itemForm(e.id, S.ditems[e.id] || {driverId:id, kind:"loan", date: iso(new Date()), paidFrom:"1100", category:"5280"})) : ""}
+  <div class="section"><div class="head"><div><h2>Loans, advances & shared costs · ${esc(dName(id))}</h2><p class="sub">Recovered from the driver's account in monthly instalments on the last day of each month. Still to recover after ${esc(dmyS(S.to))}: <b class="mono">AED ${fmt(loanOut)}</b>.</p></div>
+    <button class="btn primary" data-edit="ditem" data-id="">Add loan / advance / shared cost</button></div>${ilist}</div>`;
+}
+function itemForm(id, it){
+  const sh = (it.kind || "loan") === "shared";
+  return `<div class="section"><h2>${id ? "Edit" : "New"} loan, advance or shared cost</h2><p class="sub">Shared cost: e.g. visa AED 6,000 – the driver pays 50% (or a fixed amount) and the company bears the rest. Monthly instalment blank = recovered in full in the start month.</p>
+  <form class="form" id="fItem" data-id="${esc(id)}">
+    <div class="f"><label for="idr">Driver</label><select id="idr" name="driverId">${listOpts(S.drivers, d => d.name || d.id, it.driverId, "Choose…")}</select></div>
+    <div class="f"><label for="ik">Type</label><select id="ik" name="kind">${opts(ITEM_KINDS, it.kind || "loan")}</select></div>
+    <div class="f"><label for="idt">Date given / paid</label><input id="idt" name="date" type="date" required value="${esc(it.date)}"></div>
+    <div class="f"><label for="ids">Description</label><input id="ids" name="desc" value="${esc(it.desc)}" placeholder="e.g. Visa renewal 2026, personal loan"></div>
+    <div class="f"><label for="iam">Amount (for shared costs: cost excl. VAT)</label><input id="iam" name="amount" type="number" step="0.01" required value="${esc(it.amount ?? "")}"></div>
+    <div class="f" data-shared ${sh ? "" : "hidden"}><label for="ivt">VAT on the cost</label><input id="ivt" name="vat" type="number" step="0.01" value="${esc(it.vat ?? "")}"></div>
+    <div class="f" data-shared ${sh ? "" : "hidden"}><label for="isp">Driver's share %</label><input id="isp" name="sharePct" type="number" step="0.01" value="${esc(it.sharePct ?? "")}"></div>
+    <div class="f" data-shared ${sh ? "" : "hidden"}><label for="ica">Expense category (company part)</label><select id="ica" name="category">${opts(EXP_CATS, it.category || "5280")}</select></div>
+    <div class="f"><label for="ida">Driver pays (AED) – overrides %</label><input id="ida" name="driverAmount" type="number" step="0.01" value="${id ? esc(it.driverAmount ?? "") : ""}" placeholder="blank = full amount / share %"></div>
+    <div class="f"><label for="ipf">Paid from</label><select id="ipf" name="paidFrom">${opts({"1100":"Bank","1110":"Cash in hand"}, it.paidFrom || "1100")}</select></div>
+    <div class="f"><label for="iin">Monthly instalment (AED)</label><input id="iin" name="installment" type="number" step="0.01" value="${num(it.installment) ? esc(it.installment) : ""}" placeholder="blank = in full"></div>
+    <div class="f"><label for="ism">Recover from month</label><input id="ism" name="startMonth" type="month" value="${esc(it.startMonth || String(it.date||"").slice(0,7))}"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id ? `<button class="btn danger" type="button" data-del="driverItems" data-id="${esc(id)}">Delete</button>` : ""}</div>
+  </form>
+  ${(it.repayments||[]).length ? `<h2 style="margin-top:14px">Cash repayments</h2><div class="tbl"><table><thead><tr><th>Date</th><th class="num">Amount</th><th>Into</th><th>Note</th><th></th></tr></thead><tbody>${it.repayments.map((r,i) => `<tr><td>${esc(dmyS(r.date))}</td><td class="num">${fmt(num(r.amount))}</td><td>${esc(PAID_FROM[r.paidTo] || r.paidTo)}</td><td>${esc(r.note)}</td><td><button class="btn sm danger" data-repdel="${i}" data-item="${esc(id)}">Remove</button></td></tr>`).join("")}</tbody></table></div>` : ""}</div>`;
+}
+function repForm(id){
+  const it = S.ditems[id] || {};
+  return `<div class="section"><h2>Cash repayment · ${esc(dName(it.driverId))} · ${esc(it.desc || ITEM_KINDS[it.kind] || "")}</h2><p class="sub">Outstanding on ${esc(dmyS(S.to))}: AED ${fmt(itemOutstanding(it, S.to))}. A repayment shortens the instalment plan.</p>
+  <form class="form" id="fRep" data-id="${esc(id)}">
+    <div class="f"><label for="rd">Date</label><input id="rd" name="date" type="date" required value="${esc(iso(new Date()))}"></div>
+    <div class="f"><label for="ra">Amount</label><input id="ra" name="amount" type="number" step="0.01" required value="${esc(itemOutstanding(it, S.to))}"></div>
+    <div class="f"><label for="rp">Received into</label><select id="rp" name="paidTo">${opts({"1100":"Bank","1110":"Cash in hand"}, "1110")}</select></div>
+    <div class="f"><label for="rn">Note</label><input id="rn" name="note"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Record repayment</button><button class="btn ghost" type="button" data-cancel>Cancel</button></div>
+  </form></div>`;
+}
+
+/* ---------- collections & cash ---------- */
+/* Riders pay in three ways: in the app (card / wallet – the platform collects it and pays the company
+   after its fees), cash to the driver (the driver keeps it; it is set off against his pay), or for direct
+   bookings by card machine or bank transfer (into the company's account, card money a few days later). */
+function vCollections(){
+  const T = S.trips, by = {}, K = ["f","tp","rf","oe","sf","tx","c","po"];
+  T.forEach(t => { const b = by[plOf(t)] ||= {f:0,tp:0,rf:0,oe:0,sf:0,tx:0,c:0,po:0,n:new Set(),cn:new Set()}; K.forEach(k => b[k] += t[k]||0); if(t.tr || t.f) b.n.add(t.tr||t.id); if(t.c) b.cn.add(t.tr||t.id); });
+  const manual = pl => sum(S.entries.filter(e => e.type === "uber_payout" && (e.platformId || "uber") === pl), e => num(e.amount));
+  // Uber's payment codes in plain words; everything except cash is paid in the app
+  const PAY_LBL = {cash:"Cash to driver", braintree:"Card (in app)", apple_pay:"Apple Pay (in app)", google_pay:"Google Pay (in app)", paypal:"PayPal (in app)", digital:"Digital wallet (in app)"};
+  const payLbl = v => { const k = String(v || "").toLowerCase(); return !k ? "Not known" : PAY_LBL[k] || "In app – " + k.replace(/_/g, " "); };
+  const pays = {}; T.forEach(t => { if(!(t.tr || t.f)) return; const k = t.pay ? payLbl(t.pay) : t.c ? PAY_LBL.cash : "Not known"; const p = pays[k] ||= {n:new Set(), f:0, c:0}; p.n.add(t.tr||t.id); p.f += t.f||0; p.c += t.c||0; });
+  const C = compute(), drs = Object.values(C.D).map(d => { const mine = S.entries.filter(e => e.driverId === d.id);
+    const inc = sum(mine.filter(e => e.type === "income" && e.paidFrom === "driver"), e => num(e.amount)+num(e.vat)), exp = sum(mine.filter(e => e.type === "expense" && e.paidFrom === "driver"), e => num(e.amount)+num(e.vat));
+    return {id:d.id, cash:d.cash, inc, exp, recv:d.recv, held: d.cash + inc - exp - d.recv}; }).filter(x => x.cash || x.inc || x.exp || x.recv).sort((a,b) => b.held - a.held);
+  const cardIn = sum(S.entries.filter(e => e.type === "income" && e.paidFrom === "1120"), e => num(e.amount)+num(e.vat)), cardOut = sum(S.entries.filter(e => e.type === "card_settlement"), e => num(e.amount));
+  return `<div class="banner info">How riders pay: <b>in the app</b> (card / wallet) – the platform collects it and pays the company after its fees; <b>cash to the driver</b> – the driver keeps it and it is set off against his pay in the settlement; <b>direct bookings</b> – card machine or bank transfer into the company's account (record them under Expenses & payments as direct booking income, received into “Card machine” until the bank settles it).</div>
+  <div class="section"><h2>What each platform owes</h2><p class="sub">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}. Collected in app = fares + tips + refunds − cash kept by drivers. Due = that + incentives − platform fee and VAT. Paid = transfers in the platform's report plus payouts entered by hand.</p>
+  <div class="tbl"><table><thead><tr><th>Platform</th><th class="num">Trips</th><th class="num">Cash trips</th><th class="num">Collected in app</th><th class="num">Cash kept by drivers</th><th class="num">Fee + VAT</th><th class="num">Due to company</th><th class="num">Paid to bank</th><th class="num">Still due</th></tr></thead><tbody>
+  ${Object.entries(by).map(([k,b]) => { const app = b.f + b.tp + b.rf - b.c, due = app + b.oe - b.sf - b.tx, paid = b.po + manual(k);
+    return `<tr><td>${esc(pName(k))}</td><td class="num">${b.n.size}</td><td class="num">${b.cn.size}</td><td class="num">${fmt(app)}</td><td class="num">${fmt(b.c)}</td><td class="num">${fmt(b.sf + b.tx)}</td><td class="num">${fmt(due)}</td><td class="num">${fmt(paid)}</td><td class="num"><b>${aed(due - paid)}</b></td></tr>`; }).join("") || `<tr><td colspan="9" class="muted">No trips in this period.</td></tr>`}
+  </tbody></table></div><p class="small muted" style="margin-top:6px">Uber's Payments report already contains the transfers to the bank, so don't also enter those Uber payouts by hand.</p></div>
+  <div class="section"><h2>Trips by payment type</h2><p class="sub">From Uber's Trip activity report (other platforms: trips with cash count as cash).</p>
+  <div class="tbl"><table><thead><tr><th>Payment type</th><th class="num">Trips</th><th class="num">Fares</th><th class="num">Cash collected</th></tr></thead><tbody>
+  ${Object.entries(pays).sort((a,b) => b[1].n.size - a[1].n.size).map(([k,p]) => `<tr><td>${esc(k)}</td><td class="num">${p.n.size}</td><td class="num">${fmt(p.f)}</td><td class="num">${fmt(p.c)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No trips in this period.</td></tr>`}
+  </tbody></table></div></div>
+  <div class="section"><h2>Cash with drivers</h2><p class="sub">Cash the drivers collected this period and what happened to it. Whatever they still hold is deducted from their pay in the Driver settlement.</p>
+  ${drs.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th class="num">Cash from riders</th><th class="num">Direct bookings collected</th><th class="num">Company costs paid from it</th><th class="num">Handed over</th><th class="num">Still with driver</th></tr></thead><tbody>
+  ${drs.map(x => `<tr><td>${esc(dName(x.id))}</td><td class="num">${fmt(x.cash)}</td><td class="num">${fmt(x.inc)}</td><td class="num">${fmt(x.exp)}</td><td class="num">${fmt(x.recv)}</td><td class="num"><b>${aed(x.held)}</b></td></tr>`).join("")}
+  </tbody><tfoot><tr><td>Total</td><td class="num">${fmt(sum(drs,x=>x.cash))}</td><td class="num">${fmt(sum(drs,x=>x.inc))}</td><td class="num">${fmt(sum(drs,x=>x.exp))}</td><td class="num">${fmt(sum(drs,x=>x.recv))}</td><td class="num">${fmt(sum(drs,x=>x.held))}</td></tr></tfoot></table></div>` : `<p class="sub">No cash collected by drivers in this period.</p>`}</div>
+  ${cardIn || cardOut ? `<div class="section"><h2>Card machine</h2><p class="sub">Card payments for direct bookings: AED ${fmt(cardIn)}. Settled to the bank: AED ${fmt(cardOut)}. Not yet in the bank: <b class="mono">AED ${fmt(cardIn - cardOut)}</b>. Record each settlement as “Card machine settlement to bank”.</p></div>` : ""}`;
+}
+
 /* ---------- entries ---------- */
 function vEntries(){
   const e = S.edit && S.edit.kind === "entry" ? S.edit : {kind:"entry", id:"", data:{date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type:"expense", category:"5200", paidFrom:"1100"}};
@@ -875,7 +1063,7 @@ function vEntries(){
     <div class="f"><label for="ec">Expense category</label><select id="ec" name="category">${opts(EXP_CATS, x.category)}</select></div>
     <div class="f"><label for="ea">Amount excl. VAT (AED)</label><input id="ea" name="amount" type="number" step="0.01" required value="${esc(x.amount ?? "")}"></div>
     <div class="f"><label for="ev">VAT (AED)</label><input id="ev" name="vat" type="number" step="0.01" value="${esc(x.vat ?? "")}"></div>
-    <div class="f"><label for="ep">Paid from / into</label><select id="ep" name="paidFrom">${opts({"1100":"Bank","1110":"Cash in hand"}, x.paidFrom)}</select></div>
+    <div class="f"><label for="ep">Paid from / received into</label><select id="ep" name="paidFrom">${opts(PAID_FROM, x.paidFrom)}</select></div>
     <div class="f"><label for="ev2">Car</label><select id="ev2" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), x.vehicleId, "—")}</select></div>
     <div class="f"><label for="edr">Driver</label><select id="edr" name="driverId">${listOpts(S.drivers, d=>d.name||d.id, x.driverId, "—")}</select></div>
     <div class="f"><label for="epl">Platform (for payouts)</label><select id="epl" name="platformId">${opts({...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id,p.name||p.id]))}, x.platformId || "uber")}</select></div>
@@ -885,26 +1073,26 @@ function vEntries(){
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>${e.id?"Save changes":"Add entry"}</button>${e.id?`<button class="btn ghost" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" data-delentry="${esc(e.id)}" data-month="${esc(x.date.slice(0,7))}">Delete</button>`:""}</div>
   </form></div>
   <div class="section"><h2>Entries this period</h2>${list.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Car</th><th>Driver / investor</th><th class="num">Amount</th><th class="num">VAT</th><th>Note</th><th></th></tr></thead><tbody>
-  ${list.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(ENTRY_TYPES[r.type])}${r.recover?' <span class="pill brass">From driver</span>':""}</td><td>${r.type==="expense"?esc(EXP_CATS[r.category]||""):"—"}</td><td>${r.vehicleId?esc(vName(r.vehicleId)):"—"}</td><td>${esc(r.driverId?dName(r.driverId):r.investorId?iName(r.investorId):"—")}</td><td class="num">${fmt(num(r.amount))}</td><td class="num">${fmt(num(r.vat))}</td><td>${esc(r.note)}</td><td><button class="btn sm" data-editentry="${esc(r.id)}">Edit</button></td></tr>`).join("")}
+  ${list.map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(ENTRY_TYPES[r.type])}${r.recover?' <span class="pill brass">From driver</span>':""}${r.paidFrom==="driver"?' <span class="pill">Driver\'s cash</span>':r.paidFrom==="1120"?' <span class="pill">Card</span>':""}</td><td>${r.type==="expense"?esc(EXP_CATS[r.category]||""):"—"}</td><td>${r.vehicleId?esc(vName(r.vehicleId)):"—"}</td><td>${esc(r.driverId?dName(r.driverId):r.investorId?iName(r.investorId):"—")}</td><td class="num">${fmt(num(r.amount))}</td><td class="num">${fmt(num(r.vat))}</td><td>${esc(r.note)}</td><td><button class="btn sm" data-editentry="${esc(r.id)}">Edit</button></td></tr>`).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No entries in this period</b>Add fuel, Salik, fines, Uber payouts received in the bank, and payments to drivers and investors.</div>`}</div>`;
 }
 
 /* ---------- statements ---------- */
 function vSettlement(){
-  const C = compute(); const ds = Object.values(C.D).filter(d => d.n || d.adv || d.paid || d.deduct || d.recv || (S.drivers[d.id] && S.drivers[d.id].active !== false && d.ent)).sort((a,b)=>dName(a.id).localeCompare(dName(b.id)));
+  const C = compute(); const ds = Object.values(C.D).filter(d => d.n || d.adv || d.inst || d.viaDriver || d.paid || d.deduct || d.recv || (S.drivers[d.id] && S.drivers[d.id].active !== false && d.ent)).sort((a,b)=>dName(a.id).localeCompare(dName(b.id)));
   if(!ds.length) return `<div class="empty"><b>Nothing to settle for this period</b>Import Uber trips for these dates first.</div>`;
   return `<div class="section"><div class="head"><div><h2>Driver settlement · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Positive balance = pay the driver. Negative = the driver holds more cash than they earned and owes the company.</p></div><button class="btn" id="expSettle">Export CSV</button></div>
-  <div class="tbl"><table><thead><tr><th>Driver</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare</th><th class="num">Uber fee+VAT</th><th class="num">Net</th><th class="num">Driver share</th><th class="num">Tips</th><th class="num">Cash held</th><th class="num">Deductions</th><th class="num">Advances</th><th class="num">Paid</th><th class="num">Received</th><th class="num">Balance</th><th class="num">Company contribution</th></tr></thead><tbody>
-  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small" style="white-space:normal;min-width:160px">${d.termsText && d.termsText !== "No terms" ? esc(d.termsText) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(ds,d=>d.n)}</td><td class="num">${fmt(sum(ds,d=>d.fare))}</td><td class="num">${fmt(sum(ds,d=>d.fee+d.tax))}</td><td class="num">${fmt(sum(ds,d=>d.net))}</td><td class="num">${fmt(sum(ds,d=>d.ent))}</td><td class="num">${fmt(sum(ds,d=>d.tipsDue))}</td><td class="num">${fmt(sum(ds,d=>d.cash))}</td><td class="num">${fmt(sum(ds,d=>d.deduct))}</td><td class="num">${fmt(sum(ds,d=>d.adv))}</td><td class="num">${fmt(sum(ds,d=>d.paid))}</td><td class="num">${fmt(sum(ds,d=>d.recv))}</td><td class="num">${fmt(sum(ds,d=>d.balance))}</td><td class="num">${fmt(sum(ds,d=>d.contrib))}</td></tr></tfoot></table></div>
-  <p class="small muted" style="margin-top:8px">Balance = driver share + tips − cash held − deductions − advances − payments + amounts received from the driver. Company contribution = net + refunds − driver share.</p></div>
-  <div class="grid2">${ds.filter(d=>d.n).map(d=>`<div class="statement"><h3>${esc(dName(d.id))}</h3><div class="small muted">${esc(S.from)} to ${esc(S.to)} · ${d.n} trips · ${d.daysWorked} days</div>
+  <div class="tbl"><table><thead><tr><th>Driver</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare</th><th class="num">Uber fee+VAT</th><th class="num">Net</th><th class="num">Driver share</th><th class="num">Tips</th><th class="num">Cash held</th><th class="num">Deductions</th><th class="num">Advances</th><th class="num">Loan instalments</th><th class="num">Driver's cash used</th><th class="num">Paid</th><th class="num">Received</th><th class="num">Balance</th><th class="num">Company contribution</th></tr></thead><tbody>
+  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small" style="white-space:normal;min-width:160px">${d.termsText && d.termsText !== "No terms" ? esc(d.termsText) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.inst)}</td><td class="num">${aed(d.viaDriver)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(ds,d=>d.n)}</td><td class="num">${fmt(sum(ds,d=>d.fare))}</td><td class="num">${fmt(sum(ds,d=>d.fee+d.tax))}</td><td class="num">${fmt(sum(ds,d=>d.net))}</td><td class="num">${fmt(sum(ds,d=>d.ent))}</td><td class="num">${fmt(sum(ds,d=>d.tipsDue))}</td><td class="num">${fmt(sum(ds,d=>d.cash))}</td><td class="num">${fmt(sum(ds,d=>d.deduct))}</td><td class="num">${fmt(sum(ds,d=>d.adv))}</td><td class="num">${fmt(sum(ds,d=>d.inst))}</td><td class="num">${fmt(sum(ds,d=>d.viaDriver))}</td><td class="num">${fmt(sum(ds,d=>d.paid))}</td><td class="num">${fmt(sum(ds,d=>d.recv))}</td><td class="num">${fmt(sum(ds,d=>d.balance))}</td><td class="num">${fmt(sum(ds,d=>d.contrib))}</td></tr></tfoot></table></div>
+  <p class="small muted" style="margin-top:8px">Balance = driver share + tips − cash held − deductions − advances − loan instalments ± driver's cash used for company costs or collections − payments + amounts received from the driver. This is the movement for the period; the running balance and loans are on the Driver ledger page. Company contribution = net + refunds − driver share.</p></div>
+  <div class="grid2">${ds.filter(d=>d.n || d.inst || d.adv).map(d=>`<div class="statement"><h3>${esc(dName(d.id))}</h3><div class="small muted">${esc(S.from)} to ${esc(S.to)} · ${d.n} trips · ${d.daysWorked} days</div>
     <div class="ln"><span>Fares</span><span>${fmt(d.fare)}</span></div><div class="ln"><span>Uber service fee</span><span>-${fmt(d.fee)}</span></div><div class="ln"><span>VAT on fee</span><span>-${fmt(d.tax)}</span></div>
     <div class="ln"><span>Net earnings</span><span>${fmt(d.net)}</span></div>
     <div class="ln"><span>Your share (${esc(d.termsText)}${d.rentDays ? `, rent for ${d.rentDays} days` : ""})</span><span>${fmt(d.ent)}</span></div>
     <div class="ln"><span>Tips</span><span>${fmt(d.tipsDue)}</span></div><div class="ln"><span>Cash you collected</span><span>-${fmt(d.cash)}</span></div>
-    ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
-    <div class="ln tot"><span>${d.balance >= 0 ? "Payable to you" : "You owe the company"}</span><span>AED ${fmt(Math.abs(d.balance))}</span></div></div>`).join("")}</div>`;
+    ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.inst?`<div class="ln"><span>Loan / advance / shared-cost instalments</span><span>-${fmt(d.inst)}</span></div>`:""}${d.viaDriver?`<div class="ln"><span>${d.viaDriver > 0 ? "Company costs you paid from your cash" : "Company money you collected"}</span><span>${d.viaDriver > 0 ? "" : "-"}${fmt(Math.abs(d.viaDriver))}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
+    <div class="ln tot"><span>${d.balance >= 0 ? "Payable to you" : "You owe the company"}</span><span>AED ${fmt(Math.abs(d.balance))}</span></div>${d.loanOut ? `<div class="small muted" style="margin-top:6px">Loan balance still to recover after ${esc(dmyS(S.to))}: AED ${fmt(d.loanOut)}</div>` : ""}</div>`).join("")}</div>`;
 }
 function vInvestorPL(){
   const C = compute(); const invs = Object.values(C.I);
@@ -958,6 +1146,7 @@ function vSettings(){
     <div class="f"><label for="sem">Email</label><input id="sem" name="email" value="${esc(s.email)}"></div>
     <div class="f"><label for="ssn">Signatory name</label><input id="ssn" name="signatory" value="${esc(s.signatory)}"></div>
     <div class="f"><label for="sst">Signatory title</label><input id="sst" name="signatoryTitle" value="${esc(s.signatoryTitle)}" placeholder="e.g. Managing Director"></div>
+    <div class="f"><label for="sls">Driver ledgers start on</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
   </form></div>
@@ -1004,7 +1193,14 @@ document.addEventListener("click", async ev => {
   if(t.id === "impGo"){ runImport(); return; }
   if(t.id === "impAct"){ runActivityImport(); return; }
   if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [S.to, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
-  if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
+  if(t.dataset.repdel != null && t.dataset.item){
+    if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
+    const it = S.ditems[t.dataset.item]; if(!it) return; const {id:_, ...b} = it;
+    if(await writeOk(S.db.doc("driverItems/" + t.dataset.item).set({...b, repayments: (b.repayments || []).filter((_, i) => i !== +t.dataset.repdel)}))){ toast("Repayment removed."); render(); }
+    return;
+  }
+  if(t.id === "expLedger"){ const R = ledgerLines(S.ledgerDriver); saveCsv(`driver_ledger_${norm(dName(S.ledgerDriver))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit (driver owes)","Credit (owed to driver)","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.desc, l.dr ? r2(l.dr).toFixed(2) : "", l.cr ? r2(l.cr).toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
+  if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Loan instalments","Driver's cash used","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.inst,d.viaDriver,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
 });
 async function saveCsv(name, rows){
   const csv = rows.map(r => r.map(c => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }).join(",")).join("\n");
@@ -1013,7 +1209,7 @@ async function saveCsv(name, rows){
 }
 document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
-  const numF = ["commissionPct","rentPerDay","salary","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays"];
+  const numF = ["commissionPct","rentPerDay","salary","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
   numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? (f.id === "fPlatform" && k === "commissionPct" ? "" : 0) : num(fd[k]); });
   ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
   if(!S.db) return;
@@ -1049,6 +1245,24 @@ document.addEventListener("submit", async ev => {
     }
     if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
   }
+  if(f.id === "fItem"){
+    if(!fd.driverId){ toast("Choose the driver."); return; }
+    const id = f.dataset.id || ("i-" + uid()), prev = S.ditems[id] || {}; const {id:_, ...pb} = prev;
+    const amount = num(fd.amount), vat = fd.kind === "shared" ? num(fd.vat) : 0;
+    const da = String(fd.driverAmount ?? "") !== "" ? num(fd.driverAmount) : String(fd.sharePct ?? "") !== "" ? r2((amount + vat) * num(fd.sharePct) / 100) : (fd.kind === "shared" ? 0 : amount);
+    const rec = {...pb, driverId: fd.driverId, kind: fd.kind, date: fd.date, desc: fd.desc || "", amount, vat, driverAmount: r2(da), sharePct: String(fd.sharePct ?? "") === "" ? "" : num(fd.sharePct),
+      category: fd.category || "5280", paidFrom: fd.paidFrom || "1100", installment: String(fd.installment ?? "") === "" ? 0 : num(fd.installment), startMonth: fd.startMonth || fd.date.slice(0,7), repayments: pb.repayments || [],
+      by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
+    if(await writeOk(S.db.doc("driverItems/" + id).set(rec))){ S.edit = null; S.ledgerDriver = fd.driverId; toast("Saved."); render(); }
+    return;
+  }
+  if(f.id === "fRep"){
+    const it = S.ditems[f.dataset.id]; if(!it) return; const {id:_, ...b} = it;
+    const reps = [...(b.repayments || []), {date: fd.date, amount: num(fd.amount), paidTo: fd.paidTo || "1100", note: fd.note || ""}];
+    if(await writeOk(S.db.doc("driverItems/" + f.dataset.id).set({...b, repayments: reps}))){ S.edit = null; toast("Repayment recorded."); render(); }
+    return;
+  }
+  if(f.id === "fEntry" && fd.paidFrom === "driver" && !fd.driverId){ toast("Choose the driver whose cash was used."); return; }
   if(f.id === "fEntry"){
     const m = fd.date.slice(0,7); const oldId = f.dataset.id; const ref = S.db.doc("entries/"+m);
     if(oldId){ const old = S.entries.find(x=>x.id===oldId); if(old && old.date.slice(0,7) !== m){ const om = old.date.slice(0,7); const s0 = await S.db.doc("entries/"+om).get(); const r0 = (s0.exists ? s0.data().rows : []).filter(r=>r.id!==oldId); if(!await writeOk(S.db.doc("entries/"+om).set({month:om, rows:r0}))) return; } }
@@ -1069,6 +1283,9 @@ document.addEventListener("change", async ev => {
   if(t.id === "tdrv"){ S.tripFilter.driver = t.value; render(); return; }
   if(t.id === "tveh"){ S.tripFilter.vehicle = t.value; render(); return; }
   if(t.id === "tpl"){ S.tripFilter.platform = t.value; render(); return; }
+  if(t.id === "ldrv"){ S.ledgerDriver = t.value; S.edit = null; render(); return; }
+  if(t.id === "lgrp"){ S.ledgerGroup = t.value; render(); return; }
+  if(t.id === "ik"){ const f = t.form; f.querySelectorAll("[data-shared]").forEach(x => x.hidden = t.value !== "shared"); return; }
   if(t.id === "impPl"){ S.importPlatform = t.value; S.importState = null; S.importQueue = []; render(); return; }
   if(t.id === "file"){ handleFiles(t.files); t.value = ""; return; }
   if(t.dataset.map && S.importState){ S.importState.map[t.dataset.map] = [...t.selectedOptions].map(o=>o.value).filter(Boolean); render(); return; }

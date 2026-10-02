@@ -27,3 +27,10 @@ Note: automating the Uber portal may conflict with Uber's terms. If Uber grants 
 - Each platform has its own receivable account: Uber 1150, Bolt 1151, Yango 1152, YAY 1153, Welcome Pickups 1154, then 1155 onwards for new parties.
 - **Import trip data**: choose the platform first. Uber files are recognised automatically. For other platforms, match the columns once and the mapping is saved for that platform. The fee in each file is checked against the contract commission.
 - **Driver & car usage**: trips are booked to the driver logged in to the driver app, and the car is the plate used on that trip. This page lists who drove which car and flags trips on cars that are not the driver's assigned car.
+
+## Driver accounts, loans and collections
+
+- **Driver ledger & loans** shows a running account per driver from the ledger start date (Settings), with an opening balance per driver. It includes earnings share, tips, cash collected from riders, advances, payments, charges, company costs paid from the driver's cash, and loan instalments. Positive = the company owes the driver.
+- **Loans, salary advances and shared costs** (e.g. visa: company 50%, driver 50%) are recovered in monthly instalments on the last day of each month until paid. Cash repayments shorten the plan. The ledger uses account 1170 Driver loans & recoverables.
+- **Paid from "Driver's cash"** on an expense or direct booking puts it on the driver's account instead of the bank. "Card machine" receipts sit in 1120 until a "Card machine settlement to bank" entry.
+- **Collections & cash** shows what each platform collected in the app, the cash drivers kept, what is still due from each platform, trips by payment type, and the cash still held by each driver.
