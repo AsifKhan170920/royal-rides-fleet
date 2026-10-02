@@ -162,7 +162,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"",
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"",
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:""}, edit:null
@@ -171,6 +171,7 @@ const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["usage","Driver & car usage"],["import","Import trip data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines & drivers"],
+  ["Bank & cash",null],["cashbank","Bank & cash accounts"],["transfers","Inter-account transfers"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["settlement","Driver settlement"],["driverledger","Driver ledger & loans"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
@@ -190,7 +191,7 @@ const ACCT = {
 const ENTRY_TYPES = {
   expense:"Expense", income:"Direct booking income", uber_payout:"Platform payout received",
   driver_advance:"Advance to driver (deducted in full)", driver_payment:"Payment to driver", driver_receipt:"Received from driver (cash handover)",
-  investor_payout:"Payout to investor", card_settlement:"Card machine settlement to bank"
+  investor_payout:"Payout to investor", card_settlement:"Card machine settlement to bank", transfer:"Inter-account transfer"
 };
 const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
 const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
@@ -206,7 +207,21 @@ const PLT_TERMS = ["commissionPct","feeVat","payCycle","creditDays"];
    "Driver's cash" as paid-from means the driver paid a company cost, or collected company money,
    out of the cash he holds; it goes to his account instead of the bank. */
 const ITEM_KINDS = {loan:"Loan", advance:"Salary advance", shared:"Shared expense (visa, medical, licence…)", other:"Other amount to recover"};
-const PAID_FROM = {"1100":"Bank","1110":"Cash in hand","1120":"Card machine (settles to bank later)","driver":"Driver's cash (driver paid / collected it)"};
+/* Cash and cash equivalents, as in Manager.io's Bank and Cash Accounts: bank accounts (1100–1109),
+   cash accounts (1110–1119) and card network / merchant balances (1120–1129). 1100 Bank, 1110 Cash in
+   hand and 1120 Card machine receipts always exist; more are added in the accounts collection (doc id =
+   account code). Opening balances are as at the books start date (Settings). */
+const CASH_TYPES = {bank:"Bank account", cash:"Cash account", network:"Card network / merchant balance"};
+const CASH_RANGE = {bank:1101, cash:1111, network:1121};
+const DEFAULT_ACCTS = [{id:"1100", name:"Bank", type:"bank"}, {id:"1110", name:"Cash in hand", type:"cash"}, {id:"1120", name:"Card machine receipts", type:"network"}];
+function cashAccounts(){
+  const o = {}; DEFAULT_ACCTS.forEach(a => o[a.id] = {...a, isDefault:true});
+  Object.values(S.accounts || {}).forEach(a => o[a.id] = {...(o[a.id] || {}), ...a});
+  return Object.values(o).sort((a,b) => a.id.localeCompare(b.id));
+}
+const acctOpts = (types, withDriver) => ({...Object.fromEntries(cashAccounts().filter(a => a.active !== false && (!types || types.includes(a.type))).map(a => [a.id, a.name])), ...(withDriver ? {driver:"Driver's cash (driver paid / collected it)"} : {})});
+const payAcct = pl => (S.platforms[pl] && S.platforms[pl].payoutAcct) || "1100";
+const netAcct = tid => { const m = termByTid(tid); return (m && m.networkAcct) || "1120"; };
 const srcAcct = p => p === "driver" ? "2100" : (p || "1100");
 const monthEnd = m => { const [y,mo] = m.split("-").map(Number); return iso(new Date(y, mo, 0)); };
 const nextMonth = m => { const [y,mo] = m.split("-").map(Number); return iso(new Date(y, mo, 1)).slice(0,7); };
@@ -318,7 +333,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -355,6 +370,7 @@ const plOf = t => t.pl || "uber";
 const pName = id => (S.platforms[id] && S.platforms[id].name) || (STD_PLATFORMS.find(x => x[0] === id) || [0, id])[1];
 const clearingAcct = id => (S.platforms[id] && S.platforms[id].acct) || (STD_PLATFORMS.find(x => x[0] === id) || [0,0,0,"1159"])[3];
 function acctName(a){
+  const ca = cashAccounts().find(x => x.id === a); if(ca) return ca.name;
   if(ACCT[a] && a !== "1150") return ACCT[a];
   const id = Object.keys(S.platforms).find(k => clearingAcct(k) === a) || (STD_PLATFORMS.find(x => x[3] === a) || [])[0];
   return id ? pName(id) + " clearing (receivable)" : (ACCT[a] || a);
@@ -490,7 +506,9 @@ function compute(){
   return {D, V, I, calDays};
 }
 function journal(C){
-  const L = []; const add = (acct, dr, cr, memo) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo}); };
+  // every line carries a date, so bank and cash accounts can show a dated ledger; period totals are dated at the period end
+  const L = []; let day = null;
+  const add = (acct, dr, cr, memo, date) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo, date: date || day || S.to}); };
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
   const tips2drv = setting("tipsToDriver", true);
   const tot = ts => ({f:sum(ts,t=>t.f), sf:sum(ts,t=>t.sf), tx:sum(ts,t=>t.tx), tp:sum(ts,t=>t.tp), rf:sum(ts,t=>t.rf), c:sum(ts,t=>t.c), oe:sum(ts,t=>t.oe), po:sum(ts,t=>t.po)});
@@ -499,9 +517,9 @@ function journal(C){
   // each platform's receivable: what it collected for us, less its fees and the cash drivers kept, less what it paid to the bank
   const byPl = {}; S.trips.forEach(t => (byPl[plOf(t)] ||= []).push(t));
   for(const [pl, ts] of Object.entries(byPl)){
-    const P = tot(ts), c = clearingAcct(pl), nm = pName(pl);
+    const P = tot(ts), c = clearingAcct(pl), nm = pName(pl), bank = payAcct(pl);
     add(c, P.f + P.tp + P.rf + P.oe - P.sf - P.tx - P.c, 0, nm + " trips");
-    add("1100", P.po, 0, nm + " payouts to bank (from the report)"); add(c, 0, P.po, nm + " payouts to bank (from the report)");
+    ts.filter(t => t.po).forEach(t => { add(bank, t.po, 0, nm + " payout to bank", t.d); add(c, 0, t.po, nm + " payout to bank", t.d); });
   }
   add("4020", 0, T.oe, "Platform other earnings");
   add("1160", T.c, 0, memoT);
@@ -517,7 +535,10 @@ function journal(C){
   const inv = sum(Object.values(C.V), v => v.invShare);
   if(inv >= 0){ add("5900", inv, 0, "Investor share"); add("2200", 0, inv, "Investor share"); } else { add("2200", -inv, 0, "Investor share (loss)"); add("5900", 0, -inv, "Investor share (loss)"); }
   for(const e of S.entries){
-    const a = num(e.amount), vat = num(e.vat), src = srcAcct(e.paidFrom), memo = `${ENTRY_TYPES[e.type]||e.type}${e.note ? " – " + e.note : ""}`;
+    day = e.date;
+    const a = num(e.amount), vat = num(e.vat), src = srcAcct(e.paidFrom), who = e.driverId ? dName(e.driverId) : e.investorId ? iName(e.investorId) : "";
+    const memo = e.type === "transfer" ? `Transfer ${acctName(e.paidFrom || "1100")} → ${acctName(e.toAccount || "1100")}${e.note ? " – " + e.note : ""}`
+      : `${e.type === "expense" ? (EXP_CATS[e.category] || "Expense") : (ENTRY_TYPES[e.type] || e.type)}${who ? " – " + who : ""}${e.note ? " – " + e.note : ""}`;
     if(e.type === "expense"){
       add(e.category || "5310", a + (inVatRec ? 0 : vat), 0, memo); if(inVatRec) add("1300", vat, 0, memo); add(src, 0, a + vat, memo);
       if(e.recover){ add("2100", a + vat, 0, "Recovered from driver"); add(e.category || "5310", 0, a + vat, "Recovered from driver"); }
@@ -527,26 +548,111 @@ function journal(C){
     else if(e.type === "driver_advance" || e.type === "driver_payment"){ add("2100", a, 0, memo); add(src, 0, a, memo); }
     else if(e.type === "driver_receipt"){ add(src, a, 0, memo); add("2100", 0, a, memo); }
     else if(e.type === "investor_payout"){ add("2200", a, 0, memo); add(src, 0, a, memo); }
-    else if(e.type === "card_settlement"){ add("1100", a, 0, memo); add("1120", 0, a, memo); }
+    else if(e.type === "card_settlement"){ add(e.toAccount || "1100", a, 0, memo); add("1120", 0, a, memo); }
+    else if(e.type === "transfer"){ const fee = num(e.fee); add(e.toAccount || "1100", a, 0, memo); add(src, 0, a + fee, memo); if(fee) add("5300", fee, 0, "Bank charges – " + memo); }
   }
-  // card payments on company terminals: the money goes to the merchant account (1120), the driver is credited
-  for(const x of S.cardtx || []){ const dr = cardDriver(x), m = `Card on terminal ${x.tid}${dr ? " – " + dName(dr) : ""}`; add("1120", x.amt, 0, m); add(dr ? "2100" : "2150", 0, x.amt, m);
-    if(x.fee){ add("5300", x.fee, 0, "Card fee – terminal " + x.tid); add("1120", 0, x.fee, "Card fee – terminal " + x.tid); } }
+  day = null;
+  // card payments on company terminals: the money goes to the machine's network account, the driver is credited
+  for(const x of S.cardtx || []){ const dr = cardDriver(x), na = netAcct(x.tid), m = `Card payment – terminal ${x.tid}${dr ? " – " + dName(dr) : ""}`; add(na, x.amt, 0, m, x.d); add(dr ? "2100" : "2150", 0, x.amt, m, x.d);
+    if(x.fee){ add("5300", x.fee, 0, "Card fee – terminal " + x.tid, x.d); add(na, 0, x.fee, "Card fee – terminal " + x.tid, x.d); } }
   // loans, advances and shared costs: given → 1170; instalments move them to the driver's account
   for(const it of Object.values(S.ditems||{})){
     const memo = `${ITEM_KINDS[it.kind] || "Loan"} – ${dName(it.driverId)}${it.desc ? " – " + it.desc : ""}`, da = num(it.driverAmount);
     if(it.date >= S.from && it.date <= S.to){
+      day = it.date;
       if(it.kind === "shared"){ const amt = num(it.amount), vat = num(it.vat); add(it.category || "5280", (inVatRec ? amt : amt + vat) - da, 0, memo); if(inVatRec) add("1300", vat, 0, memo); add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, amt + vat, memo); }
       else { add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, da, memo); }
+      day = null;
     }
     const p = itemPlan(it);
-    p.inst.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add("2100", x.amt, 0, "Instalment – " + memo); add("1170", 0, x.amt, "Instalment – " + memo); });
-    p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo); add("1170", 0, num(x.amount), "Repayment – " + memo); });
+    p.inst.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add("2100", x.amt, 0, "Instalment – " + memo, x.date); add("1170", 0, x.amt, "Instalment – " + memo, x.date); });
+    p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo, x.date); add("1170", 0, num(x.amount), "Repayment – " + memo, x.date); });
   }
   return L;
 }
 
-/* ============ rendering ============ */
+/* ---------- bank & cash ---------- */
+// the journal over the whole history from the books start (needs S.ledger, loaded by loadLedger)
+function historyJournal(){
+  const L = S.ledger, keep = {trips:S.trips, entries:S.entries, from:S.from, cardtx:S.cardtx};
+  S.trips = L.trips; S.entries = L.entries; S.from = setting("ledgerStart", "2026-09-01"); S.cardtx = L.cards || [];
+  try{ return journal(compute()); } finally { Object.assign(S, keep); }
+}
+function needHistory(){
+  const key = setting("ledgerStart", "2026-09-01") + "|" + S.to;
+  if(!S.db) return `<p class="sub">Sign in to load the accounts.</p>`;
+  if(!S.ledger || S.ledger.key !== key){ loadLedger(); return `<p class="sub">Loading the history…</p>`; }
+  if(S.ledger.loading) return `<p class="sub">Loading the history…</p>`;
+  if(S.ledger.error) return `<p class="sub">Couldn't load the history. Change the dates to retry.</p>`;
+  return "";
+}
+function acctLines(code, J){
+  const a = cashAccounts().find(x => x.id === code) || {};
+  // a refund (negative money in) shows as money out
+  const ls = J.filter(l => l.acct === code).map(l => l.dr < 0 || l.cr < 0 ? {...l, dr: Math.max(l.dr, 0) + Math.max(-l.cr, 0), cr: Math.max(l.cr, 0) + Math.max(-l.dr, 0)} : l).sort((x,y) => x.date.localeCompare(y.date) || (y.dr ? 1 : 0) - (x.dr ? 1 : 0));
+  let bal = num(a.opening), before = bal; const shown = [];
+  ls.forEach(l => { bal = r2(bal + l.dr - l.cr); if(l.date < S.from) before = bal; else shown.push({...l, bal}); });
+  return {open: num(a.opening), before, shown, close: bal, inn: sum(shown, l => l.dr), out: sum(shown, l => l.cr)};
+}
+function vCashBank(){
+  const wait = needHistory(), accts = cashAccounts(), start = setting("ledgerStart", "2026-09-01");
+  const e = S.edit && S.edit.kind === "account" ? S.edit : null;
+  if(S.acctView && !wait && !e) return acctLedgerView(S.acctView);
+  let body = wait;
+  if(!wait){
+    const J = historyJournal(), R = accts.map(a => ({a, ...acctLines(a.id, J)}));
+    const byType = t => R.filter(r => r.a.type === t);
+    body = `<div class="kpis">${Object.entries(CASH_TYPES).map(([t,l]) => `<div class="kpi"><div class="l">${esc(l.replace(" / merchant balance",""))}s</div><div class="v ${sum(byType(t), r => r.close) < 0 ? "neg" : ""}">${fmt(sum(byType(t), r => r.close))}</div><div class="n">${byType(t).length} account(s)</div></div>`).join("")}
+      <div class="kpi"><div class="l">Cash & cash equivalents</div><div class="v">${fmt(sum(R, r => r.close))}</div><div class="n">at ${esc(dmyS(S.to))}</div></div></div>
+    <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th>Type</th><th>Bank / account no.</th><th class="num">Balance ${esc(dmyS(S.from))}</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">Balance ${esc(dmyS(S.to))}</th><th></th></tr></thead><tbody>
+    ${Object.keys(CASH_TYPES).map(t => byType(t).map(r => `<tr><td class="mono">${esc(r.a.id)}</td><td><button class="btn sm ghost" data-acctview="${esc(r.a.id)}" style="padding:2px 6px"><b>${esc(r.a.name)}</b></button>${r.a.active === false ? ' <span class="pill">Inactive</span>' : ""}</td><td class="small">${esc(CASH_TYPES[r.a.type] || "")}</td><td class="small">${esc([r.a.bankName, r.a.number].filter(Boolean).join(" · "))}</td>
+      <td class="num">${aed(r.before)}</td><td class="num">${fmt(r.inn)}</td><td class="num">${fmt(r.out)}</td><td class="num"><b>${aed(r.close)}</b></td><td><button class="btn sm" data-edit="account" data-id="${esc(r.a.id)}">Edit</button></td></tr>`).join("")
+      + (byType(t).length > 1 ? `<tr><td></td><td colspan="6" class="small muted">Total ${esc(CASH_TYPES[t].toLowerCase())}s</td><td class="num"><b>${aed(sum(byType(t), r => r.close))}</b></td><td></td></tr>` : "")).join("")}
+    </tbody><tfoot><tr><td colspan="4">Cash & cash equivalents</td><td class="num">${fmt(sum(R, r => r.before))}</td><td class="num">${fmt(sum(R, r => r.inn))}</td><td class="num">${fmt(sum(R, r => r.out))}</td><td class="num">${fmt(sum(R, r => r.close))}</td><td></td></tr></tfoot></table></div>`;
+  }
+  return `${e ? accountForm(e.id) : ""}<div class="section"><div class="head"><div><h2>Bank & cash accounts</h2><p class="sub">Cash and cash equivalents: bank accounts, cash accounts and card network (merchant) balances. Click an account for its ledger. Opening balances are as at ${esc(dmyS(start))} (books start, in Settings).</p></div>
+    <div class="row"><button class="btn" data-nav="transfers">Inter-account transfer</button><button class="btn primary" data-edit="account" data-id="">Add account</button></div></div>${body}</div>`;
+}
+function accountForm(id){
+  const a = cashAccounts().find(x => x.id === id) || {type:"bank"};
+  return `<div class="section"><h2>${id ? "Edit " + esc(a.name) : "New bank, cash or network account"}</h2>
+  <form class="form" id="fAccount" data-id="${esc(id)}">
+    <div class="f"><label for="an">Account name</label><input id="an" name="name" required value="${esc(a.name)}" placeholder="e.g. Wio current account, Petty cash, Network International"></div>
+    <div class="f"><label for="aty">Type</label><select id="aty" name="type" ${id ? "disabled" : ""}>${opts(CASH_TYPES, a.type)}</select></div>
+    <div class="f"><label for="abn">Bank / provider</label><input id="abn" name="bankName" value="${esc(a.bankName)}"></div>
+    <div class="f"><label for="ano">Account no. / IBAN / merchant ID</label><input id="ano" name="number" value="${esc(a.number)}"></div>
+    <div class="f"><label for="aop">Opening balance on ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}</label><input id="aop" name="opening" type="number" step="0.01" value="${esc(a.opening ?? "")}"></div>
+    <div class="f"><label for="aac">Status</label><select id="aac" name="active">${opts({true:"Active", false:"Inactive"}, String(a.active !== false))}</select></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save account</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id && !a.isDefault ? `<button class="btn danger" type="button" data-del="accounts" data-id="${esc(id)}">Delete</button>` : ""}</div>
+  </form></div>`;
+}
+function acctLedgerView(code){
+  const a = cashAccounts().find(x => x.id === code) || {id:code, name:acctName(code)}, R = acctLines(code, historyJournal());
+  return `<div class="section"><div class="head"><div><h2>${esc(a.name)} <span class="mono small muted">${esc(code)}</span></h2><p class="sub">${esc(CASH_TYPES[a.type] || "")}${a.bankName || a.number ? " · " + esc([a.bankName, a.number].filter(Boolean).join(" · ")) : ""} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</p></div>
+    <div class="row"><button class="btn ghost" data-acctview="">← All accounts</button><button class="btn" id="expAcct">Export CSV</button><button class="btn" data-nav="transfers">Transfer</button></div></div>
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">Balance</th></tr></thead><tbody>
+  <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(R.before)}</b></td></tr>
+  ${R.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="2">Closing balance ${esc(dmyS(S.to))}</td><td class="num">${fmt(R.inn)}</td><td class="num">${fmt(R.out)}</td><td class="num"><b>${aed(R.close)}</b></td></tr></tfoot></table></div></div>`;
+}
+function vTransfers(){
+  const list = S.entries.filter(e => e.type === "transfer" || e.type === "card_settlement").slice().reverse(), ao = acctOpts();
+  return `<div class="section"><h2>Inter-account transfer</h2><p class="sub">Money moved between your own accounts: bank to bank, cash deposited in the bank, bank to petty cash, or the card network settling to the bank. Bank charges (optional) are taken from the paying account.</p>
+  <form class="form" id="fTransfer">
+    <div class="f"><label for="xd">Date</label><input id="xd" name="date" type="date" required value="${esc(iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.to)}"></div>
+    <div class="f"><label for="xf">Paid from</label><select id="xf" name="paidFrom">${opts(ao, "1110")}</select></div>
+    <div class="f"><label for="xt">Received in</label><select id="xt" name="toAccount">${opts(ao, "1100")}</select></div>
+    <div class="f"><label for="xa">Amount</label><input id="xa" name="amount" type="number" step="0.01" required></div>
+    <div class="f"><label for="xc">Bank charges</label><input id="xc" name="fee" type="number" step="0.01"></div>
+    <div class="f wide"><label for="xn">Reference / note</label><input id="xn" name="note" placeholder="e.g. cash deposit slip 1182"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db ? "" : "disabled"}>Save transfer</button></div>
+  </form></div>
+  <div class="section"><h2>Transfers this period</h2>${list.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Paid from</th><th>Received in</th><th class="num">Amount</th><th class="num">Charges</th><th>Note</th><th></th></tr></thead><tbody>
+  ${list.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td>${esc(acctName(e.type === "card_settlement" ? "1120" : e.paidFrom || "1100"))}</td><td>${esc(acctName(e.toAccount || "1100"))}</td><td class="num">${fmt(num(e.amount))}</td><td class="num">${num(e.fee) ? fmt(num(e.fee)) : ""}</td><td>${esc(e.note)}</td><td><button class="btn sm danger" data-delentry="${esc(e.id)}" data-month="${esc(e.date.slice(0,7))}">Delete</button></td></tr>`).join("")}
+  </tbody></table></div>` : `<p class="sub">No transfers in this period.</p>`}</div>`;
+}
+
+/* ============ rendering ============ *//* ============ rendering ============ */
 function renderNav(){
   $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<div class="grp">${esc(k)}</div>` : `<button data-nav="${k}" ${S.view===k?'aria-current="page"':""}>${esc(l)}</button>`).join("");
 }
@@ -555,7 +661,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
+  const fns = {cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -961,6 +1067,7 @@ function platformForm(id, p0){
     <div class="f"><label for="pty">Type</label><select id="pty" name="type">${opts(PLT_TYPES, p.type || "ride")}</select></div>
     <div class="f"><label for="pln">Legal name (as on contract)</label><input id="pln" name="legalName" value="${esc(p.legalName)}"></div>
     <div class="f"><label for="pac">Our account / fleet ID with them</label><input id="pac" name="accountId" value="${esc(p.accountId)}"></div>
+    <div class="f"><label for="ppa">Payouts paid into</label><select id="ppa" name="payoutAcct">${opts(acctOpts(["bank","cash"]), p.payoutAcct || "1100")}</select></div>
     <div class="f"><label for="pcn">Contact person</label><input id="pcn" name="contactName" value="${esc(p.contactName)}"></div>
     <div class="f"><label for="pph">Phone</label><input id="pph" name="phone" value="${esc(p.phone)}"></div>
     <div class="f"><label for="pem">Email</label><input id="pem" name="email" type="email" value="${esc(p.email)}"></div>
@@ -1077,12 +1184,12 @@ function itemForm(id, it){
     <div class="f" data-shared ${sh ? "" : "hidden"}><label for="isp">Driver's share %</label><input id="isp" name="sharePct" type="number" step="0.01" value="${esc(it.sharePct ?? "")}"></div>
     <div class="f" data-shared ${sh ? "" : "hidden"}><label for="ica">Expense category (company part)</label><select id="ica" name="category">${opts(EXP_CATS, it.category || "5280")}</select></div>
     <div class="f"><label for="ida">Driver pays (AED) – overrides %</label><input id="ida" name="driverAmount" type="number" step="0.01" value="${id ? esc(it.driverAmount ?? "") : ""}" placeholder="blank = full amount / share %"></div>
-    <div class="f"><label for="ipf">Paid from</label><select id="ipf" name="paidFrom">${opts({"1100":"Bank","1110":"Cash in hand"}, it.paidFrom || "1100")}</select></div>
+    <div class="f"><label for="ipf">Paid from</label><select id="ipf" name="paidFrom">${opts(acctOpts(["bank","cash"]), it.paidFrom || "1100")}</select></div>
     <div class="f"><label for="iin">Monthly instalment (AED)</label><input id="iin" name="installment" type="number" step="0.01" value="${num(it.installment) ? esc(it.installment) : ""}" placeholder="blank = in full"></div>
     <div class="f"><label for="ism">Recover from month</label><input id="ism" name="startMonth" type="month" value="${esc(it.startMonth || String(it.date||"").slice(0,7))}"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id ? `<button class="btn danger" type="button" data-del="driverItems" data-id="${esc(id)}">Delete</button>` : ""}</div>
   </form>
-  ${(it.repayments||[]).length ? `<h2 style="margin-top:14px">Cash repayments</h2><div class="tbl"><table><thead><tr><th>Date</th><th class="num">Amount</th><th>Into</th><th>Note</th><th></th></tr></thead><tbody>${it.repayments.map((r,i) => `<tr><td>${esc(dmyS(r.date))}</td><td class="num">${fmt(num(r.amount))}</td><td>${esc(PAID_FROM[r.paidTo] || r.paidTo)}</td><td>${esc(r.note)}</td><td><button class="btn sm danger" data-repdel="${i}" data-item="${esc(id)}">Remove</button></td></tr>`).join("")}</tbody></table></div>` : ""}</div>`;
+  ${(it.repayments||[]).length ? `<h2 style="margin-top:14px">Cash repayments</h2><div class="tbl"><table><thead><tr><th>Date</th><th class="num">Amount</th><th>Into</th><th>Note</th><th></th></tr></thead><tbody>${it.repayments.map((r,i) => `<tr><td>${esc(dmyS(r.date))}</td><td class="num">${fmt(num(r.amount))}</td><td>${esc(acctName(r.paidTo))}</td><td>${esc(r.note)}</td><td><button class="btn sm danger" data-repdel="${i}" data-item="${esc(id)}">Remove</button></td></tr>`).join("")}</tbody></table></div>` : ""}</div>`;
 }
 function repForm(id){
   const it = S.ditems[id] || {};
@@ -1090,7 +1197,7 @@ function repForm(id){
   <form class="form" id="fRep" data-id="${esc(id)}">
     <div class="f"><label for="rd">Date</label><input id="rd" name="date" type="date" required value="${esc(iso(new Date()))}"></div>
     <div class="f"><label for="ra">Amount</label><input id="ra" name="amount" type="number" step="0.01" required value="${esc(itemOutstanding(it, S.to))}"></div>
-    <div class="f"><label for="rp">Received into</label><select id="rp" name="paidTo">${opts({"1100":"Bank","1110":"Cash in hand"}, "1110")}</select></div>
+    <div class="f"><label for="rp">Received into</label><select id="rp" name="paidTo">${opts(acctOpts(["bank","cash"]), "1110")}</select></div>
     <div class="f"><label for="rn">Note</label><input id="rn" name="note"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Record repayment</button><button class="btn ghost" type="button" data-cancel>Cancel</button></div>
   </form></div>`;
@@ -1164,6 +1271,7 @@ function terminalForm(id, x0){
     <div class="f"><label for="tt">Terminal number (TID) – as on the statement</label><input id="tt" name="tid" required value="${esc(x.tid)}"></div>
     <div class="f"><label for="tn">Name / label</label><input id="tn" name="name" value="${esc(x.name)}" placeholder="e.g. POS-03"></div>
     <div class="f"><label for="tpv">Bank / provider</label><input id="tpv" name="provider" value="${esc(x.provider)}" placeholder="e.g. Network International"></div>
+    <div class="f"><label for="tna">Payments go to (network account)</label><select id="tna" name="networkAcct">${opts(acctOpts(["network"]), x.networkAcct || "1120")}</select></div>
     <div class="f"><label for="tdr">Assigned driver</label><select id="tdr" name="driverId">${listOpts(S.drivers, d => d.name || d.id, x.driverId, "Not assigned")}</select></div>
     <div class="f"><label for="ttf">Assigned from</label><input id="ttf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
     <div class="f"><label for="ttn">Note (optional)</label><input id="ttn" name="termNote" placeholder="e.g. handed over at the office"></div>
@@ -1257,7 +1365,9 @@ function vEntries(){
     <div class="f"><label for="ec">Expense category</label><select id="ec" name="category">${opts(EXP_CATS, x.category)}</select></div>
     <div class="f"><label for="ea">Amount excl. VAT (AED)</label><input id="ea" name="amount" type="number" step="0.01" required value="${esc(x.amount ?? "")}"></div>
     <div class="f"><label for="ev">VAT (AED)</label><input id="ev" name="vat" type="number" step="0.01" value="${esc(x.vat ?? "")}"></div>
-    <div class="f"><label for="ep">Paid from / received into</label><select id="ep" name="paidFrom">${opts(PAID_FROM, x.paidFrom)}</select></div>
+    <div class="f"><label for="ep">Paid from / received into</label><select id="ep" name="paidFrom">${opts(acctOpts(null, true), x.paidFrom)}</select></div>
+    <div class="f"><label for="eto">Received in (transfers)</label><select id="eto" name="toAccount">${opts(acctOpts(), x.toAccount, "—")}</select></div>
+    <div class="f"><label for="efe">Bank charges (transfers)</label><input id="efe" name="fee" type="number" step="0.01" value="${esc(x.fee ?? "")}"></div>
     <div class="f"><label for="ev2">Car</label><select id="ev2" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), x.vehicleId, "—")}</select></div>
     <div class="f"><label for="edr">Driver</label><select id="edr" name="driverId">${listOpts(S.drivers, d=>d.name||d.id, x.driverId, "—")}</select></div>
     <div class="f"><label for="epl">Platform (for payouts)</label><select id="epl" name="platformId">${opts({...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id,p.name||p.id]))}, x.platformId || "uber")}</select></div>
@@ -1340,7 +1450,7 @@ function vSettings(){
     <div class="f"><label for="sem">Email</label><input id="sem" name="email" value="${esc(s.email)}"></div>
     <div class="f"><label for="ssn">Signatory name</label><input id="ssn" name="signatory" value="${esc(s.signatory)}"></div>
     <div class="f"><label for="sst">Signatory title</label><input id="sst" name="signatoryTitle" value="${esc(s.signatoryTitle)}" placeholder="e.g. Managing Director"></div>
-    <div class="f"><label for="sls">Driver ledgers start on</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
+    <div class="f"><label for="sls">Books start on (driver ledgers, bank & cash opening balances)</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
   </form></div>
@@ -1387,10 +1497,12 @@ document.addEventListener("click", async ev => {
   if(t.id === "impGo"){ runImport(); return; }
   if(t.id === "impAct"){ runActivityImport(); return; }
   if(t.id === "posGo"){ runPosImport(); return; }
+  if(t.dataset.acctview != null){ S.acctView = t.dataset.acctview; S.edit = null; render(); window.scrollTo(0,0); return; }
+  if(t.id === "expAcct"){ const R = acctLines(S.acctView, historyJournal()); saveCsv(`${norm(acctName(S.acctView))}_${S.from}_${S.to}.csv`, [["Date","Description","Money in","Money out","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.memo, l.dr ? l.dr.toFixed(2) : "", l.cr ? l.cr.toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
   if(t.id === "posCancel"){ S.posState = (S.posQueue||[]).shift() || null; render(); return; }
   if(t.dataset.recon != null){ S.reconDriver = t.dataset.recon === S.reconDriver ? "" : t.dataset.recon; render(); return; }
   if(t.id === "expRecon"){ const R = reconRows(); saveCsv(`reconciliation_${S.from}_${S.to}.csv`, [["Driver","Trips","Total payment","Payout from application","Card payment (terminal)","Cash from driver (handed over / spent)","Difference (cash still with driver)"], ...R.map(r => [dName(r.id), r.n, ...[r.total, r.app, r.card, r.handed, r.diff].map(x => r2(x).toFixed(2))])]); return; }
-  if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [S.to, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
+  if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [l.date, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
   if(t.dataset.repdel != null && t.dataset.item){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
     const it = S.ditems[t.dataset.item]; if(!it) return; const {id:_, ...b} = it;
@@ -1442,6 +1554,23 @@ document.addEventListener("submit", async ev => {
       fd.terms = hist;
     }
     if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
+  }
+  if(f.id === "fAccount"){
+    let id = f.dataset.id;
+    if(!id){ const used = new Set(cashAccounts().map(a => a.id)); let n = CASH_RANGE[fd.type] || 1101; while(used.has(String(n)) && n % 10 !== 0) n++;
+      if(used.has(String(n)) || n % 10 === 0){ toast("No free account code left for this type."); return; } id = String(n); }
+    const prev = cashAccounts().find(a => a.id === id) || {}, {isDefault, ...pb} = prev;
+    const rec = {...pb, ...fd, type: prev.type || fd.type, opening: String(fd.opening ?? "") === "" ? 0 : num(fd.opening)}; delete rec.id;
+    if(await writeOk(S.db.doc("accounts/" + id).set(rec))){ S.edit = null; toast("Account saved."); render(); }
+    return;
+  }
+  if(f.id === "fTransfer"){
+    if(fd.paidFrom === fd.toAccount){ toast("Choose two different accounts."); return; }
+    if(!num(fd.amount)){ toast("Enter the amount."); return; }
+    const m = fd.date.slice(0,7), ref = S.db.doc("entries/" + m), snap = await ref.get(), rows = snap.exists ? (snap.data().rows || []) : [];
+    rows.push({id: uid(), date: fd.date, type: "transfer", paidFrom: fd.paidFrom, toAccount: fd.toAccount, amount: num(fd.amount), fee: num(fd.fee), note: fd.note || ""});
+    if(await writeOk(ref.set({month: m, rows}))){ await loadPeriod(); render(); toast("Transfer saved."); }
+    return;
   }
   if(f.id === "fItem"){
     if(!fd.driverId){ toast("Choose the driver."); return; }

@@ -41,3 +41,10 @@ Note: automating the Uber portal may conflict with Uber's terms. If Uber grants 
 - **Payment machines → Upload statements**: drop statements from any provider (Network International, Magnati, Geidea…) as Excel or CSV, several at once. Title lines above the table and total rows are skipped. Machines are matched to the statement by terminal number (TID), ignoring leading zeros. Match the columns once (date, TID, amount, fee, reference, type) and the mapping is remembered. Declined rows are skipped, refunds and voids are negative, and unknown TIDs are added as new terminals.
 - A card payment is credited to the driver holding the terminal on that day, because he did not keep that money as cash. The ledger posts it as Dr 1120 card receipts / Cr 2100 driver; the card fee goes to 5300. A payment on an unassigned terminal goes to 2150 until the terminal is assigned.
 - **Reconciliation** per driver: Total payment = Payout from application + Card payment + Cash from driver + Difference. The difference is cash still with the driver. Click a driver to see each day; days with more card payments than cash trips are flagged.
+
+## Bank & cash (cash and cash equivalents)
+
+- **Bank & cash accounts**, like Manager.io's Bank and Cash Accounts: bank accounts (codes 1100–1109), cash accounts (1110–1119) and card network / merchant balances (1120–1129). 1100 Bank, 1110 Cash in hand and 1120 Card machine receipts always exist and can be renamed; more can be added with an opening balance as at the books start date.
+- Click an account to see its ledger (money in, money out, running balance, export CSV). Every journal line is now dated, and the journal export uses those dates.
+- **Inter-account transfers**: bank to bank, cash deposit, petty cash top-up, or a card network settling to the bank, with optional bank charges taken from the paying account.
+- Each platform has a "Payouts paid into" account, and each payment machine has a "Payments go to" network account.
