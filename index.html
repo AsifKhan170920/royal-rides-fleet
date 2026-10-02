@@ -5,6 +5,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
 <style>
 /* Layout: fixed left rail (collapses to a scrolling tab strip on phones) + working canvas with a sticky period bar */
 :root{
@@ -167,6 +168,7 @@ const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import Uber data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],
   ["Money",null],["entries","Expenses & payments"],["settlement","Driver settlement"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
+  ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
 ];
 const EXP_CATS = {
@@ -250,7 +252,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -383,7 +385,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {dashboard:vDashboard, trips:vTrips, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings};
+  const fns = {dashboard:vDashboard, trips:vTrips, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -558,7 +560,7 @@ function vDrivers(){
   <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th></th></tr></thead><tbody>
   ${list.map(x=>{ const c = C.D[x.id] || {}; const terms = !x.payModel ? `<span class="pill warn">Terms needed</span>` : x.payModel==="commission" ? `${num(x.commissionPct)}% commission` : x.payModel==="rent" ? `Rent ${fmt(num(x.rentPerDay))}/day` : x.payModel==="salary" ? `Salary ${fmt(num(x.salary))}/mo` : `Salary ${fmt(num(x.salary))} + ${num(x.commissionPct)}%`;
-    return `<tr><td>${esc(x.name)} ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${x.vehicleId?esc(vName(x.vehicleId)):'<span class="muted">—</span>'}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button></td></tr>`;}).join("")}
+    return `<tr><td>${esc(x.name)} ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${x.vehicleId?esc(vName(x.vehicleId)):'<span class="muted">—</span>'}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No drivers yet</b>Add a driver, or import an Uber report and drivers are created from it.</div>`}</div>`;
 }
 function driverForm(id, d){
@@ -614,7 +616,7 @@ function vInvestors(){
     <div class="f"><label for="ib">Bank / IBAN note</label><input id="ib" name="bank" value="${esc(x.bank)}"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save investor</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${e.id?`<button class="btn danger" type="button" data-del="investors" data-id="${esc(e.id)}">Delete</button>`:""}</div></form></div>` : ""}
   <div class="section"><div class="head"><div><h2>Investors</h2><p class="sub">Terms are set per car on the Vehicles page, so one investor can hold cars on different terms.</p></div><button class="btn primary" data-edit="investor" data-id="">Add investor</button></div>
-  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td>${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate)).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td>${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate)).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
 }
 
 /* ---------- entries ---------- */
@@ -702,6 +704,14 @@ function vSettings(){
     <div class="f"><label for="sfv">Uber fares VAT treatment</label><select id="sfv" name="fareVat">${opts({exempt:"Exempt (local passenger transport)", standard:"Standard 5% (VAT inside fare)"}, s.fareVat || "exempt")}</select></div>
     <div class="f"><label for="sfr">VAT on Uber service fee</label><select id="sfr" name="feeVatRecoverable">${opts({false:"Not recoverable (cost)", true:"Recoverable input VAT"}, String(!!s.feeVatRecoverable))}</select></div>
     <div class="f"><label for="sir">VAT on expenses</label><select id="sir" name="inputVatRecoverable">${opts({false:"Not recoverable (cost)", true:"Recoverable input VAT"}, String(!!s.inputVatRecoverable))}</select></div>
+    <div class="f wide" style="margin-top:6px"><b>Letterhead (offer letters and agreements)</b></div>
+    <div class="f"><label for="sad">Address</label><input id="sad" name="address" value="${esc(s.address)}"></div>
+    <div class="f"><label for="sli">Trade licence no.</label><input id="sli" name="licence" value="${esc(s.licence)}"></div>
+    <div class="f"><label for="str">TRN</label><input id="str" name="trn" value="${esc(s.trn)}"></div>
+    <div class="f"><label for="sph">Phone</label><input id="sph" name="phone" value="${esc(s.phone)}"></div>
+    <div class="f"><label for="sem">Email</label><input id="sem" name="email" value="${esc(s.email)}"></div>
+    <div class="f"><label for="ssn">Signatory name</label><input id="ssn" name="signatory" value="${esc(s.signatory)}"></div>
+    <div class="f"><label for="sst">Signatory title</label><input id="sst" name="signatoryTitle" value="${esc(s.signatoryTitle)}" placeholder="e.g. Managing Director"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
   </form></div>
@@ -799,5 +809,6 @@ document.addEventListener("click", async ev => {
 
 boot();
 </script>
+<script src="docs.js?v=1"></script>
 
 </body></html>
