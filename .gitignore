@@ -3,3 +3,4 @@ uber-sync/.env
 uber-sync/profile/
 *.csv
 sync-log.txt
+tmp-test/

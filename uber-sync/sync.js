@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import Papa from 'papaparse';
 import { chromium } from 'playwright-core';
 import { initializeApp } from 'firebase/app';
@@ -45,98 +46,81 @@ async function portal() {
 const ref = (...p) => doc(db, 'apps', 'fleet', 'store', 'rr', ...p);
 const col = name => collection(db, 'apps', 'fleet', 'store', 'rr', name);
 
-// ---------------------------------------------------------------- CSV → trips (same rules as the Import page)
-const num = v => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0; };
-const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
-const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+// ---------------------------------------------------------------- reports → Fleet Ledger (same reader as the Import page)
+const UP = createRequire(import.meta.url)('../uber-parse.js');
+const { norm } = UP;
 const iso = d => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
-function parseTripDate(v) {
-  const s = String(v || '').trim(); if (!s) return null;
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ]?(\d{2}):?(\d{2})?/);
-  if (m) return { date: `${m[1]}-${m[2]}-${m[3]}`, time: m[4] ? `${m[4]}:${m[5] || '00'}` : '' };
-  m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:[ ,T]+(\d{1,2}):(\d{2}))?/);
-  if (m) { let d = +m[1], mo = +m[2]; if (mo > 12) [d, mo] = [mo, d]; return { date: `${m[3]}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`, time: m[4] ? `${m[4].padStart(2, '0')}:${m[5]}` : '' }; }
-  const d = new Date(s); if (!isNaN(d)) return { date: iso(d), time: d.toTimeString().slice(0, 5) };
-  return null;
-}
-function guessMap(h) {
-  const L = h.map(x => x.toLowerCase());
-  const one = re => { const i = L.findIndex(x => re.test(x)); return i < 0 ? [] : [h[i]]; };
-  const many = (re, not) => h.filter((x, i) => re.test(L[i]) && !(not && not.test(L[i])));
-  const total = /^(total|paid to you)$|^paid to you\s*:\s*your earnings$|^paid to you\s*:\s*trip balance$/;
-  return {
-    tripId: one(/trip.*(uuid|id)|^uuid$/), date: one(/^(trip request time|request time|trip date|date|vs reporting|reporting time|transaction time|local time|trip time|time)$/).concat(one(/date|time|reporting/)).filter((x,i,a)=>a.indexOf(x)===i && !/fare|wait|earning|paid|amount|fee|tip/i.test(x)).slice(0,1), driverUuid: one(/driver.*uuid/),
-    driverFirst: one(/first ?name/), driverLast: one(/surname|last ?name/), driverName: one(/^(driver ?(full ?)?name|driver)$/), plate: one(/plate|licen[cs]e/),
-    fare: many(/fare|surge|wait time|time at stop|cancell|premium/, /service|tax|vat|adjust|refund|payout/).filter(x => !total.test(x.toLowerCase())),
-    fee: many(/service fee|commission|uber fee/, /tax|vat/), tax: many(/tax|vat/, /fare|refund/), tip: many(/\btip/),
-    refund: many(/refund|toll|airport|expense/, /payout|cash/), cash: many(/cash/), km: many(/distance|km/),
-  };
-}
-function toTrips(rows, map) {
-  const g = (r, k) => (map[k] || []).map(c => r[c]).find(v => v != null && String(v).trim() !== '');
-  const s = (r, k, abs) => (map[k] || []).reduce((a, c) => a + (abs ? Math.abs(num(r[c])) : num(r[c])), 0);
-  const out = [];
-  rows.forEach((r, i) => {
-    const f = s(r, 'fare'), sf = s(r, 'fee', true), tx = s(r, 'tax', true), tp = s(r, 'tip'), rf = s(r, 'refund'), c = s(r, 'cash', true), km = s(r, 'km');
-    if (!f && !sf && !tp && !rf && !c) return;
-    const dt = parseTripDate(g(r, 'date')); if (!dt) return;
-    const name = (g(r, 'driverName') || [g(r, 'driverFirst'), g(r, 'driverLast')].filter(Boolean).join(' ') || '').trim();
-    let id = g(r, 'tripId'); if (!id) id = 'row-' + norm(JSON.stringify(r)).slice(0, 40) + '-' + i;
-    out.push({ id: String(id), d: dt.date, t: dt.time, uuid: g(r, 'driverUuid') || '', name, p: g(r, 'plate') || '', f: r2(f), sf: r2(sf), tx: r2(tx), tp: r2(tp), rf: r2(rf), c: r2(c), km: r2(km) });
-  });
-  return out;
-}
 
-async function importCsv(file) {
-  const text = fs.readFileSync(file, 'utf8').replace(/^\ufeff/, '');
-  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-  const headers = parsed.meta.fields || [];
-  if (!headers.length) throw new Error(`${path.basename(file)} has no header row.`);
-  await portal();
-  const setSnap = await getDoc(ref('settings', 'main'));
-  const settings = setSnap.exists() ? setSnap.data() : {};
-  const sig = norm(headers.join('|')).slice(0, 180);
-  const map = (settings.mappings || {})[sig] || guessMap(headers);
-  const rows = toTrips(parsed.data, map);
-  if (!rows.length) { log(`${path.basename(file)}: no trips found (check the column mapping on the Import page once).`); return { added: 0, dup: 0 }; }
-
-  // drivers and cars: match existing ones, create the new ones (flagged "created from import")
+async function driversAndCars() {
   const drivers = {}, vehicles = {};
   (await getDocs(col('drivers'))).forEach(d => drivers[d.id] = d.data());
   (await getDocs(col('vehicles'))).forEach(d => vehicles[d.id] = d.data());
   const byUuid = {}, byName = {}, plates = {};
   Object.entries(drivers).forEach(([id, d]) => { if (d.uberUuid) byUuid[d.uberUuid] = id; byName[norm(d.name)] = id; });
   Object.entries(vehicles).forEach(([id, v]) => plates[norm(v.plate)] = id);
-  for (const t of rows) {
-    let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]);
-    if (!id) {
-      id = 'd-' + (norm(t.uuid).slice(0, 12) || norm(t.name).slice(0, 20) || Math.random().toString(36).slice(2, 10));
-      byUuid[t.uuid] = id; byName[norm(t.name)] = id;
-      await setDoc(ref('drivers', id), { name: t.name || 'Unnamed driver', uberUuid: t.uuid || '', payModel: '', commissionPct: 0, active: true, createdFromImport: true });
-      log('new driver:', t.name || id);
-    } else if (t.uuid && drivers[id] && !drivers[id].uberUuid) {
-      drivers[id].uberUuid = t.uuid; await setDoc(ref('drivers', id), drivers[id]);
+  return {
+    async driver(t) {
+      let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]);
+      if (!id) {
+        id = 'd-' + (norm(t.name).slice(0, 20) || norm(t.uuid).slice(0, 12) || Math.random().toString(36).slice(2, 10));
+        byUuid[t.uuid] = id; byName[norm(t.name)] = id;
+        await setDoc(ref('drivers', id), { name: t.name || 'Unnamed driver', uberUuid: t.uuid || '', payModel: '', commissionPct: 0, active: true, createdFromImport: true });
+        log('new driver:', t.name || id);
+      }
+      return id;
+    },
+    async car(plate, vu) {
+      if (!plate || plates[norm(plate)]) return;
+      const id = 'v-' + norm(plate).slice(0, 20); plates[norm(plate)] = id;
+      await setDoc(ref('vehicles', id), { plate, uberVehicleUuid: vu || '', fleetId: '', model: '', investorId: '', active: true, createdFromImport: true });
+      log('new car:', plate);
+    },
+  };
+}
+
+async function importCsv(file) {
+  const text = fs.readFileSync(file, 'utf8').replace(/^\ufeff/, '');
+  const parsed = Papa.parse(text, { header: true, skipEmptyLines: true, transformHeader: h => h.replace(/^\ufeff/, '') });
+  const headers = parsed.meta.fields || [];
+  if (!headers.length) throw new Error(`${path.basename(file)} has no header row.`);
+  await portal();
+  const setSnap = await getDoc(ref('settings', 'main'));
+  const settings = setSnap.exists() ? setSnap.data() : {};
+  const kind = UP.detect(headers), dc = await driversAndCars();
+  const byDay = {}; let added = 0, dup = 0, label;
+
+  if (kind === 'activity') {
+    // trip details: car, distance, status – joined to the payments by Trip UUID
+    const rows = UP.activityRows(parsed.data, headers);
+    for (const t of rows) { t.dr = await dc.driver(t); await dc.car(t.p, t.vu); (byDay[t.d] ||= []).push(t); }
+    for (const [day, list] of Object.entries(byDay)) {
+      const snap = await getDoc(ref('tripinfo', day)); const merged = snap.exists() ? { ...(snap.data().rows || {}) } : {};
+      for (const t of list) { merged[t.tr] ? dup++ : added++; merged[t.tr] = { d: t.d, t: t.t, dr: t.dr, p: t.p, vu: t.vu, km: t.km, st: t.st, prod: t.prod, pay: t.pay }; }
+      await setDoc(ref('tripinfo', day), { date: day, rows: merged });
     }
-    t.dr = id;
-    if (t.p && !plates[norm(t.p)]) {
-      const vid = 'v-' + norm(t.p).slice(0, 20); plates[norm(t.p)] = vid;
-      await setDoc(ref('vehicles', vid), { plate: t.p, fleetId: '', model: '', investorId: '', active: true, createdFromImport: true });
-      log('new car:', t.p);
+    label = 'Uber Sync – Trip activity: ';
+  } else {
+    // money rows, one per transaction; checked against the report's own "Paid to you" total
+    const sig = norm(headers.join('|')).slice(0, 180);
+    const map = (settings.mappings || {})[sig] || UP.guessMap(headers);
+    const rows = UP.paymentRows(parsed.data, map).filter(t => t.d);
+    const paid = UP.paidToYou(parsed.data, headers), ours = UP.balanceOf(rows);
+    if (paid != null && Math.abs(paid - ours) > 0.05) log(`WARNING: rows add up to ${ours}, the report's "Paid to you" is ${paid}. Check the column mapping on the Import page.`);
+    else if (paid != null) log(`Checked: rows add up to the report's "Paid to you" total (${paid}).`);
+    for (const t of rows) { t.dr = await dc.driver(t); await dc.car(t.p); (byDay[t.d] ||= []).push(t); }
+    for (const [day, list] of Object.entries(byDay)) {
+      const snap = await getDoc(ref('trips', day)); const existing = snap.exists() ? (snap.data().rows || {}) : {};
+      const merged = { ...existing };
+      for (const t of list) { if (existing[t.id]) { dup++; continue; } merged[t.id] = { tr: t.tr || '', d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km }; added++; }
+      await setDoc(ref('trips', day), { date: day, rows: merged });
     }
-  }
-  // one document per day, skipping trips already saved
-  const byDay = {}; rows.forEach(t => (byDay[t.d] ||= []).push(t));
-  let added = 0, dup = 0;
-  for (const [day, list] of Object.entries(byDay)) {
-    const snap = await getDoc(ref('trips', day)); const existing = snap.exists() ? (snap.data().rows || {}) : {};
-    const merged = { ...existing };
-    for (const t of list) { if (existing[t.id]) { dup++; continue; } merged[t.id] = { d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, km: t.km }; added++; }
-    await setDoc(ref('trips', day), { date: day, rows: merged });
+    label = 'Uber Sync: ';
   }
   const days = Object.keys(byDay).sort();
-  const entry = { at: new Date().toLocaleString('en-GB'), files: 'Uber Sync: ' + path.basename(file).slice(0, 100), added, dup, range: `${days[0]} → ${days[days.length - 1]}` };
+  if (!days.length) { log(`${path.basename(file)}: nothing to import.`); return { added: 0, dup: 0 }; }
+  const entry = { at: new Date().toLocaleString('en-GB'), files: (label + path.basename(file)).slice(0, 120), added, dup, range: `${days[0]} → ${days[days.length - 1]}` };
   await setDoc(ref('settings', 'main'), { ...settings, importLog: [...(settings.importLog || []), entry].slice(-30) });
-  log(`${path.basename(file)}: ${added} new trips saved, ${dup} already there (${entry.range}).`);
+  log(`${path.basename(file)} (${kind}): ${added} new, ${dup} already there (${entry.range}).`);
   return { added, dup };
 }
 
@@ -184,8 +168,12 @@ async function fetchReport(page) {
 }
 
 async function main() {
-  const file = arg('--file');
-  if (file && file !== true) { await importCsv(path.resolve(String(file))); process.exit(0); }
+  const files = process.argv.flatMap((x, i, a) => x === '--file' && a[i + 1] ? [path.resolve(a[i + 1])] : []);
+  if (files.length) {
+    files.sort((x, y) => (/activity/i.test(y) ? 1 : 0) - (/activity/i.test(x) ? 1 : 0));
+    for (const f of files) await importCsv(f);
+    process.exit(0);
+  }
   const ctx = await openUber();
   const page = ctx.pages()[0] || await ctx.newPage();
   await page.goto(UBER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
