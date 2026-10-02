@@ -84,3 +84,14 @@ Choosing a driver as "Paid to" / "Received from" turns the form into a driver fo
 
 - **Chart of accounts**: all accounts grouped by type (1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses), with opening and current balances and a ledger for each. Accounts can be added (collection `coa`, doc id = code), renamed, and given opening balances.
 - **Financial statements**: profit & loss for the period, and a balance sheet at the period end (opening balances plus everything posted since the books start). Any gap shows as "opening balances not yet entered".
+
+## Trip settlement
+
+When a driver's salary is finalised, the ids of the trip rows it paid are stored on the payroll record (`rows`). A trip that arrives later with a date inside a finalised period is shown as **Missed** in the driver's Trip history. It is listed under "Unsettled trips from earlier periods" in the next salary computation, added to that salary, and settled when that period is finalised. Each trip shows its settlement status: settled (with the period), missed, or not settled yet.
+
+## PDC cheques (pdc.js)
+
+- **Accounts → PDC cheques** holds received and issued post-dated cheques: cheque no., bank, date, amount, customer / supplier / driver or a name, the bank account, and status (pending, cleared, bounced, cancelled).
+- A PDC is a memo until its date; nothing is posted.
+- When the cheque date arrives, a banner shows on every page. A browser notification can be switched on from the PDC page.
+- "Record receipt" / "Record payment" opens the form filled in from the cheque (1200 for a customer, 2000 for a supplier, the driver form for a driver). Saving it marks the PDC cleared, with a link to the document.

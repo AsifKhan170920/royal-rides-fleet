@@ -105,6 +105,14 @@ function openDocRow(id){
     else S.bk.data.purpose = "other";
   }
 }
+// a receipt / payment filled in from a post-dated cheque (pdc.js); saving it marks the cheque cleared
+function newFromPdc(p){
+  const k = p.dir === "in" ? "receipt" : "payment"; newDoc(k);
+  const d = S.bk.data, amt = String(num(p.amount));
+  Object.assign(d, {date: p.date, paidFrom: p.account || "1100", party: p.party || "", payee: p.payee || "", ref: `PDC ${p.chequeNo || ""}${p.bank ? " · " + p.bank : ""}`, note: p.note || "", pdcId: p.id});
+  if((p.party || "").startsWith("d:")){ d.purpose = k === "payment" ? "salary" : "cash"; d.amount = amt; }
+  else S.bk.lines = [{...blankLine(k), account: (p.party || "").startsWith("c:") ? "1200" : (p.party || "").startsWith("s:") ? "2000" : "", amount: amt, desc: p.note || ""}];
+}
 function newDriverDoc(k, drId, purpose, amt){
   newDoc(k); S.bk.data.party = "d:" + drId; S.bk.data.purpose = purpose; S.bk.data.amount = amt > 0 ? String(r2(amt)) : "";
 }
@@ -202,11 +210,13 @@ async function saveBk(){
         paidFrom: d.paidFrom || "1100", installment: num(d.installment), startMonth: d.startMonth || d.date.slice(0,7), repayments: [], ref: d.ref || "", viaPayment: true, by, at: new Date().toISOString()};
       if(b.id && S.entries.some(x => x.id === b.id)){ const e = S.entries.find(x => x.id === b.id), m0 = e.date.slice(0,7), s0 = await S.db.doc("entries/" + m0).get(); if(!await writeOk(S.db.doc("entries/" + m0).set({month: m0, rows: (s0.exists ? s0.data().rows || [] : []).filter(r => r.id !== b.id)}))) return; }
       if(!await writeOk(S.db.doc("driverItems/i-" + uid()).set(rec))) return;
+      if(d.pdcId && window.PDC) await PDC.cleared(d.pdcId, "", d.date);
       S.bk = null; await loadPeriod(); render(); toast(`${ITEM_KINDS[p]} recorded for ${dName(drId)}. It is on his Accounts tab.`); return;
     }
     if(p === "repay"){
       const it = S.ditems[d.itemId]; if(!it){ toast("Choose the loan or advance."); return; } const {id:_, ...ib} = it;
       if(!await writeOk(S.db.doc("driverItems/" + it.id).set({...ib, repayments: [...(ib.repayments || []), {date: d.date, amount: amt, paidTo: d.paidFrom || "1100", note: d.ref || d.desc || ""}]}))) return;
+      if(d.pdcId && window.PDC) await PDC.cleared(d.pdcId, "", d.date);
       S.bk = null; render(); toast("Repayment recorded."); return;
     }
     b.lines = [{account: "2100", desc: d.desc || (k === "payment" ? "Salary / balance payment" : "Cash received from the driver"), amount: String(amt), vat: ""}];
@@ -220,7 +230,7 @@ async function saveBk(){
   for(const l of lines){ const need = CONTROL[l.account]; if(!need || isInv(k)) continue; const p = lineParty({type:k, party:d.party}, l);
     if(!p || p[0] !== need){ toast(`Account ${l.account} needs a ${need === "c" ? "customer" : need === "s" ? "supplier" : "driver"}${k === "journal" ? " on the line" : " as " + BK[k].partyLabel.toLowerCase()}.`); return; } }
   const rec = {id: b.id || uid(), type: k, date: d.date, lines, note: d.note || "", ref: d.ref || "", by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
-  if(BK[k].cash){ rec.paidFrom = d.paidFrom || "1100"; rec.party = d.party || ""; rec.payee = d.payee || ""; }
+  if(BK[k].cash){ rec.paidFrom = d.paidFrom || "1100"; rec.party = d.party || ""; rec.payee = d.payee || ""; if(d.pdcId) rec.pdcId = d.pdcId; }
   if(isInv(k)){ rec.party = d.party; rec.dueDate = d.dueDate || ""; rec.number = d.number || ""; }
   let settings = null;
   if(k === "sale_invoice" && !rec.number){ rec.number = nextInvNo(); settings = {...S.settings, invSeq: (num(S.settings.invSeq) || 0) + 1}; }
@@ -231,6 +241,7 @@ async function saveBk(){
   rows = rows.filter(r => r.id !== rec.id); rows.push(rec);
   if(!await writeOk(S.db.doc("entries/" + m).set({month: m, rows}))) return;
   if(settings) await writeOk(S.db.doc("settings/main").set(settings));
+  if(d.pdcId && window.PDC) await PDC.cleared(d.pdcId, rec.id, d.date);
   S.bk = null; await loadPeriod(); render(); toast(`${BK[k].title}${rec.number ? " " + rec.number : ""} saved.`);
 }
 async function deleteBk(){
@@ -411,7 +422,7 @@ function statementsView(){
 }
 
 /* ---------- wiring ---------- */
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc};
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, partyName, partyOpts};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),

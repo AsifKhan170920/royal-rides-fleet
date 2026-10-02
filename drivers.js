@@ -27,9 +27,10 @@ function dTrips(id){
   const rows = S.trips.filter(t => t.dr === id && (t.tr || t.f || t.sf || t.tp || t.c || t.rf || t.oe));
   if(!rows.length) return `<div class="empty"><b>No trips in this period</b>Change the dates at the top, or import the platform reports.</div>`;
   const multi = new Set(rows.map(plOf)).size > 1, shown = rows.slice(0, 500), net = t => (t.f||0) - (t.sf||0) - (t.tx||0);
-  return `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi ? "<th>Platform</th>" : ""}<th>Car</th><th class="num">Fare</th><th class="num">Fee + VAT</th><th class="num">Tips</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Payment</th></tr></thead><tbody>
-  ${shown.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td>${multi ? `<td>${esc(pName(plOf(t)))}</td>` : ""}<td>${esc(vName(vehicleForTrip(t) || "unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.sf||0) + (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt(net(t))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc((t.st || "").replace(/_/g, " "))}</td><td class="small">${esc(t.pay || (t.c ? "cash" : ""))}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.rf))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="2"></td></tr></tfoot></table></div>`;
+  const sm = settledMap(id), runs = Object.values(S.payroll).filter(p => p.driverId === id);
+  return `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi ? "<th>Platform</th>" : ""}<th>Car</th><th class="num">Fare</th><th class="num">Fee + VAT</th><th class="num">Tips</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Payment</th><th>Settlement</th></tr></thead><tbody>
+  ${shown.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td>${multi ? `<td>${esc(pName(plOf(t)))}</td>` : ""}<td>${esc(vName(vehicleForTrip(t) || "unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.sf||0) + (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt(net(t))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc((t.st || "").replace(/_/g, " "))}</td><td class="small">${esc(t.pay || (t.c ? "cash" : ""))}</td><td>${moneyRow(t) ? tripSettlement(t, sm, runs) : ""}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.rf))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="2"></td><td class="small">${rows.filter(t => sm[t.id]).length} settled</td></tr></tfoot></table></div>`;
 }
 
 /* ---------- transactions (running account) ---------- */
@@ -47,12 +48,36 @@ function dTx(id){
 }
 
 /* ---------- salary ---------- */
+/* Trip settlement: finalising a period stores the ids of the trip rows it paid (payroll.rows). A trip that
+   arrives later with a date inside a finalised period (platform reports are by date and time, so a trip
+   can be missed) is "unsettled": it is listed under the next salary computation and settled there. */
 const salaryOf = x => r2(num(x.balance) - num(x.books) + num(x.paid) - num(x.recv));
+const moneyRow = t => !!(t.f || t.sf || t.tx || t.tp || t.c || t.rf);
+// what one trip row adds to the driver's salary: his share of the net, tips, less the cash he kept
+function tripEffect(t){
+  const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, model = tm.payModel || "commission", net = (t.f||0) - (t.sf||0) - (t.tx||0);
+  const share = (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct) / 100 : model === "rent" ? net : 0;
+  return share + (setting("tipsToDriver", true) ? (t.tp || 0) : 0) - (t.c || 0);   // not rounded per trip, so sums match the computation
+}
+function settledMap(id){ const m = {}; Object.values(S.payroll).filter(p => p.driverId === id).forEach(p => (p.rows || []).forEach(r => m[r] = p)); return m; }
+// trips dated inside a finalised period (one that recorded its trips) but not settled by any period
+function lateTrips(id){
+  if(!historyReady()) return null;
+  const runs = Object.values(S.payroll).filter(p => p.driverId === id && Array.isArray(p.rows)), sm = settledMap(id);
+  return S.ledger.trips.filter(t => t.dr === id && moneyRow(t) && t.d < S.from && !sm[t.id] && runs.some(p => t.d >= p.from && t.d <= p.to)).sort((a,b) => (a.d + a.t).localeCompare(b.d + b.t));
+}
+function tripSettlement(t, sm, runs){
+  const p = sm[t.id]; if(p) return `<span class="pill good">Settled ${esc(dmyS(p.from))}–${esc(dmyS(p.to))}</span>`;
+  const r = runs.find(p => t.d >= p.from && t.d <= p.to && Array.isArray(p.rows));
+  return r ? '<span class="pill warn">Missed – goes to the next salary</span>' : '<span class="pill">Not settled yet</span>';
+}
 function dSalary(id){
   const C = compute(), x = C.D[id] || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
   const runs = Object.values(S.payroll).filter(p => p.driverId === id).sort((a,b) => b.from.localeCompare(a.from));
   const overlap = runs.find(p => p.from <= S.to && p.to >= S.from), same = runs.find(p => p.from === S.from && p.to === S.to);
   const next = runs.length ? addDays(runs[0].to, 1) : null, ready = historyReady(), R = ready ? ledgerLines(id) : null;
+  // late trips: settled by this period unless it is already finalised (then they were settled by it, or wait for the next)
+  const late = same ? [] : (lateTrips(id) || []), lateEff = r2(sum(late, tripEffect)), sal = r2(salaryOf(x) + lateEff);
   const ln = (label, v, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><td style="white-space:normal">${label}</td><td class="num">${v == null ? "" : aed(v)}</td></tr>`;
   const rows = [
     ln(`Trips: ${x.n} · days worked: ${x.daysWorked || 0}`, null),
@@ -61,36 +86,58 @@ function dSalary(id){
     x.tipsDue ? ln("Tips", x.tipsDue) : "", ln("Cash collected from riders", -x.cash), x.card ? ln("Card payments on the company machine", x.card) : "",
     x.deduct ? ln("Fines / tolls charged to the driver", -x.deduct) : "", x.adv ? ln("Advances (deducted in full)", -x.adv) : "",
     x.inst ? ln("Loan / advance / visa instalments", -x.inst) : "", x.viaDriver ? ln(x.viaDriver > 0 ? "Company costs paid from the driver's cash" : "Company money collected by the driver", x.viaDriver) : "",
-    x.books ? ln("Payments, receipts & journal entries on the driver's account", x.books) : "", x.paid ? ln("Paid to the driver (expenses page)", -x.paid) : "", x.recv ? ln("Received from the driver", x.recv) : "",
-    ln("<b>Salary for the period</b> (before payments)", salaryOf(x), "tot"), (x.books || x.paid || x.recv) ? ln("Paid to / received from the driver in the period", r2(x.balance - salaryOf(x))) : "", ln("<b>Balance for the period</b>", x.balance, "tot"),
-    R ? ln("Balance brought forward", R.before) : "", R ? ln(`<b>${R.closing >= 0 ? "Payable to the driver" : "Driver owes the company"} at ${esc(dmyS(S.to))}</b>`, R.closing, "tot") : ""].join("");
+    late.length ? ln(`Unsettled trips from earlier periods (${late.length}) – see below`, lateEff) : "",
+    ln("<b>Salary for the period</b> (before payments)", sal, "tot"),
+    (x.books || x.paid || x.recv) ? ln("Paid to / received from the driver in the period", r2(x.balance - salaryOf(x))) : "",
+    ln("<b>Balance for the period</b>", r2(x.balance + lateEff), "tot"),
+    R ? ln("Balance brought forward" + (late.length ? " (without the unsettled trips)" : ""), r2(R.before - lateEff)) : "",
+    R ? ln(`<b>${R.closing >= 0 ? "Payable to the driver" : "Driver owes the company"} at ${esc(dmyS(S.to))}</b>`, R.closing, "tot") : ""].join("");
+  const lateTbl = late.length ? `<h2 style="margin-top:16px">Unsettled trips from earlier periods</h2><p class="sub">These trips are dated in a period that was already finalised, but they were not part of it (they arrived in a later report). They are added to this salary and settled when you finalise.</p>
+    <div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Trip</th><th class="num">Fare</th><th class="num">Net</th><th class="num">Tips</th><th class="num">Cash</th><th class="num">Effect on salary</th></tr></thead><tbody>
+    ${late.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td><td class="mono small">${esc(String(t.tr || t.id).slice(0,13))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.f||0) - (t.sf||0) - (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.c)}</td><td class="num">${aed(tripEffect(t))}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td colspan="7">Total</td><td class="num"><b>${aed(lateEff)}</b></td></tr></tfoot></table></div>` : "";
   let fin;
   if(same){
-    const was = same.salary != null ? same.salary : salaryOf(same), now = salaryOf(x), changed = Math.abs(was - now) > 0.01;
-    fin = `<div class="banner ${changed ? "" : "info"}">Finalised on ${esc(new Date(same.at).toLocaleString("en-GB"))}${same.by ? " by " + esc(same.by) : ""}: salary AED ${fmt(was)}. ${changed ? `The computation has changed since – it is now AED ${fmt(now)}. Check what was added (trips, deductions, instalments), or reopen and finalise again.` : "The computation still matches. Payments to or from the driver don't change it."}</div>`;
+    let note;
+    if(Array.isArray(same.rows)){
+      // compare the trips it settled and the rest of the computation separately
+      const inRec = new Set(same.rows), periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t));
+      const newTrips = periodTrips.filter(t => !inRec.has(t.id)), nonTrip = r2(salaryOf(x) - sum(periodTrips, tripEffect));
+      const changed = Math.abs(nonTrip - num(same.nonTrip)) > 0.05;
+      note = `${newTrips.length ? `${newTrips.length} trip(s) dated in this period arrived after it was finalised (AED ${fmt(sum(newTrips, tripEffect))}); they show as unsettled in the next salary. ` : ""}${changed ? `Other items changed since (deductions, instalments…): AED ${fmt(num(same.nonTrip))} then, AED ${fmt(nonTrip)} now – reopen and finalise again if needed.` : "Payments to or from the driver don't change it."}`;
+      fin = `<div class="banner ${changed || newTrips.length ? "" : "info"}">Finalised on ${esc(new Date(same.at).toLocaleString("en-GB"))}${same.by ? " by " + esc(same.by) : ""}: salary AED ${fmt(same.salary)}, ${same.rows.length} trip rows settled${same.late && same.late.length ? ` (incl. ${same.late.length} from earlier periods)` : ""}. ${note}</div>`;
+    } else {
+      const was = same.salary != null ? same.salary : salaryOf(same), now = salaryOf(x), changed = Math.abs(was - now) > 0.01;
+      fin = `<div class="banner ${changed ? "" : "info"}">Finalised on ${esc(new Date(same.at).toLocaleString("en-GB"))}${same.by ? " by " + esc(same.by) : ""}: salary AED ${fmt(was)}. ${changed ? `The computation has changed since – it is now AED ${fmt(now)}.` : "The computation still matches."}</div>`;
+    }
   } else if(overlap){
     fin = `<div class="banner">Part of this period is already finalised (${esc(dmyS(overlap.from))} – ${esc(dmyS(overlap.to))}). Choose dates after ${esc(dmyS(runs[0].to))}.${next ? ` <button class="btn sm" data-setperiod="${next}|${monthEnd(next.slice(0,7))}">Use ${esc(dmyS(next))} – ${esc(dmyS(monthEnd(next.slice(0,7))))}</button>` : ""}</div>`;
   } else {
-    fin = `<div class="row" style="gap:10px;align-items:center"><button class="btn primary" data-finalise="${esc(id)}" ${S.canWrite && S.db ? "" : "disabled"}>Finalise salary for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</button>
+    fin = `<div class="row" style="gap:10px;align-items:center"><button class="btn primary" data-finalise="${esc(id)}" ${S.canWrite && S.db && ready ? "" : "disabled"}>Finalise salary for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</button>
       ${next && next !== S.from ? `<span class="small muted">Last finalised period ended ${esc(dmyS(runs[0].to))}.</span> <button class="btn sm" data-setperiod="${next}|${monthEnd(next.slice(0,7))}">Next period: ${esc(dmyS(next))} – ${esc(dmyS(monthEnd(next.slice(0,7))))}</button>` : ""}</div>
-      <p class="small muted" style="margin-top:6px">Finalising stores this computation as the record for the period. A finalised period can't be finalised again or overlapped.</p>`;
+      <p class="small muted" style="margin-top:6px">Finalising stores this computation and marks its ${S.trips.filter(t => t.dr === id && moneyRow(t)).length + late.length} trip rows as settled. A finalised period can't be finalised again or overlapped.</p>`;
   }
   const pay = R && R.closing > 0.005 ? `<button class="btn" data-paysalary="${esc(id)}" data-amt="${r2(R.closing)}">Pay AED ${fmt(R.closing)} to the driver</button>` : "";
   return `<div class="grid2"><div><h2>Salary computation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2>
-    <div class="tbl"><table><tbody>${rows}</tbody></table></div>${!R ? `<p class="small muted">Loading the balance brought forward…</p>` : ""}</div>
+    <div class="tbl"><table><tbody>${rows}</tbody></table></div>${!R ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}</div>
     <div><h2>Finalise</h2>${fin}<div class="row" style="margin-top:10px">${pay}</div>
     <h2 style="margin-top:16px">Finalised periods</h2>${runs.length ? `<div class="tbl"><table><thead><tr><th>Period</th><th class="num">Trips</th><th class="num">Driver's share</th><th class="num">Salary</th><th class="num">Closing balance</th><th>Finalised</th><th></th></tr></thead><tbody>
-    ${runs.map(p => `<tr><td>${esc(dmyS(p.from))} – ${esc(dmyS(p.to))}</td><td class="num">${p.n}</td><td class="num">${fmt(p.ent)}</td><td class="num">${aed(p.salary != null ? p.salary : salaryOf(p))}</td><td class="num">${p.closing == null ? "—" : aed(p.closing)}</td><td class="small muted">${esc(p.by || "")}${p.at ? " · " + esc(new Date(p.at).toLocaleDateString("en-GB")) : ""}</td>
+    ${runs.map(p => `<tr><td>${esc(dmyS(p.from))} – ${esc(dmyS(p.to))}${p.late && p.late.length ? `<div class="small muted">+ ${p.late.length} earlier trip(s)</div>` : ""}</td><td class="num">${p.n}</td><td class="num">${fmt(p.ent)}</td><td class="num">${aed(p.salary != null ? p.salary : salaryOf(p))}</td><td class="num">${p.closing == null ? "—" : aed(p.closing)}</td><td class="small muted">${esc(p.by || "")}${p.at ? " · " + esc(new Date(p.at).toLocaleDateString("en-GB")) : ""}</td>
       <td class="row"><button class="btn sm" data-setperiod="${p.from}|${p.to}">Open</button><button class="btn sm danger" data-payrolldel="${esc(p.id)}">Reopen</button></td></tr>`).join("")}
     </tbody></table></div>` : `<p class="sub">No period finalised yet.</p>`}</div></div>`;
 }
 async function finalise(id){
   const runs = Object.values(S.payroll).filter(p => p.driverId === id);
   if(runs.some(p => p.from <= S.to && p.to >= S.from)){ toast("Part of this period is already finalised."); return; }
-  const x = compute().D[id] || {}, R = historyReady() ? ledgerLines(id) : null, k = ["n","daysWorked","fare","fee","tax","net","ent","tipsDue","cash","card","deduct","adv","inst","viaDriver","books","paid","recv","balance"];
-  const rec = {driverId: id, from: S.from, to: S.to, termsText: x.termsText || "", ...Object.fromEntries(k.map(f => [f, r2(num(x[f]))])), salary: salaryOf(x), opening: R ? R.before : null, closing: R ? R.closing : null,
+  if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
+  const x = compute().D[id] || {}, R = ledgerLines(id), late = lateTrips(id) || [], lateEff = r2(sum(late, tripEffect));
+  const periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t));
+  const k = ["n","daysWorked","fare","fee","tax","net","ent","tipsDue","cash","card","deduct","adv","inst","viaDriver","books","paid","recv","balance"];
+  const rec = {driverId: id, from: S.from, to: S.to, termsText: x.termsText || "", ...Object.fromEntries(k.map(f => [f, r2(num(x[f]))])),
+    salary: r2(salaryOf(x) + lateEff), nonTrip: r2(salaryOf(x) - sum(periodTrips, tripEffect)), lateEffect: lateEff,
+    rows: [...periodTrips.map(t => t.id), ...late.map(t => t.id)], late: late.map(t => t.id), opening: r2(R.before - lateEff), closing: R.closing,
     by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
-  if(await writeOk(S.db.doc("payroll/" + id + "_" + S.from).set(rec))) toast(`Salary finalised for ${dmyS(S.from)} – ${dmyS(S.to)}.`);
+  if(await writeOk(S.db.doc("payroll/" + id + "_" + S.from).set(rec))) toast(`Salary finalised for ${dmyS(S.from)} – ${dmyS(S.to)}: ${rec.rows.length} trip rows settled.`);
 }
 
 /* ---------- performance ---------- */
