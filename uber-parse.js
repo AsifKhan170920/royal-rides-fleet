@@ -32,7 +32,7 @@
   const FIELDS = [
     ["txId", "Transaction ID (one row per money movement)", false], ["tripId", "Trip ID", false], ["date", "Date / time", false],
     ["driverUuid", "Driver UUID", false], ["driverFirst", "Driver first name", false], ["driverLast", "Driver surname", false], ["driverName", "Driver full name", false], ["plate", "Vehicle plate", false],
-    ["fare", "Fare (if there is a fare total, only that column)", true], ["fee", "Uber service fee", true], ["tax", "VAT / taxes charged by Uber", true], ["tip", "Tip", true],
+    ["fare", "Fare (if there is a fare total, only that column)", true], ["fee", "Platform service fee / commission", true], ["tax", "VAT / taxes charged by the platform", true], ["tip", "Tip", true],
     ["refund", "Refunds & expenses (tolls, airport, surcharges)", true], ["cash", "Cash collected", true], ["other", "Other earnings / incentives", true],
     ["payout", "Payouts transferred to the bank", true], ["km", "Distance (km)", true],
   ];
@@ -47,10 +47,11 @@
     const dateCols = one(/^(trip request time|request time|trip date|date|vs reporting|reporting time|transaction time|local time|trip time|time)$/)
       .concat(one(/date|time|reporting/)).filter((x, i, a) => a.indexOf(x) === i && !/fare|wait|earning|paid|amount|fee|tip|drop/i.test(x)).slice(0, 1);
     return {
-      txId: one(/^transaction uuid$|^transaction id$/), tripId: one(/^trip uuid$/).length ? one(/^trip uuid$/) : one(/trip.*(uuid|id)|^uuid$/),
-      date: dateCols, driverUuid: one(/driver.*uuid/), driverFirst: one(/first ?name/), driverLast: one(/surname|last ?name/),
+      txId: one(/^transaction uuid$|^transaction id$/), tripId: one(/^trip uuid$/).length ? one(/^trip uuid$/) : one(/(trip|ride|order|booking).*(uuid|id|number|no)$|^uuid$/),
+      date: dateCols, driverUuid: one(/driver.*uuid/).length ? one(/driver.*uuid/) : one(/driver.*(id|code)$/), driverFirst: one(/first ?name/), driverLast: one(/surname|last ?name/),
       driverName: one(/^(driver ?(full ?)?name|driver)$/), plate: one(/number plate|plate|licen[cs]e plate/),
-      fare: fareTotal.length ? fareTotal : many(/fare|surge|wait time|time at stop|cancell|premium|reservation/, /service|tax|vat|refund|payout|expense/),
+      // other platforms: "Ride price", "Gross amount", "Trip amount"…
+      fare: fareTotal.length ? fareTotal : many(/fare|surge|wait time|time at stop|cancell|premium|reservation|price|gross|(ride|trip|booking|order) (amount|total|cost)/, /service|tax|vat|refund|payout|expense|net|commission|tip|cash/),
       fee: many(/service fee|commission|uber fee/, /tax|vat/),
       tax: taxParts.length ? taxParts : one(/^paid to you:your earnings:taxes$/),
       tip: many(/\btip\b|:tip$/),

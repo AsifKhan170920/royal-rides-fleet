@@ -2,7 +2,7 @@
 <title>Royal Rides Fleet Ledger</title>
 <!-- sign-in and cloud data come from the Fair Tax portal (same Firebase project) -->
 <script src="https://asifkhan170920.github.io/audit-desk/shared/cloud.js?v=9"></script>
-<script src="uber-parse.js?v=1"></script>
+<script src="uber-parse.js?v=3"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -82,7 +82,7 @@ tbody tr:hover td{background:color-mix(in srgb,var(--brass-soft) 45%,transparent
 .form .f label{font-size:11.5px;color:var(--muted);font-weight:500}
 .form .wide{grid-column:1/-1}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.drop{border:1.5px dashed var(--line);border-radius:10px;padding:28px 16px;text-align:center;color:var(--muted);background:var(--bg);cursor:pointer}
+.drop{display:block;border:1.5px dashed var(--line);border-radius:10px;padding:28px 16px;text-align:center;color:var(--muted);background:var(--bg);cursor:pointer}
 .drop.over{border-color:var(--brass);background:var(--brass-soft);color:var(--ink)}
 .drop b{color:var(--ink)}
 .empty{padding:28px 16px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px}
@@ -160,14 +160,14 @@ select[multiple]{min-height:96px}
 const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
-  settings:{}, drivers:{}, vehicles:{}, investors:{},
+  settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
-  importState:null, tripFilter:{q:"",driver:"",vehicle:""}, edit:null
+  importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:""}, edit:null
 };
 const VIEWS = [
-  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import Uber data"],
-  ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],
+  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["usage","Driver & car usage"],["import","Import trip data"],
+  ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Money",null],["entries","Expenses & payments"],["settlement","Driver settlement"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
@@ -180,17 +180,24 @@ const EXP_CATS = {
 const ACCT = {
   "1100":"Bank","1110":"Cash in hand","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1300":"Input VAT",
   "2100":"Driver payables","2200":"Investor payables","2300":"Output VAT",
-  "4000":"Uber fare revenue","4010":"Toll & fee recoveries","4020":"Uber other earnings / incentives","4100":"Direct booking revenue",
-  "5000":"Uber service fee","5010":"Non-recoverable VAT","5100":"Driver earnings share","5900":"Investor profit share",
+  "4000":"Ride fare revenue (platforms)","4010":"Toll & fee recoveries","4020":"Platform other earnings / incentives","4100":"Direct booking revenue",
+  "5000":"Platform service fee / commission","5010":"Non-recoverable VAT","5100":"Driver earnings share","5900":"Investor profit share",
   ...EXP_CATS
 };
 const ENTRY_TYPES = {
-  expense:"Expense", income:"Direct booking income", uber_payout:"Uber payout received",
+  expense:"Expense", income:"Direct booking income", uber_payout:"Platform payout received",
   driver_advance:"Advance to driver", driver_payment:"Payment to driver", driver_receipt:"Received from driver",
   investor_payout:"Payout to investor"
 };
 const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
 const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
+/* Platforms and other parties the company has a contract with. Trips carry pl (platform id);
+   trips saved before platforms existed have none and count as Uber. Each platform has its own
+   clearing (receivable) account, so what each one owes is tracked separately. */
+const PLT_TYPES = {ride:"Ride-hailing platform", booking:"Booking / transfer platform", corporate:"Corporate client", supplier:"Supplier / partner"};
+const PAY_CYCLES = {weekly:"Weekly", biweekly:"Every 2 weeks", monthly:"Monthly", per_trip:"Per trip / on invoice"};
+const PLT_TERMS = ["commissionPct","feeVat","payCycle","creditDays"];
+const STD_PLATFORMS = [["uber","Uber","ride","1150"],["bolt","Bolt","ride","1151"],["yango","Yango","ride","1152"],["yay","YAY","ride","1153"],["welcome","Welcome Pickups","booking","1154"]];
 
 /* ============ utils ============ */
 const $ = s => document.querySelector(s);
@@ -253,7 +260,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -283,6 +290,14 @@ async function writeOk(p){ try{ await p; return true; }catch(e){ if(e && (e.code
 
 /* ============ calculations ============ */
 const setting = (k, d) => S.settings[k] ?? d;
+const plOf = t => t.pl || "uber";
+const pName = id => (S.platforms[id] && S.platforms[id].name) || (STD_PLATFORMS.find(x => x[0] === id) || [0, id])[1];
+const clearingAcct = id => (S.platforms[id] && S.platforms[id].acct) || (STD_PLATFORMS.find(x => x[0] === id) || [0,0,0,"1159"])[3];
+function acctName(a){
+  if(ACCT[a] && a !== "1150") return ACCT[a];
+  const id = Object.keys(S.platforms).find(k => clearingAcct(k) === a) || (STD_PLATFORMS.find(x => x[3] === a) || [])[0];
+  return id ? pName(id) + " clearing (receivable)" : (ACCT[a] || a);
+}
 function vehicleForTrip(t){
   if(t.p){ const v = Object.values(S.vehicles).find(v => norm(v.plate) === norm(t.p)); if(v) return v.id; }
   const dr = S.drivers[t.dr]; return dr && dr.vehicleId || "";
@@ -409,11 +424,17 @@ function journal(C){
   const L = []; const add = (acct, dr, cr, memo) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo}); };
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
   const tips2drv = setting("tipsToDriver", true);
-  const T = {f:sum(S.trips,t=>t.f), sf:sum(S.trips,t=>t.sf), tx:sum(S.trips,t=>t.tx), tp:sum(S.trips,t=>t.tp), rf:sum(S.trips,t=>t.rf), c:sum(S.trips,t=>t.c), oe:sum(S.trips,t=>t.oe), po:sum(S.trips,t=>t.po)};
-  const memoT = "Uber trips";
-  add("1150", T.f + T.tp + T.rf + T.oe - T.sf - T.tx - T.c, 0, memoT);
-  add("4020", 0, T.oe, "Uber other earnings");
-  add("1100", T.po, 0, "Uber payouts to bank (from the Uber report)"); add("1150", 0, T.po, "Uber payouts to bank (from the Uber report)");
+  const tot = ts => ({f:sum(ts,t=>t.f), sf:sum(ts,t=>t.sf), tx:sum(ts,t=>t.tx), tp:sum(ts,t=>t.tp), rf:sum(ts,t=>t.rf), c:sum(ts,t=>t.c), oe:sum(ts,t=>t.oe), po:sum(ts,t=>t.po)});
+  const T = tot(S.trips);
+  const memoT = "Platform trips";
+  // each platform's receivable: what it collected for us, less its fees and the cash drivers kept, less what it paid to the bank
+  const byPl = {}; S.trips.forEach(t => (byPl[plOf(t)] ||= []).push(t));
+  for(const [pl, ts] of Object.entries(byPl)){
+    const P = tot(ts), c = clearingAcct(pl), nm = pName(pl);
+    add(c, P.f + P.tp + P.rf + P.oe - P.sf - P.tx - P.c, 0, nm + " trips");
+    add("1100", P.po, 0, nm + " payouts to bank (from the report)"); add(c, 0, P.po, nm + " payouts to bank (from the report)");
+  }
+  add("4020", 0, T.oe, "Platform other earnings");
   add("1160", T.c, 0, memoT);
   add("5000", T.sf, 0, memoT);
   add(feeVatRec ? "1300" : "5010", T.tx, 0, memoT);
@@ -433,7 +454,7 @@ function journal(C){
       if(e.recover){ add("2100", a + vat, 0, "Recovered from driver"); add(e.category || "5310", 0, a + vat, "Recovered from driver"); }
     }
     else if(e.type === "income"){ add(src, a + vat, 0, memo); add("4100", 0, a, memo); add("2300", 0, vat, memo); }
-    else if(e.type === "uber_payout"){ add(src, a, 0, memo); add("1150", 0, a, memo); }
+    else if(e.type === "uber_payout"){ add(src, a, 0, memo); add(clearingAcct(e.platformId || "uber"), 0, a, memo); }
     else if(e.type === "driver_advance" || e.type === "driver_payment"){ add("2100", a, 0, memo); add(src, 0, a, memo); }
     else if(e.type === "driver_receipt"){ add(src, a, 0, memo); add("2100", 0, a, memo); }
     else if(e.type === "investor_payout"){ add("2200", a, 0, memo); add(src, 0, a, memo); }
@@ -450,7 +471,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {dashboard:vDashboard, trips:vTrips, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
+  const fns = {dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -485,6 +506,12 @@ function vDashboard(){
     <div class="kpi"><div class="l">Company profit</div><div class="v ${company<0?"neg":""}">${fmt(company)}</div><div class="n">After drivers & investors</div></div>
     <div class="kpi"><div class="l">Owed to drivers</div><div class="v ${drvDue<0?"neg":""}">${fmt(drvDue)}</div><div class="n">Negative = drivers owe you</div></div>
   </div>
+  ${contractAlerts()}
+  ${(()=>{ const by = {}; T.forEach(t => { const b = by[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0)+(t.tx||0); if(t.tr || t.f) b.n.add(t.tr||t.id); });
+    const ks = Object.keys(by); if(ks.length < 2 && !Object.keys(S.platforms).length) return "";
+    return `<div class="section"><h2>By platform</h2><div class="tbl"><table><thead><tr><th>Platform</th><th class="num">Trips</th><th class="num">Gross fares</th><th class="num">Fee + VAT</th><th class="num">Fee %</th><th>Contract commission</th></tr></thead><tbody>
+    ${ks.sort((a,b)=>by[b].f-by[a].f).map(k => { const b = by[k], tm = termAt(termList(S.platforms[k]||{}, PLT_TERMS), S.to) || {}; return `<tr><td>${esc(pName(k))}</td><td class="num">${b.n.size}</td><td class="num">${fmt(b.f)}</td><td class="num">${fmt(b.fee)}</td><td class="num">${b.f ? (100*b.fee/b.f).toFixed(1)+"%" : "—"}</td><td>${tm.commissionPct !== "" && tm.commissionPct != null ? esc(num(tm.commissionPct)+"%") : '<span class="muted">—</span>'}</td></tr>`; }).join("")}
+    </tbody></table></div></div>`; })()}
   ${needTerms || noCar ? `<div class="banner">${needTerms ? `${needTerms} driver(s) have no pay terms yet. ` : ""}${noCar ? `${noCar} car(s) have no investor or "company-owned" setting. ` : ""}Fix these on the Drivers and Vehicles pages so profit splits are correct.</div>` : ""}
   <div class="grid2">
     <div class="section"><h2>Profit by car</h2><p class="sub">Operating profit after Uber fee, driver share and car expenses, then split with the investor.</p>
@@ -501,15 +528,17 @@ function vDashboard(){
 
 function vTrips(){
   const f = S.tripFilter; const q = f.q.toLowerCase();
-  const rows = S.trips.filter(t => (t.tr || t.f || t.sf || t.tp || t.c || t.rf || t.oe) && (!f.driver || t.dr === f.driver) && (!f.vehicle || vehicleForTrip(t) === f.vehicle) && (!q || (t.id+" "+dName(t.dr)+" "+(t.p||"")).toLowerCase().includes(q)));
+  const rows = S.trips.filter(t => (t.tr || t.f || t.sf || t.tp || t.c || t.rf || t.oe) && (!f.driver || t.dr === f.driver) && (!f.vehicle || vehicleForTrip(t) === f.vehicle) && (!f.platform || plOf(t) === f.platform) && (!q || (t.id+" "+dName(t.dr)+" "+(t.p||"")).toLowerCase().includes(q)));
+  const pls = [...new Set(S.trips.map(plOf))], multi = pls.length > 1;
   const shown = rows.slice(0, 500);
-  return `<div class="section"><div class="head"><div><h2>Trips</h2><p class="sub">Every Uber trip in the period, one row each. Net = fare − Uber fee − VAT on fee. Cash = amount the driver collected from the rider.</p></div>
+  return `<div class="section"><div class="head"><div><h2>Trips</h2><p class="sub">Every platform trip in the period, one row each. Driver = whoever was logged in to the driver app for that trip; car = the plate on that trip. Net = fare − platform fee − VAT on fee. Cash = amount the driver collected from the rider.</p></div>
     <div class="row"><input id="tq" placeholder="Search trip, driver, plate" value="${esc(f.q)}" aria-label="Search trips">
+    ${multi ? `<select id="tpl" aria-label="Platform filter">${opts(Object.fromEntries(pls.map(k=>[k,pName(k)])), f.platform, "All platforms")}</select>` : ""}
     <select id="tdrv" aria-label="Driver filter">${listOpts(S.drivers, d=>d.name||d.id, f.driver, "All drivers")}</select>
     <select id="tveh" aria-label="Car filter">${listOpts(S.vehicles, v=>vName(v.id), f.vehicle, "All cars")}</select></div></div>
-  ${rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Driver</th><th>Car</th><th class="num">Fare</th><th class="num">Uber fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Trip ID</th></tr></thead><tbody>
-  ${shown.map(t=>`<tr><td>${esc(t.d)}</td><td>${esc(t.t||"")}</td><td>${esc(dName(t.dr))}</td><td>${esc(vName(vehicleForTrip(t)||"unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc(t.st ? t.st.replace(/_/g," ") : (t.tr ? "" : "adjustment"))}${t.prod ? ` · ${esc(t.prod)}` : ""}</td><td class="mono small muted">${esc(String(t.tr||t.id).slice(0,13))}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="4">${new Set(rows.map(t=>t.tr||t.id)).size} trips (${rows.length} rows)${rows.length>500?" – first 500 shown":""}</td><td class="num">${fmt(sum(rows,t=>t.f))}</td><td class="num">${fmt(sum(rows,t=>t.sf))}</td><td class="num">${fmt(sum(rows,t=>t.tx))}</td><td class="num">${fmt(sum(rows,t=>t.tp))}</td><td class="num">${fmt(sum(rows,t=>t.rf))}</td><td class="num">${fmt(sum(rows,t=>t.c))}</td><td class="num">${fmt(sum(rows,t=>(t.f||0)-(t.sf||0)-(t.tx||0)))}</td><td class="num">${fmt(sum(rows,t=>t.km))}</td><td colspan="2"></td></tr></tfoot></table></div>
+  ${rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi?"<th>Platform</th>":""}<th>Driver</th><th>Car</th><th class="num">Fare</th><th class="num">Fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Trip ID</th></tr></thead><tbody>
+  ${shown.map(t=>{ const vid = vehicleForTrip(t)||"unassigned", own = S.drivers[t.dr] && S.drivers[t.dr].vehicleId; return `<tr><td>${esc(t.d)}</td><td>${esc(t.t||"")}</td>${multi?`<td>${esc(pName(plOf(t)))}</td>`:""}<td>${esc(dName(t.dr))}</td><td>${esc(vName(vid))}${own && t.p && vid !== own && vid !== "unassigned" ? ' <span class="pill brass" title="Not this driver\'s assigned car">other car</span>' : ""}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc(t.st ? t.st.replace(/_/g," ") : (t.tr ? "" : "adjustment"))}${t.prod ? ` · ${esc(t.prod)}` : ""}</td><td class="mono small muted">${esc(String(t.tr||t.id).slice(0,13))}</td></tr>`; }).join("")}
+  </tbody><tfoot><tr><td colspan="${multi?5:4}">${new Set(rows.map(t=>t.tr||t.id)).size} trips (${rows.length} rows)${rows.length>500?" – first 500 shown":""}</td><td class="num">${fmt(sum(rows,t=>t.f))}</td><td class="num">${fmt(sum(rows,t=>t.sf))}</td><td class="num">${fmt(sum(rows,t=>t.tx))}</td><td class="num">${fmt(sum(rows,t=>t.tp))}</td><td class="num">${fmt(sum(rows,t=>t.rf))}</td><td class="num">${fmt(sum(rows,t=>t.c))}</td><td class="num">${fmt(sum(rows,t=>(t.f||0)-(t.sf||0)-(t.tx||0)))}</td><td class="num">${fmt(sum(rows,t=>t.km))}</td><td colspan="2"></td></tr></tfoot></table></div>
   ${(()=>{ const po = S.trips.filter(t=>t.po); const a = S.activity||[]; const canc = a.filter(x=>/cancel/.test(x.st||"")).length;
     return `<p class="small muted" style="margin-top:8px">${a.length ? `Trip activity: ${a.length} requests, ${a.filter(x=>x.st==="completed").length} completed, ${canc} cancelled, ${fmt(sum(a,x=>x.km))} km. ` : "No Trip activity report imported for this period – import it to get the car, km and status of each trip. "}${po.length ? `Uber paid ${po.length} transfer(s) to the bank: AED ${fmt(sum(po,t=>t.po))}.` : ""}</p>`; })()}`
   : `<div class="empty"><b>No trips match</b>Change the period at the top, clear the filters, or import the Payments Transaction report.</div>`}</div>`;
@@ -520,9 +549,12 @@ const FIELDS = UberParse.FIELDS;
 const guessMap = UberParse.guessMap;
 function vImport(){
   const st = S.importState;
-  let body = `<div class="section"><h2>Import Uber trips</h2>
-  <p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report</b> and download two reports for the same dates: <b>Payments Transaction</b> (the money) and <b>Trip activity</b> (car, distance and status of each trip). Drop both CSV files below – each is recognised automatically. Rows already imported are skipped, so overlapping files are safe.</p>
-  <label class="drop" id="drop" for="file"><b>Drop Uber CSV files here</b><br>or click to choose files<input type="file" id="file" accept=".csv,text/csv" multiple hidden></label></div>`;
+  const pl = S.importPlatform || "uber", plList = {...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id, p.name||p.id]))};
+  let body = `<div class="section"><h2>Import trip data</h2>
+  <div class="form" style="margin-bottom:10px"><div class="f"><label for="impPl">Platform of these files</label><select id="impPl">${opts(plList, pl)}</select></div></div>
+  ${pl === "uber" ? `<p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report</b> and download two reports for the same dates: <b>Payments Transaction</b> (the money) and <b>Trip activity</b> (car, distance and status of each trip). Drop both CSV files below – each is recognised automatically. Rows already imported are skipped, so overlapping files are safe.</p>`
+  : `<p class="sub">Download the trips / earnings report from the <b>${esc(pName(pl))}</b> fleet portal as CSV (open an Excel file and <i>Save as CSV</i> first). After you drop it, match its columns to the fields once – the mapping is remembered for ${esc(pName(pl))}'s files. Rows already imported are skipped.</p>`}
+  <label class="drop" id="drop" for="file"><b>Drop ${esc(pName(pl))} CSV files here</b><br>or click to choose files<input type="file" id="file" accept=".csv,text/csv" multiple hidden></label></div>`;
   if(st && st.kind === "activity"){
     const a = UberParse.activityRows(st.rows, st.headers), days = [...new Set(a.map(x=>x.d))].sort();
     const by = k => a.reduce((o,x) => (o[x[k]||"—"] = (o[x[k]||"—"]||0) + 1, o), {});
@@ -541,16 +573,20 @@ function vImport(){
     const ours = UberParse.balanceOf(prev), trips = new Set(prev.filter(t=>t.tr).map(t=>t.tr)).size;
     const days = [...new Set(prev.map(t=>t.d))].sort();
     const bad = prev.filter(t=>!t.d).length;
-    body += `<div class="section"><div class="head"><div><h2>Check the column mapping</h2><p class="sub">${esc(st.files.join(", "))} · ${st.rows.length} rows. Each field reads from the column(s) selected; numbers in several columns are added together. Compare the totals with Fleet Hub → Earnings before importing.</p></div>
+    const ptm = termAt(termList(S.platforms[st.pl]||{}, PLT_TERMS), days[days.length-1] || iso(new Date())) || {};
+    const feePct = T.f ? 100*T.sf/T.f : 0, cPct = num(ptm.commissionPct);
+    body += `<div class="section"><div class="head"><div><h2>Check the column mapping · ${esc(pName(st.pl))}</h2><p class="sub">${esc(st.files.join(", "))} · ${st.rows.length} rows. Each field reads from the column(s) selected; numbers in several columns are added together. Compare the totals with the platform portal (Uber: Fleet Hub → Earnings) before importing.</p></div>
     <div class="row"><button class="btn ghost" id="impCancel">Cancel</button><button class="btn primary" id="impGo" ${prev.length && S.canWrite && S.db ? "" : "disabled"}>Import ${prev.length} rows (${trips} trips)</button></div></div>
     <div class="kpis" style="margin-bottom:14px">
-      <div class="kpi"><div class="l">Fare</div><div class="v">${fmt(T.f)}</div></div><div class="kpi"><div class="l">Uber fee</div><div class="v">${fmt(T.sf)}</div></div>
+      <div class="kpi"><div class="l">Fare</div><div class="v">${fmt(T.f)}</div></div><div class="kpi"><div class="l">Platform fee</div><div class="v">${fmt(T.sf)}</div></div>
       <div class="kpi"><div class="l">VAT on fee</div><div class="v">${fmt(T.tx)}</div></div><div class="kpi"><div class="l">Tips</div><div class="v">${fmt(T.tp)}</div></div>
       <div class="kpi"><div class="l">Refunds</div><div class="v">${fmt(T.rf)}</div></div><div class="kpi"><div class="l">Cash</div><div class="v">${fmt(T.c)}</div></div>
       <div class="kpi"><div class="l">Other earnings</div><div class="v">${fmt(T.oe)}</div></div><div class="kpi"><div class="l">Paid to bank</div><div class="v">${fmt(T.po)}</div></div>
     </div>
     ${st.paid != null ? (Math.abs(ours - st.paid) < 0.05 ? `<div class="banner info">✓ Checked: these rows add up to the report's “Paid to you” total of AED ${fmt(st.paid)}.</div>`
       : `<div class="banner">These rows add up to AED ${fmt(ours)}, but the report's “Paid to you” total is AED ${fmt(st.paid)}. A column is missing or counted twice – check the mapping below before importing.</div>`) : ""}
+    ${cPct && T.f ? (Math.abs(feePct - cPct) <= 1 ? `<div class="banner info">✓ Fee in this file is ${feePct.toFixed(1)}% of fares – matches the ${cPct}% commission in the ${esc(pName(st.pl))} contract.</div>`
+      : `<div class="banner">Fee in this file is ${feePct.toFixed(1)}% of fares, but the ${esc(pName(st.pl))} contract says ${cPct}% commission. Check the mapping, or raise it with ${esc(pName(st.pl))}.</div>`) : ""}
     ${days.length ? `<p class="small muted">Trip dates ${esc(days[0])} to ${esc(days[days.length-1])}.${bad ? ` <span class="pill bad">${bad} rows have no readable date and will be skipped</span>` : ""}</p>` : ""}
     <div class="mapgrid">${FIELDS.map(([k,l,multi]) => `<div class="form"><div class="f"><label for="map_${k}">${esc(l)}</label><select id="map_${k}" data-map="${k}" ${multi?"multiple":""}>${multi?"":`<option value="">— none —</option>`}${st.headers.map(h=>`<option value="${esc(h)}" ${(m[k]||[]).includes(h)?"selected":""}>${esc(h)}</option>`).join("")}</select></div></div>`).join("")}</div>
     <h2 style="margin-top:16px">First rows</h2><div class="tbl"><table><thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th class="num">Fare</th><th class="num">Fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refund</th><th class="num">Cash</th><th>Trip ID</th></tr></thead><tbody>
@@ -564,11 +600,12 @@ function vImport(){
 }
 function handleFiles(files){
   const list = [...files].filter(f => /\.csv$/i.test(f.name) || f.type.includes("csv")); if(!list.length){ toast("Choose a .csv file exported from Uber Fleet Hub."); return; }
-  S.importQueue = []; let done = 0;
+  S.importQueue = []; let done = 0; const pl = S.importPlatform || "uber";
   list.forEach(file => Papa.parse(file, {header:true, skipEmptyLines:true, transformHeader: h => h.replace(/^\ufeff/,""), complete: res => {
-    const headers = res.meta.fields || [], kind = UberParse.detect(headers), sig = headers.join("|");
+    // only Uber has the separate Trip activity report; other platforms' files are read as money rows
+    const headers = res.meta.fields || [], kind = pl === "uber" ? UberParse.detect(headers) : "payments", sig = (pl === "uber" ? "" : pl + "|") + headers.join("|");
     const saved = kind === "payments" ? (S.settings.mappings||{})[norm(sig).slice(0,180)] : null;
-    S.importQueue.push({kind, rows: res.data, headers, files:[file.name], map: kind === "payments" ? (saved || guessMap(headers)) : null, sig, paid: UberParse.paidToYou(res.data, headers)});
+    S.importQueue.push({kind, pl, rows: res.data, headers, files:[file.name], map: kind === "payments" ? (saved || guessMap(headers)) : null, sig, paid: UberParse.paidToYou(res.data, headers)});
     if(++done === list.length){
       // trip details first, so the payments find their car straight away
       S.importQueue.sort((a,b) => (a.kind === "activity" ? 0 : 1) - (b.kind === "activity" ? 0 : 1));
@@ -582,14 +619,19 @@ function previewRows(){
 async function runImport(){
   const rows = previewRows().filter(t => t.d); if(!rows.length) return;
   $("#impGo").disabled = true; $("#impGo").textContent = "Importing…";
-  // match or create drivers
+  const pl = S.importState.pl || "uber", isUber = pl === "uber";
+  // other platforms: keep their ids apart from Uber's, so the same number on two platforms never clashes
+  if(!isUber) rows.forEach(t => { t.id = pl + ":" + t.id; t.tr = t.tr ? pl + ":" + t.tr : ""; });
+  // match or create drivers (Uber UUID, or the driver's id on that platform, else the name)
+  const pid = d => isUber ? d.uberUuid : (d.platformIds || {})[pl];
   const byUuid = {}, byName = {};
-  Object.values(S.drivers).forEach(d => { if(d.uberUuid) byUuid[d.uberUuid] = d.id; byName[norm(d.name)] = d.id; });
+  Object.values(S.drivers).forEach(d => { if(pid(d)) byUuid[pid(d)] = d.id; byName[norm(d.name)] = d.id; });
   const newDrivers = {};
   for(const t of rows){
     let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]);
-    if(!id){ id = "d-" + (norm(t.uuid).slice(0,12) || norm(t.name).slice(0,20) || uid()); byUuid[t.uuid] = id; byName[norm(t.name)] = id; newDrivers[id] = {name: t.name || "Unnamed driver", uberUuid: t.uuid || "", payModel:"", commissionPct:0, active:true, createdFromImport:true}; }
-    else if(t.uuid && S.drivers[id] && !S.drivers[id].uberUuid) newDrivers[id] = {...S.drivers[id], uberUuid:t.uuid};
+    const ids = t.uuid && !isUber ? {platformIds: {[pl]: t.uuid}} : {};
+    if(!id){ id = "d-" + (norm(t.uuid).slice(0,12) || norm(t.name).slice(0,20) || uid()); byUuid[t.uuid] = id; byName[norm(t.name)] = id; newDrivers[id] = {name: t.name || "Unnamed driver", uberUuid: isUber ? (t.uuid || "") : "", ...ids, payModel:"", commissionPct:0, active:true, createdFromImport:true}; }
+    else if(t.uuid && S.drivers[id] && !pid(S.drivers[id]) && !newDrivers[id]) newDrivers[id] = isUber ? {...S.drivers[id], uberUuid:t.uuid} : {...S.drivers[id], platformIds: {...(S.drivers[id].platformIds||{}), [pl]: t.uuid}};
     t.dr = id;
   }
   for(const [id, d] of Object.entries(newDrivers)){ const {id:_, ...body} = d; if(!await writeOk(S.db.doc("drivers/"+id).set(body))) return; }
@@ -602,12 +644,12 @@ async function runImport(){
   for(const [day, list] of Object.entries(byDay)){
     const ref = S.db.doc("trips/"+day); const snap = await ref.get(); const existing = snap.exists ? (snap.data().rows||{}) : {};
     const merged = {...existing};
-    for(const t of list){ if(existing[t.id]){ dup++; continue; } merged[t.id] = {tr:t.tr||"", d:t.d, t:t.t, dr:t.dr, p:t.p, f:t.f, sf:t.sf, tx:t.tx, tp:t.tp, rf:t.rf, c:t.c, oe:t.oe||0, po:t.po||0, km:t.km}; added++; }
+    for(const t of list){ if(existing[t.id]){ dup++; continue; } merged[t.id] = {tr:t.tr||"", d:t.d, t:t.t, dr:t.dr, p:t.p, f:t.f, sf:t.sf, tx:t.tx, tp:t.tp, rf:t.rf, c:t.c, oe:t.oe||0, po:t.po||0, km:t.km, ...(isUber ? {} : {pl})}; added++; }
     if(!await writeOk(ref.set({date:day, rows:merged}))) return;
   }
   const days = Object.keys(byDay).sort();
   const mappings = {...(S.settings.mappings||{}), [norm(S.importState.sig).slice(0,180)]: S.importState.map};
-  const log = [...(S.settings.importLog||[]), {at: new Date().toLocaleString("en-GB"), files: S.importState.files.join(", ").slice(0,120), added, dup, range: `${days[0]} → ${days[days.length-1]}`}].slice(-30);
+  const log = [...(S.settings.importLog||[]), {at: new Date().toLocaleString("en-GB"), files: ((isUber ? "" : pName(pl) + ": ") + S.importState.files.join(", ")).slice(0,120), added, dup, range: `${days[0]} → ${days[days.length-1]}`}].slice(-30);
   await writeOk(S.db.doc("settings/main").set({...S.settings, mappings, importLog: log}));
   S.importState = (S.importQueue||[]).shift() || null; await loadPeriod(); render();
   toast(`Imported ${added} new rows. ${dup} already existed and were skipped.`);
@@ -726,6 +768,101 @@ function vInvestors(){
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td>${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate)).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
 }
 
+/* ---------- driver & car usage ---------- */
+/* Platforms book a trip to the driver who was logged in to the driver app, and record the plate
+   of the car used on that trip – whoever the car is normally assigned to. This page shows who
+   drove which car, so cars shared between drivers are visible. */
+function vUsage(){
+  const done = (S.activity||[]).filter(x => x.st === "completed");
+  const src = done.length ? done.map(x => ({dr:x.dr, p:x.p, d:x.d})) : S.trips.filter(t => t.p && (t.tr || t.f)).map(t => ({dr:t.dr, p:t.p, d:t.d, k:t.tr||t.id}));
+  const seen = new Set(), U = src.filter(x => !x.k || (!seen.has(x.k) && seen.add(x.k)));
+  if(!U.length) return `<div class="empty"><b>No car information for this period</b>Import Uber's Trip activity report (it has the number plate of every trip), or a platform file with a plate column.</div>`;
+  const vByPlate = {}; Object.values(S.vehicles).forEach(v => vByPlate[norm(v.plate)] = v.id);
+  const carOf = p => vByPlate[norm(p)] || "";
+  const carLbl = p => carOf(p) ? vName(carOf(p)) : p;
+  const D = {}, P = {};
+  U.forEach(x => { const d = D[x.dr||"unknown"] ||= {}; d[x.p] = (d[x.p]||0) + 1; const c = P[x.p] ||= {}; c[x.dr||"unknown"] = (c[x.dr||"unknown"]||0) + 1; });
+  const drs = Object.entries(D).map(([id, m]) => { const own = S.drivers[id] && S.drivers[id].vehicleId; const tot = Object.values(m).reduce((a,b)=>a+b,0);
+    const other = Object.entries(m).filter(([p]) => !own || carOf(p) !== own).reduce((a,[,n])=>a+n,0); const top = Object.entries(m).sort((a,b)=>b[1]-a[1])[0][0];
+    return {id, m, own, tot, other: own ? other : 0, top}; }).sort((a,b) => b.other - a.other || dName(a.id).localeCompare(dName(b.id)));
+  const shared = Object.entries(P).filter(([,m]) => Object.keys(m).length > 1);
+  return `<div class="banner info">A trip is always booked to the driver who was <b>logged in to the driver app</b>, and the car is the <b>number plate used on that trip</b> – not the car assigned in the platform. So if Ali's car is driven by Ahmed, the trip shows Ahmed as driver and Ali's car plate. The ledger follows the same rule: the money goes to the driver who drove (settlement) and to the car that was used (investor P&L).</div>
+  <div class="section"><div class="head"><div><h2>Drivers · cars used</h2><p class="sub">${esc(S.from)} to ${esc(S.to)} · ${U.length} completed trips${done.length ? " (Trip activity report)" : ""}. “Other car” = trips on a car that is not the driver's assigned car.</p></div></div>
+  <div class="tbl"><table><thead><tr><th>Driver</th><th>Assigned car</th><th>Cars driven (trips)</th><th class="num">Trips</th><th class="num">On other cars</th><th></th></tr></thead><tbody>
+  ${drs.map(d => `<tr><td>${esc(dName(d.id))}</td><td>${d.own ? esc(vName(d.own)) : '<span class="pill warn">Not set</span>'}</td>
+    <td style="white-space:normal">${Object.entries(d.m).sort((a,b)=>b[1]-a[1]).map(([p,n]) => `<span class="${d.own && carOf(p) !== d.own ? "pill brass" : "pill"}">${esc(carLbl(p))} · ${n}</span>`).join(" ")}</td>
+    <td class="num">${d.tot}</td><td class="num">${d.other ? `<b>${d.other}</b> <span class="small muted">(${Math.round(100*d.other/d.tot)}%)</span>` : "0"}</td>
+    <td>${S.drivers[d.id] && carOf(d.top) && carOf(d.top) !== d.own && S.canWrite ? `<button class="btn sm" data-assigncar="${esc(carOf(d.top))}" data-id="${esc(d.id)}" title="Make the car this driver used most their assigned car">Assign ${esc(carLbl(d.top))}</button>` : ""}</td></tr>`).join("")}
+  </tbody></table></div></div>
+  <div class="section"><h2>Cars driven by more than one driver</h2><p class="sub">Each driver's trips on these cars count towards that car's revenue in the investor P&L.</p>
+  ${shared.length ? `<div class="tbl"><table><thead><tr><th>Car</th><th>Drivers (trips)</th><th class="num">Trips</th></tr></thead><tbody>
+  ${shared.sort((a,b)=>Object.keys(b[1]).length-Object.keys(a[1]).length).map(([p,m]) => `<tr><td>${esc(carLbl(p))}</td><td style="white-space:normal">${Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([id,n]) => `<span class="pill">${esc(dName(id))} · ${n}</span>`).join(" ")}</td><td class="num">${Object.values(m).reduce((a,b)=>a+b,0)}</td></tr>`).join("")}
+  </tbody></table></div>` : `<p class="sub">Every car was driven by one driver in this period.</p>`}</div>`;
+}
+
+/* ---------- platforms & contracts ---------- */
+function pltTermText(t){
+  if(!t || (t.commissionPct === "" && !t.payCycle)) return "No terms";
+  return [t.commissionPct !== "" && t.commissionPct != null ? num(t.commissionPct) + "% commission" + (t.feeVat === "none" ? " (no VAT)" : " + 5% VAT") : "", t.payCycle ? (PAY_CYCLES[t.payCycle]||t.payCycle) + " payout" : "", num(t.creditDays) ? num(t.creditDays) + " days credit" : ""].filter(Boolean).join(" · ");
+}
+function contractState(p){
+  const today = iso(new Date());
+  if(p.active === false) return ["", "Inactive"];
+  if(p.contractEnd && p.contractEnd < today) return ["bad", "Expired " + dmyS(p.contractEnd)];
+  if(p.contractEnd && daysBetween(today, p.contractEnd) <= 31) return ["warn", "Ends " + dmyS(p.contractEnd)];
+  if(p.contractStart && p.contractStart > today) return ["brass", "Starts " + dmyS(p.contractStart)];
+  return p.contractStart || p.contractEnd ? ["good", "Active"] : ["", "No dates"];
+}
+function contractAlerts(){
+  const due = Object.values(S.platforms).filter(p => ["bad","warn"].includes(contractState(p)[0]));
+  return due.length ? `<div class="banner">Contracts to renew: ${due.map(p => esc(p.name) + " – " + esc(contractState(p)[1])).join(", ")}. Update them on the Platforms & contracts page.</div>` : "";
+}
+function vPlatforms(){
+  const e = S.edit && S.edit.kind === "platform" ? S.edit : null;
+  const list = Object.values(S.platforms).sort((a,b) => (a.acct||"").localeCompare(b.acct||"") || (a.name||"").localeCompare(b.name||""));
+  const by = {}; S.trips.forEach(t => { const b = by[plOf(t)] ||= {f:0, n:new Set()}; b.f += t.f||0; if(t.tr || t.f) b.n.add(t.tr||t.id); });
+  const missing = STD_PLATFORMS.filter(x => !S.platforms[x[0]]);
+  return `${e ? platformForm(e.id, S.platforms[e.id] || {}) : ""}
+  <div class="section"><div class="head"><div><h2>Platforms & contracts</h2><p class="sub">Every platform or party the company works with under a contract – Uber, Bolt, Yango, YAY, Welcome Pickups, hotels, corporate clients. Keep the contract dates, commission and payout terms; the commission is checked against each imported file, and each platform gets its own receivable account in the ledger.</p></div>
+    <div class="row">${missing.length && S.canWrite ? `<button class="btn" data-seedpl="1">Add ${esc(missing.map(x=>x[1]).join(", "))}</button>` : ""}<button class="btn primary" data-edit="platform" data-id="">Add platform / party</button></div></div>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Name</th><th>Type</th><th>Account</th><th>Contract</th><th>Terms</th><th class="num">Trips</th><th class="num">Fares</th><th></th></tr></thead><tbody>
+  ${list.map(p => { const [cls, txt] = contractState(p), tl = termList(p, PLT_TERMS), cur = termAt(tl, iso(new Date())); const b = by[p.id] || {f:0, n:new Set()};
+    return `<tr><td>${esc(p.name)}${p.legalName ? `<div class="small muted">${esc(p.legalName)}</div>` : ""}</td><td class="small">${esc(PLT_TYPES[p.type]||"")}</td><td class="mono small">${esc(p.acct||"")}</td>
+    <td><span class="pill ${cls}">${esc(txt)}</span>${p.contractRef ? ` <a class="small" href="${esc(p.contractRef)}" target="_blank" rel="noopener">Contract file</a>` : ""}</td>
+    <td class="small" style="white-space:normal">${esc(pltTermText(cur))}${tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : ""}</td><td class="num">${b.n.size}</td><td class="num">${fmt(b.f)}</td>
+    <td><button class="btn sm" data-edit="platform" data-id="${esc(p.id)}">Edit</button></td></tr>`; }).join("")}
+  </tbody></table></div>` : `<div class="empty"><b>No platforms yet</b>Click “Add Uber, Bolt…” to create the usual ones, then fill in each contract.</div>`}</div>`;
+}
+function platformForm(id, p0){
+  const p = {...p0, ...latestTerms(p0, PLT_TERMS)};
+  return `<div class="section"><h2>${id ? "Edit " + esc(p0.name || "platform") : "New platform / party"}</h2><p class="sub">Commission is the platform's cut of the fare. It is compared with the fee in every imported file, so a wrong deduction stands out.</p>
+  <form class="form" id="fPlatform" data-id="${esc(id)}">
+    <div class="f"><label for="pn">Name</label><input id="pn" name="name" required value="${esc(p.name)}" placeholder="e.g. Bolt"></div>
+    <div class="f"><label for="pty">Type</label><select id="pty" name="type">${opts(PLT_TYPES, p.type || "ride")}</select></div>
+    <div class="f"><label for="pln">Legal name (as on contract)</label><input id="pln" name="legalName" value="${esc(p.legalName)}"></div>
+    <div class="f"><label for="pac">Our account / fleet ID with them</label><input id="pac" name="accountId" value="${esc(p.accountId)}"></div>
+    <div class="f"><label for="pcn">Contact person</label><input id="pcn" name="contactName" value="${esc(p.contactName)}"></div>
+    <div class="f"><label for="pph">Phone</label><input id="pph" name="phone" value="${esc(p.phone)}"></div>
+    <div class="f"><label for="pem">Email</label><input id="pem" name="email" type="email" value="${esc(p.email)}"></div>
+    <div class="f"><label for="ptr">TRN</label><input id="ptr" name="trn" value="${esc(p.trn)}"></div>
+    <div class="f wide"><label for="pad">Address</label><input id="pad" name="address" value="${esc(p.address)}"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Contract</b></div>
+    <div class="f"><label for="pcs">Contract start</label><input id="pcs" name="contractStart" type="date" value="${esc(p.contractStart)}"></div>
+    <div class="f"><label for="pce">Contract end / renewal</label><input id="pce" name="contractEnd" type="date" value="${esc(p.contractEnd)}"></div>
+    <div class="f wide"><label for="pcr">Link to the signed contract (Google Drive, etc.)</label><input id="pcr" name="contractRef" type="url" value="${esc(p.contractRef)}" placeholder="https://drive.google.com/…"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Commercial terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
+    <div class="f"><label for="pcp">Commission % (platform's cut)</label><input id="pcp" name="commissionPct" type="number" step="0.01" value="${esc(p.commissionPct ?? "")}"></div>
+    <div class="f"><label for="pfv">VAT on commission</label><select id="pfv" name="feeVat">${opts({std:"5% VAT charged on commission", none:"No VAT charged"}, p.feeVat || "std")}</select></div>
+    <div class="f"><label for="ppc">Payout cycle</label><select id="ppc" name="payCycle">${opts(PAY_CYCLES, p.payCycle, "—")}</select></div>
+    <div class="f"><label for="pcd">Credit days</label><input id="pcd" name="creditDays" type="number" step="1" value="${esc(p.creditDays ?? "")}"></div>
+    <div class="f"><label for="ptf">Terms effective from</label><input id="ptf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
+    <div class="f"><label for="ptn">Reason for change (optional)</label><input id="ptn" name="termNote" placeholder="e.g. renewed contract"></div>
+    <div class="f wide"><label for="pno">Notes</label><input id="pno" name="notes" value="${esc(p.notes)}"></div>
+    <div class="f"><label for="pact">Status</label><select id="pact" name="active">${opts({true:"Active", false:"Inactive"}, String(p.active !== false))}</select></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id && !S.trips.some(t => plOf(t) === id) ? `<button class="btn danger" type="button" data-del="platforms" data-id="${esc(id)}">Delete</button>` : ""}</div>
+  </form>${termHistory("platforms", id, p0, PLT_TERMS, pltTermText)}</div>`;
+}
+
 /* ---------- entries ---------- */
 function vEntries(){
   const e = S.edit && S.edit.kind === "entry" ? S.edit : {kind:"entry", id:"", data:{date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type:"expense", category:"5200", paidFrom:"1100"}};
@@ -741,6 +878,7 @@ function vEntries(){
     <div class="f"><label for="ep">Paid from / into</label><select id="ep" name="paidFrom">${opts({"1100":"Bank","1110":"Cash in hand"}, x.paidFrom)}</select></div>
     <div class="f"><label for="ev2">Car</label><select id="ev2" name="vehicleId">${listOpts(S.vehicles, v=>vName(v.id), x.vehicleId, "—")}</select></div>
     <div class="f"><label for="edr">Driver</label><select id="edr" name="driverId">${listOpts(S.drivers, d=>d.name||d.id, x.driverId, "—")}</select></div>
+    <div class="f"><label for="epl">Platform (for payouts)</label><select id="epl" name="platformId">${opts({...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id,p.name||p.id]))}, x.platformId || "uber")}</select></div>
     <div class="f"><label for="ei">Investor</label><select id="ei" name="investorId">${listOpts(S.investors, i=>i.name||i.id, x.investorId, "—")}</select></div>
     <div class="f"><label for="er">Recover from driver?</label><select id="er" name="recover">${opts({false:"No, company cost", true:"Yes, deduct from driver"}, String(!!x.recover))}</select></div>
     <div class="f wide"><label for="en">Note / reference</label><input id="en" name="note" value="${esc(x.note)}" placeholder="e.g. ENOC invoice 4471, Salik Sep, RTA fine 12345"></div>
@@ -790,10 +928,10 @@ function vLedger(){
   const income = -(bal("4000") + bal("4010") + bal("4100")); const exps = accts.filter(a => a >= "5000").reduce((s,a)=>s+bal(a),0);
   const outVat = -bal("2300"), inVat = bal("1300"), uberBal = bal("1150");
   return `<div class="kpis"><div class="kpi"><div class="l">Income</div><div class="v">${fmt(income)}</div></div><div class="kpi"><div class="l">Expenses</div><div class="v">${fmt(exps)}</div></div><div class="kpi"><div class="l">Net profit</div><div class="v ${income-exps<0?"neg":""}">${fmt(income-exps)}</div></div><div class="kpi"><div class="l">VAT payable</div><div class="v">${fmt(outVat-inVat)}</div><div class="n">Output ${fmt(outVat)} − input ${fmt(inVat)}</div></div></div>
-  <div class="banner info">Uber balance in the ledger (account 1150): <b class="mono">AED ${fmt(uberBal)}</b>. For a period that matches an Uber Payments report, this equals the report's “Paid to you” total; the Import page shows that total when you import.</div>
+  <div class="banner info">Uber balance in the ledger (account 1150): <b class="mono">AED ${fmt(uberBal)}</b>. For a period that matches an Uber Payments report, this equals the report's “Paid to you” total; the Import page shows that total when you import.${accts.filter(a => a !== "1150" && acctName(a).endsWith(" clearing (receivable)")).map(a => ` ${esc(acctName(a))} (${a}): <b class="mono">AED ${fmt(bal(a))}</b>.`).join("")}</div>
   <div class="section"><div class="head"><div><h2>Trial balance · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Built automatically from imported trips, driver and investor terms, and your entries. ${Math.abs(totDr-totCr) < 0.02 ? '<span class="pill good">Balanced</span>' : '<span class="pill bad">Out of balance</span>'}</p></div><div class="row"><button class="btn" id="expJournal">Export journal CSV</button></div></div>
   <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
-  ${accts.map(a=>`<tr><td class="mono">${a}</td><td>${esc(ACCT[a]||a)}</td><td class="num">${fmt(TB[a].dr)}</td><td class="num">${fmt(TB[a].cr)}</td><td class="num">${aed(TB[a].dr-TB[a].cr)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>`}
+  ${accts.map(a=>`<tr><td class="mono">${a}</td><td>${esc(acctName(a))}</td><td class="num">${fmt(TB[a].dr)}</td><td class="num">${fmt(TB[a].cr)}</td><td class="num">${aed(TB[a].dr-TB[a].cr)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>`}
   </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${fmt(totDr)}</td><td class="num">${fmt(totCr)}</td><td></td></tr></tfoot></table></div></div>
   <div class="section"><h2>VAT working</h2><p class="sub">Fare treatment: <b>${setting("fareVat","exempt")==="standard" ? "standard-rated 5% (VAT inside the fare)" : "exempt local passenger transport"}</b>. Uber fee VAT: <b>${setting("feeVatRecoverable",false) ? "recoverable" : "not recoverable (cost)"}</b>. Change these in Settings after confirming the position for this business.</p>
   <div class="tbl"><table><tbody>
@@ -845,12 +983,17 @@ document.addEventListener("click", async ev => {
   if(t.dataset.termdel != null && t.dataset.col){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
     const col = t.dataset.col, rec = S[col][t.dataset.id]; if(!rec) return;
-    const keys = col === "drivers" ? DRV_TERMS : VEH_TERMS;
+    const keys = col === "drivers" ? DRV_TERMS : col === "platforms" ? PLT_TERMS : VEH_TERMS;
     const hist = termList(rec, keys).filter((_, i) => i !== +t.dataset.termdel);
     const now = termAt(hist, iso(new Date())) || hist[0] || {}; const {id:_, ...body} = rec;
     if(await writeOk(S.db.doc(col + "/" + t.dataset.id).set({...body, ...pick(now, keys), terms: hist}))){ toast("Entry removed."); render(); }
     return;
   }
+  if(t.dataset.assigncar){ const d = S.drivers[t.dataset.id]; if(!d) return; const {id:_, ...body} = d;
+    if(await writeOk(S.db.doc("drivers/" + t.dataset.id).set({...body, vehicleId: t.dataset.assigncar}))) toast(dName(t.dataset.id) + " → " + vName(t.dataset.assigncar)); return; }
+  if(t.dataset.seedpl){ t.disabled = true;
+    for(const [id, name, type, acct] of STD_PLATFORMS){ if(S.platforms[id]) continue; if(!await writeOk(S.db.doc("platforms/" + id).set({name, type, acct, active:true, createdAt: new Date().toISOString()}))) return; }
+    toast("Platforms added. Open each one to fill in its contract."); return; }
   if(t.dataset.editentry){ const r = S.entries.find(x => x.id === t.dataset.editentry); if(r){ S.edit = {kind:"entry", id:r.id, data:{...r}}; render(); window.scrollTo(0,0); } return; }
   if(t.dataset.delentry){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
@@ -860,7 +1003,7 @@ document.addEventListener("click", async ev => {
   if(t.id === "impCancel"){ S.importState = (S.importQueue||[]).shift() || null; render(); return; }
   if(t.id === "impGo"){ runImport(); return; }
   if(t.id === "impAct"){ runActivityImport(); return; }
-  if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [S.to, l.acct, ACCT[l.acct]||l.acct, l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
+  if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [S.to, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
   if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
 });
 async function saveCsv(name, rows){
@@ -870,16 +1013,23 @@ async function saveCsv(name, rows){
 }
 document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
-  const numF = ["commissionPct","rentPerDay","salary","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat"];
-  numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? 0 : num(fd[k]); });
+  const numF = ["commissionPct","rentPerDay","salary","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays"];
+  numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? (f.id === "fPlatform" && k === "commissionPct" ? "" : 0) : num(fd[k]); });
   ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
   if(!S.db) return;
-  if(f.id === "fDriver" || f.id === "fVehicle" || f.id === "fInvestor"){
-    const col = {fDriver:"drivers", fVehicle:"vehicles", fInvestor:"investors"}[f.id];
-    const id = f.dataset.id || (col[0] + "-" + uid());
+  if(f.id === "fDriver" || f.id === "fVehicle" || f.id === "fInvestor" || f.id === "fPlatform"){
+    const col = {fDriver:"drivers", fVehicle:"vehicles", fInvestor:"investors", fPlatform:"platforms"}[f.id];
+    let id = f.dataset.id || (col[0] + "-" + uid());
+    if(f.id === "fPlatform" && !f.dataset.id){
+      // a new platform: a readable id, and the next free clearing account (1151, 1152…)
+      const slug = norm(fd.name).slice(0, 20); if(slug && !S.platforms[slug]) id = slug;
+      const std = STD_PLATFORMS.find(x => x[0] === id), used = new Set(Object.values(S.platforms).map(p => p.acct).concat(STD_PLATFORMS.map(x => x[3])));
+      let n = 1155; while(used.has(String(n)) && n < 1199) n = n === 1159 ? 1170 : n + 1;   // 1160s are the cash accounts
+      fd.acct = std ? std[3] : String(n);
+    }
     const prev = (S[col] && S[col][id]) || {}; const {id:_, ...prevBody} = prev;
     if(f.id === "fVehicle" && !fd.investorId && fd.invModel !== "none") fd.invModel = "none";
-    const keys = f.id === "fDriver" ? DRV_TERMS : f.id === "fVehicle" ? VEH_TERMS : null;
+    const keys = f.id === "fDriver" ? DRV_TERMS : f.id === "fVehicle" ? VEH_TERMS : f.id === "fPlatform" ? PLT_TERMS : null;
     if(keys){
       const eff = fd.termFrom || iso(new Date()), note = (fd.termNote || "").trim(); delete fd.termFrom; delete fd.termNote;
       // history so far (older records: their terms count as the opening terms)
@@ -918,6 +1068,8 @@ document.addEventListener("change", async ev => {
   if(t.id === "pFrom" || t.id === "pTo"){ $("#preset").value = "custom"; const a = $("#pFrom").value, b = $("#pTo").value; if(a && b && a <= b){ S.from = a; S.to = b; await loadPeriod(); render(); } return; }
   if(t.id === "tdrv"){ S.tripFilter.driver = t.value; render(); return; }
   if(t.id === "tveh"){ S.tripFilter.vehicle = t.value; render(); return; }
+  if(t.id === "tpl"){ S.tripFilter.platform = t.value; render(); return; }
+  if(t.id === "impPl"){ S.importPlatform = t.value; S.importState = null; S.importQueue = []; render(); return; }
   if(t.id === "file"){ handleFiles(t.files); t.value = ""; return; }
   if(t.dataset.map && S.importState){ S.importState.map[t.dataset.map] = [...t.selectedOptions].map(o=>o.value).filter(Boolean); render(); return; }
 });

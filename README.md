@@ -20,3 +20,10 @@ The `uber-sync` folder is a small program for the office PC. It needs Node.js an
 If Uber changes its pages and a report step can't be found, the window stays open. Download the report by hand (Reports → Generate report → Payments Transaction → Download) and the program picks the file up. You can also import any CSV with `npm run sync -- --file "path\to\file.csv"`, or drop it on the Import page.
 
 Note: automating the Uber portal may conflict with Uber's terms. If Uber grants API access for the fleet, switch to that.
+
+## Platforms & contracts
+
+- **Platforms & contracts** keeps every platform or party the company works with (Uber, Bolt, Yango, YAY, Welcome Pickups, hotels, corporate clients): contract dates, a link to the signed contract, commission %, VAT on commission, payout cycle and credit days. Terms are dated, like driver and car terms.
+- Each platform has its own receivable account: Uber 1150, Bolt 1151, Yango 1152, YAY 1153, Welcome Pickups 1154, then 1155 onwards for new parties.
+- **Import trip data**: choose the platform first. Uber files are recognised automatically. For other platforms, match the columns once and the mapping is saved for that platform. The fee in each file is checked against the contract commission.
+- **Driver & car usage**: trips are booked to the driver logged in to the driver app, and the car is the plate used on that trip. This page lists who drove which car and flags trips on cars that are not the driver's assigned car.
