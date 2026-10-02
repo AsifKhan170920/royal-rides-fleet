@@ -162,17 +162,17 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:""}, edit:null
 };
 const VIEWS = [
-  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["usage","Driver & car usage"],["import","Import trip data"],
+  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import trip data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
-  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],
-  ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["settlement","Driver settlement"],["driverledger","Driver ledger & loans"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
+  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
+  ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
 ];
@@ -206,7 +206,7 @@ const PLT_TERMS = ["commissionPct","feeVat","payCycle","creditDays"];
    day of each month from the start month – until paid. A cash repayment shortens the plan.
    "Driver's cash" as paid-from means the driver paid a company cost, or collected company money,
    out of the cash he holds; it goes to his account instead of the bank. */
-const ITEM_KINDS = {loan:"Loan", advance:"Salary advance", shared:"Shared expense (visa, medical, licence…)", other:"Other amount to recover"};
+const ITEM_KINDS = {loan:"Loan", advance:"Salary advance", visa:"Visa", shared:"Other expense for the driver (medical, licence…)", other:"Other amount to recover"};
 /* Cash and cash equivalents, as in Manager.io's Bank and Cash Accounts: bank accounts (1100–1109),
    cash accounts (1110–1119) and card network / merchant balances (1120–1129). 1100 Bank, 1110 Cash in
    hand and 1120 Card machine receipts always exist; more are added in the accounts collection (doc id =
@@ -379,7 +379,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -607,8 +607,9 @@ function journal(C){
     const memo = `${ITEM_KINDS[it.kind] || "Loan"} – ${dName(it.driverId)}${it.desc ? " – " + it.desc : ""}`, da = num(it.driverAmount);
     if(it.date >= S.from && it.date <= S.to){
       day = it.date;
-      if(it.kind === "shared"){ const amt = num(it.amount), vat = num(it.vat); add(it.category || "5280", (inVatRec ? amt : amt + vat) - da, 0, memo); if(inVatRec) add("1300", vat, 0, memo); add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, amt + vat, memo); }
-      else { add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, da, memo); }
+      // the driver's share goes to 1170 (recovered through his salary); any part the company bears is an expense
+      const amt = num(it.amount) || (it.kind === "shared" ? 0 : da), vat = num(it.vat), co = r2((inVatRec ? amt : amt + vat) - da);
+      if(co) add(it.category || "5280", co, 0, memo); if(inVatRec) add("1300", vat, 0, memo); add("1170", da, 0, memo); add(srcAcct(it.paidFrom), 0, amt + vat, memo);
       day = null;
     }
     const p = itemPlan(it);
@@ -704,6 +705,7 @@ function renderNav(){
   $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<div class="grp">${esc(k)}</div>` : `<button data-nav="${k}" ${S.view===k?'aria-current="page"':""}>${esc(l)}</button>`).join("");
 }
 function render(){
+  if(window.BOOKS && BOOKS.applyCoa) BOOKS.applyCoa();
   renderNav();
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
@@ -959,11 +961,12 @@ async function runActivityImport(){
 function vDrivers(){
   const C = compute(); const list = Object.values(S.drivers).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const e = S.edit && S.edit.kind === "driver" ? S.edit : null; const d = e ? (S.drivers[e.id] || {}) : null;
+  if(S.drvView && S.drivers[S.drvView] && window.driverDetail) return (e ? driverForm(e.id, d) : "") + driverDetail(S.drvView);
   return `${e ? driverForm(e.id, d) : ""}
   <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th></th></tr></thead><tbody>
   ${list.map(x=>{ const c = C.D[x.id] || {}; const tl = termList(x, DRV_TERMS), cur = termAt(tl, iso(new Date())); const terms = !(cur && cur.payModel) ? `<span class="pill warn">Terms needed</span>` : esc(drvTermText(cur)) + (tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : "");
-    return `<tr><td>${esc(x.name)} ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${(() => { const today = iso(new Date()), vid = vehAt(x.id, today), m = machineAt(x.id, today); return (vid ? esc(vName(vid)) : '<span class="muted">—</span>') + (m ? `<div class="small muted">Machine ${esc(m.name || m.tid)}</div>` : ""); })()}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
+    return `<tr><td><button class="btn sm ghost" data-drvview="${esc(x.id)}" style="padding:2px 6px"><b>${esc(x.name)}</b></button> ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${(() => { const today = iso(new Date()), vid = vehAt(x.id, today), m = machineAt(x.id, today); return (vid ? esc(vName(vid)) : '<span class="muted">—</span>') + (m ? `<div class="small muted">Machine ${esc(m.name || m.tid)}</div>` : ""); })()}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No drivers yet</b>Add a driver, or import an Uber report and drivers are created from it.</div>`}</div>`;
 }
 function driverForm(id, d0){
@@ -1279,11 +1282,11 @@ function itemForm(id, it){
     <div class="f"><label for="ik">Type</label><select id="ik" name="kind">${opts(ITEM_KINDS, it.kind || "loan")}</select></div>
     <div class="f"><label for="idt">Date given / paid</label><input id="idt" name="date" type="date" required value="${esc(it.date)}"></div>
     <div class="f"><label for="ids">Description</label><input id="ids" name="desc" value="${esc(it.desc)}" placeholder="e.g. Visa renewal 2026, personal loan"></div>
-    <div class="f"><label for="iam">Amount (for shared costs: cost excl. VAT)</label><input id="iam" name="amount" type="number" step="0.01" required value="${esc(it.amount ?? "")}"></div>
-    <div class="f" data-shared ${sh ? "" : "hidden"}><label for="ivt">VAT on the cost</label><input id="ivt" name="vat" type="number" step="0.01" value="${esc(it.vat ?? "")}"></div>
-    <div class="f" data-shared ${sh ? "" : "hidden"}><label for="isp">Driver's share %</label><input id="isp" name="sharePct" type="number" step="0.01" value="${esc(it.sharePct ?? "")}"></div>
-    <div class="f" data-shared ${sh ? "" : "hidden"}><label for="ica">Expense category (company part)</label><select id="ica" name="category">${opts(EXP_CATS, it.category || "5280")}</select></div>
-    <div class="f"><label for="ida">Driver pays (AED) – overrides %</label><input id="ida" name="driverAmount" type="number" step="0.01" value="${id ? esc(it.driverAmount ?? "") : ""}" placeholder="blank = full amount / share %"></div>
+    <div class="f"><label for="iam">Amount (excl. VAT)</label><input id="iam" name="amount" type="number" step="0.01" required value="${esc(it.amount ?? "")}"></div>
+    <div class="f"><label for="ivt">VAT on the cost</label><input id="ivt" name="vat" type="number" step="0.01" value="${esc(it.vat ?? "")}"></div>
+    <div class="f"><label for="isp">Driver's share % (company bears the rest)</label><input id="isp" name="sharePct" type="number" step="0.01" value="${esc(it.sharePct ?? (id ? "" : 100))}"></div>
+    <div class="f"><label for="ica">Expense category (company part)</label><select id="ica" name="category">${opts(EXP_CATS, it.category || "5280")}</select></div>
+    <div class="f"><label for="ida">Driver pays (AED) – overrides %</label><input id="ida" name="driverAmount" type="number" step="0.01" value="${id && (it.sharePct === "" || it.sharePct == null) ? esc(it.driverAmount ?? "") : ""}" placeholder="blank = share % of the cost"></div>
     <div class="f"><label for="ipf">Paid from</label><select id="ipf" name="paidFrom">${opts(acctOpts(["bank","cash"]), it.paidFrom || "1100")}</select></div>
     <div class="f"><label for="iin">Monthly instalment (AED)</label><input id="iin" name="installment" type="number" step="0.01" value="${num(it.installment) ? esc(it.installment) : ""}" placeholder="blank = in full"></div>
     <div class="f"><label for="ism">Recover from month</label><input id="ism" name="startMonth" type="month" value="${esc(it.startMonth || String(it.date||"").slice(0,7))}"></div>
@@ -1587,7 +1590,7 @@ function vSettings(){
 /* ============ events ============ */
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t) return;
-  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.vehView = ""; S.trmView = ""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.coaView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
   if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
   if(t.dataset.del){
@@ -1707,8 +1710,9 @@ document.addEventListener("submit", async ev => {
   if(f.id === "fItem"){
     if(!fd.driverId){ toast("Choose the driver."); return; }
     const id = f.dataset.id || ("i-" + uid()), prev = S.ditems[id] || {}; const {id:_, ...pb} = prev;
-    const amount = num(fd.amount), vat = fd.kind === "shared" ? num(fd.vat) : 0;
-    const da = String(fd.driverAmount ?? "") !== "" ? num(fd.driverAmount) : String(fd.sharePct ?? "") !== "" ? r2((amount + vat) * num(fd.sharePct) / 100) : (fd.kind === "shared" ? 0 : amount);
+    // the driver pays 100% unless a lower share (or a fixed amount) is entered
+    const amount = num(fd.amount), vat = num(fd.vat);
+    const da = String(fd.driverAmount ?? "") !== "" ? num(fd.driverAmount) : r2((amount + vat) * (String(fd.sharePct ?? "") !== "" ? num(fd.sharePct) : 100) / 100);
     const rec = {...pb, driverId: fd.driverId, kind: fd.kind, date: fd.date, desc: fd.desc || "", amount, vat, driverAmount: r2(da), sharePct: String(fd.sharePct ?? "") === "" ? "" : num(fd.sharePct),
       category: fd.category || "5280", paidFrom: fd.paidFrom || "1100", installment: String(fd.installment ?? "") === "" ? 0 : num(fd.installment), startMonth: fd.startMonth || fd.date.slice(0,7), repayments: pb.repayments || [],
       by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
@@ -1745,7 +1749,7 @@ document.addEventListener("change", async ev => {
   if(t.id === "ldrv"){ S.ledgerDriver = t.value; S.edit = null; render(); return; }
   if(t.id === "lgrp"){ S.ledgerGroup = t.value; render(); return; }
   if(t.id === "vgrp"){ S.vehGroup = t.value; render(); return; }
-  if(t.id === "ik"){ const f = t.form; f.querySelectorAll("[data-shared]").forEach(x => x.hidden = t.value !== "shared"); return; }
+  if(t.id === "ik"){ return; }
   if(t.id === "impPl"){ S.importPlatform = t.value; S.importState = null; S.importQueue = []; render(); return; }
   if(t.id === "file"){ handleFiles(t.files); t.value = ""; return; }
   if(t.dataset.posmap && S.posState){ S.posState.map[t.dataset.posmap] = t.value; render(); return; }
@@ -1779,6 +1783,7 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=2"></script>
-<script src="books.js?v=2"></script>
+<script src="books.js?v=4"></script>
+<script src="drivers.js?v=2"></script>
 
 </body></html>

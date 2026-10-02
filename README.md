@@ -63,3 +63,24 @@ Note: automating the Uber portal may conflict with Uber's terms. If Uber grants 
 - **Customers** and **Suppliers**: balances (1200 / 2000), opening balances and statements with unpaid invoices.
 - **Journal entries**: balanced debit and credit lines; lines on 1200, 2000 or 2100 carry the customer, supplier or driver.
 - All documents are stored as rows in entries/{month} and post to the journal, trial balance, VAT and bank ledgers.
+
+## Driver page (drivers.js)
+
+Drivers → click a driver. The separate settlement, driver ledger and car usage menus are replaced by five tabs:
+- **Trip history**: the driver's trips in the period.
+- **Transactions**: the running account from the books start, with the balance brought forward, plus loans still to recover and the net position.
+- **Salary**: the computation for the period (share, tips, cash, card, deductions, instalments, payments) and **Finalise**, which stores the record in `payroll`. Finalised periods cannot overlap. The record is compared with the current computation; payments made afterwards don't count as a change. "Reopen" removes a record, and "Pay" opens a salary payment.
+- **Performance**: trips, net per day against the fleet average, rank, net per trip, km, cash share, completion, week by week and cars driven.
+- **Accounts**: loans, salary advances, visa and other amounts. The driver pays 100% by default; a lower share is borne by the company as an expense. Recovered in monthly instalments.
+
+## Payment and receipt with a driver
+
+Choosing a driver as "Paid to" / "Received from" turns the form into a driver form, with a preview of the entry:
+- Payment: salary / balance (Dr 2100 / Cr bank), salary advance, loan, visa or other expense for the driver (Dr 1170 driver share + Dr expense company share / Cr bank, recovered monthly Dr 2100 / Cr 1170), or other accounts.
+- Receipt: cash handed over (Dr bank / Cr 2100), loan or advance repayment (Dr bank / Cr 1170), or other accounts.
+- Any other payee works as before, with one line per account.
+
+## Chart of accounts and financial statements
+
+- **Chart of accounts**: all accounts grouped by type (1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses), with opening and current balances and a ledger for each. Accounts can be added (collection `coa`, doc id = code), renamed, and given opening balances.
+- **Financial statements**: profit & loss for the period, and a balance sheet at the period end (opening balances plus everything posted since the books start). Any gap shows as "opening balances not yet entered".

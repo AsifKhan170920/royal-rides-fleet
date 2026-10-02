@@ -3,7 +3,12 @@
    load with the period and with the history; customers and suppliers are their own collections.
    Control accounts: 1200 Accounts receivable (customers), 2000 Accounts payable (suppliers),
    2100 Driver accounts. A line on a control account carries its party: "c:<id>", "s:<id>" or "d:<id>". */
-Object.assign(ACCT, {"1200":"Accounts receivable (customers)", "2000":"Accounts payable (suppliers)", "4200":"Other income"});
+Object.assign(ACCT, {"1200":"Accounts receivable (customers)", "2000":"Accounts payable (suppliers)", "4200":"Other income",
+  "3000":"Owner's capital", "3100":"Owner's drawings", "3900":"Retained earnings"});
+const ACCT_BASE = {...ACCT};
+// custom accounts and renamed / opening balances from the Chart of accounts (collection "coa", doc id = code)
+function applyCoa(){ Object.keys(ACCT).forEach(k => { if(!(k in ACCT_BASE)) delete ACCT[k]; else ACCT[k] = ACCT_BASE[k]; }); Object.values(S.coa || {}).forEach(a => { if(a.name) ACCT[a.id] = a.name; }); }
+const TYPE_OF = c => ({"1":"Asset", "2":"Liability", "3":"Equity", "4":"Income"})[String(c)[0]] || "Expense";
 
 const BK = {
   receipt: {title:"Receipt", plural:"Receipts", view:"receipts", cash:"Received in", partyLabel:"Received from", partyTypes:"csd", cols:["account","desc","amount","vat","invoiceId"]},
@@ -93,6 +98,50 @@ function newDoc(k){
 function openDocRow(id){
   const e = S.entries.find(x => x.id === id); if(!e || !BK[e.type]) return;
   S.bk = {view: BK[e.type].view, kind: e.type, id, data: {...e}, lines: (e.lines || []).map(l => ({...l}))};
+  // a payment to / receipt from a driver with one line on his account opens in the driver form
+  if(BK[e.type].cash && (e.party || "").startsWith("d:")){
+    const ls = e.lines || [];
+    if(ls.length === 1 && ls[0].account === "2100"){ S.bk.data.purpose = e.type === "payment" ? "salary" : "cash"; S.bk.data.amount = String(lineNet(e.type, ls[0])); S.bk.data.desc = ls[0].desc || ""; }
+    else S.bk.data.purpose = "other";
+  }
+}
+function newDriverDoc(k, drId, purpose, amt){
+  newDoc(k); S.bk.data.party = "d:" + drId; S.bk.data.purpose = purpose; S.bk.data.amount = amt > 0 ? String(r2(amt)) : "";
+}
+
+/* ---------- payment / receipt with a driver ---------- */
+/* Choosing a driver as "Paid to" / "Received from" turns the form into a driver form:
+   Payment – salary (Dr 2100 / Cr bank), salary advance, loan, visa or other expense for the driver
+   (a driver account: Dr 1170 his share + Dr expense the company's share / Cr bank, recovered monthly
+   from his salary), or other accounts. Receipt – cash handed over (Dr bank / Cr 2100), repayment of a
+   loan or advance (Dr bank / Cr 1170), or other accounts. */
+const DRV_PAY = {salary:"Salary / balance payment", advance:"Salary advance", loan:"Loan", visa:"Visa (paid for the driver)", shared:"Other expense paid for the driver (medical, licence…)", other:"Other – choose accounts"};
+const DRV_REC = {cash:"Cash handed over / balance received", repay:"Loan or advance repayment", other:"Other – choose accounts"};
+const ITEM_P = ["advance","loan","visa","shared"];
+function drvPurpose(b){ const p = b.data.purpose; return (b.kind === "payment" ? DRV_PAY : DRV_REC)[p] ? p : b.kind === "payment" ? "salary" : "cash"; }
+function drvPreview(b){
+  const d = b.data, p = drvPurpose(b), drId = (d.party || "").slice(2), who = dName(drId), bank = acctName(d.paidFrom || "1100"), amt = num(d.amount);
+  if(p === "other") return "";
+  if(p === "salary") return `Records: Dr 2100 Driver account – ${esc(who)} <b>${fmt(amt)}</b> · Cr ${esc(bank)} <b>${fmt(amt)}</b>. The driver's payable balance goes down.`;
+  if(p === "cash") return `Records: Dr ${esc(bank)} <b>${fmt(amt)}</b> · Cr 2100 Driver account – ${esc(who)} <b>${fmt(amt)}</b>. The cash he holds goes down.`;
+  if(p === "repay"){ const it = S.ditems[d.itemId]; return `Records: Dr ${esc(bank)} <b>${fmt(amt)}</b> · Cr 1170 Driver loans & recoverables <b>${fmt(amt)}</b>${it ? ` (${esc(ITEM_KINDS[it.kind] || "")}${it.desc ? " – " + esc(it.desc) : ""}; outstanding ${fmt(itemOutstanding(it, d.date || S.to))})` : ""}. Later instalments get shorter.`; }
+  const vat = ["visa","shared"].includes(p) ? num(d.vat) : 0, cost = amt + vat, pct = String(d.sharePct ?? "") === "" ? 100 : num(d.sharePct), da = r2(cost * pct / 100), co = r2(cost - da), inst = num(d.installment);
+  return `Records: Dr 1170 Driver loans & recoverables <b>${fmt(da)}</b> (driver's ${pct}%)${co ? ` · Dr ${esc(acctName(d.category || "5280"))} <b>${fmt(co)}</b> (company's share)` : ""} · Cr ${esc(bank)} <b>${fmt(cost)}</b>.<br>Recovered from his salary ${inst > 0 && inst < da ? `at <b>${fmt(inst)}</b> a month` : "<b>in full</b>"} from ${esc(d.startMonth || (d.date || "").slice(0,7))} (each month: Dr 2100 / Cr 1170).`;
+}
+function driverPanel(b){
+  const k = b.kind, d = b.data, p = drvPurpose(b), drId = d.party.slice(2), P = k === "payment" ? DRV_PAY : DRV_REC;
+  const ready = S.ledger && S.ledger.key === setting("ledgerStart", "2026-09-01") + "|" + S.to && !S.ledger.loading && !S.ledger.error;
+  if(!ready && S.db) needHistory();
+  const bal = ready ? ledgerLines(drId).closing : null, items = Object.values(S.ditems).filter(it => it.driverId === drId), out = sum(items, it => itemOutstanding(it, S.to));
+  const f = (n, l, type = "number", extra = "") => `<div class="f"><label for="bh_${n}">${l}</label><input id="bh_${n}" data-hf="${n}" type="${type}" ${type === "number" ? 'step="0.01"' : ""} value="${esc(d[n] ?? "")}"${extra}></div>`;
+  let fields = `<div class="f"><label for="bh_purpose">What is it for?</label><select id="bh_purpose" data-hf="purpose">${opts(P, p)}</select></div>`;
+  if(p === "salary" || p === "cash") fields += f("amount", "Amount", "number", bal != null && p === "salary" && bal > 0 ? ` placeholder="${r2(bal)}"` : "") + f("desc", "Description", "text");
+  if(p === "repay") fields += `<div class="f"><label for="bh_itemId">Loan / advance</label><select id="bh_itemId" data-hf="itemId">${opts(Object.fromEntries(items.filter(it => itemOutstanding(it, d.date || S.to) > 0.004).map(it => [it.id, `${ITEM_KINDS[it.kind] || ""}${it.desc ? " – " + it.desc : ""} · outstanding ${fmt(itemOutstanding(it, S.to))}`])), d.itemId || "", "Choose…")}</select></div>` + f("amount", "Amount");
+  if(ITEM_P.includes(p)) fields += f("amount", "Amount (excl. VAT)") + (["visa","shared"].includes(p) ? f("vat", "VAT") : "") + f("sharePct", "Driver's share % (default 100)", "number", ' placeholder="100"')
+    + f("installment", "Monthly instalment (blank = in full)") + f("startMonth", "Recover from month", "month") + f("desc", "Description", "text")
+    + `<div class="f"><label for="bh_category">Expense for the company's share</label><select id="bh_category" data-hf="category">${opts(EXP_CATS, d.category || "5280")}</select></div>`;
+  return `<div class="banner info" style="margin-top:10px"><b>${esc(dName(drId))}</b> · salary account ${bal == null ? "loading…" : `<b>${bal >= 0 ? "payable to him " : "he owes "}AED ${fmt(Math.abs(bal))}</b>`} at ${esc(dmyS(S.to))} · loans & advances outstanding <b>AED ${fmt(out)}</b></div>
+  <div class="form" style="margin-top:10px">${fields}</div>${p === "other" ? "" : `<p class="small" id="bkPrev" style="margin-top:10px">${drvPreview(b)}</p>`}`;
 }
 function bkEditor(){
   const b = S.bk, k = b.kind, c = BK[k], d = b.data, hist = histEntries();
@@ -119,13 +168,15 @@ function bkEditor(){
     return `<input ${a} type="number" step="0.01" value="${esc(l[col] ?? "")}" aria-label="${col}" style="text-align:right">`;
   };
   const heads = {account:"Account", party:"Customer / supplier / driver", desc:"Description", amount:"Amount", vat:"VAT", invoiceId:"Invoice", qty:"Qty", price:"Unit price", dr:"Debit", cr:"Credit"};
+  const dmode = !!c.cash && (d.party || "").startsWith("d:"), simple = dmode && drvPurpose(b) !== "other";
   return `<div class="section"><h2>${b.id ? "Edit" : "New"} ${esc(c.title.toLowerCase())}</h2>
-  ${c.cash ? `<p class="sub">To settle an invoice, use account ${k === "receipt" ? "1200 Accounts receivable" : "2000 Accounts payable"} and pick the invoice. To pay or receive from a driver, use 2100 Driver accounts with the driver as ${esc(c.partyLabel.toLowerCase())}.</p>` : k === "journal" ? `<p class="sub">Debits must equal credits. Lines on 1200, 2000 or 2100 need the customer, supplier or driver.</p>` : ""}
+  ${c.cash ? `<p class="sub">${dmode ? `A driver is selected: choose what the ${k} is for and the entry is made for you.` : `To settle an invoice, use account ${k === "receipt" ? "1200 Accounts receivable" : "2000 Accounts payable"} and pick the invoice. Choose a driver as ${esc(c.partyLabel.toLowerCase())} for salary, advances, loans and visa.`}</p>` : k === "journal" ? `<p class="sub">Debits must equal credits. Lines on 1200, 2000 or 2100 need the customer, supplier or driver.</p>` : ""}
   <form id="fBk"><div class="form">${head}<div class="f wide"><label for="bh_note">Notes</label>${inp("note")}</div></div>
-  <div class="tbl" style="margin-top:12px"><table><thead><tr>${c.cols.map(x => `<th${["amount","qty","price","dr","cr"].includes(x) ? ' class="num"' : ""}>${heads[x]}</th>`).join("")}${isInv(k) ? '<th class="num">Total</th>' : ""}<th></th></tr></thead><tbody>
+  ${dmode ? driverPanel(b) : ""}
+  ${simple ? "" : `<div class="tbl" style="margin-top:12px"><table><thead><tr>${c.cols.map(x => `<th${["amount","qty","price","dr","cr"].includes(x) ? ' class="num"' : ""}>${heads[x]}</th>`).join("")}${isInv(k) ? '<th class="num">Total</th>' : ""}<th></th></tr></thead><tbody>
   ${b.lines.map((l, i) => `<tr>${c.cols.map(col => `<td style="min-width:${col === "desc" ? 200 : col === "account" || col === "party" ? 190 : col === "invoiceId" ? 170 : 90}px">${cell(l, i, col)}</td>`).join("")}${isInv(k) ? `<td class="num" id="bkl_${i}">${fmt(lineNet(k, l) + lineVat(k, l))}</td>` : ""}<td><button type="button" class="btn sm ghost" data-bkdel="${i}" aria-label="Remove line">✕</button></td></tr>`).join("")}
   </tbody></table></div>
-  <div class="row" style="margin-top:8px;justify-content:space-between"><button type="button" class="btn sm" data-bkadd="1">Add line</button><div id="bkTot">${bkTotalsHtml()}</div></div>
+  <div class="row" style="margin-top:8px;justify-content:space-between"><button type="button" class="btn sm" data-bkadd="1">Add line</button><div id="bkTot">${bkTotalsHtml()}</div></div>`}
   <div class="row" style="margin-top:12px"><button class="btn primary" type="submit" ${S.canWrite && S.db ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-bkcancel="1">Cancel</button>${b.id ? `<button class="btn danger" type="button" data-bkdelete="1">Delete</button>` : ""}${k === "sale_invoice" && b.id ? `<button class="btn" type="button" data-bkpdf="${esc(b.id)}">Download PDF</button>` : ""}</div>
   </form></div>`;
 }
@@ -141,6 +192,25 @@ function nextInvNo(){ const n = (num(S.settings.invSeq) || 0) + 1; return (S.set
 async function saveBk(){
   const b = S.bk, k = b.kind, d = b.data;
   if(!d.date){ toast("Enter the date."); return; }
+  if(BK[k].cash && (d.party || "").startsWith("d:") && drvPurpose(b) !== "other"){
+    const drId = d.party.slice(2), p = drvPurpose(b), amt = num(d.amount), by = (S.user && (S.user.name || S.user.id)) || "";
+    if(!amt){ toast("Enter the amount."); return; }
+    if(ITEM_P.includes(p)){
+      // a driver account (loan, advance, visa…): posted from driverItems, recovered monthly through the salary
+      const vat = ["visa","shared"].includes(p) ? num(d.vat) : 0, pct = String(d.sharePct ?? "") === "" ? 100 : num(d.sharePct);
+      const rec = {driverId: drId, kind: p, date: d.date, desc: d.desc || d.note || "", amount: amt, vat, sharePct: pct, driverAmount: r2((amt + vat) * pct / 100), category: d.category || "5280",
+        paidFrom: d.paidFrom || "1100", installment: num(d.installment), startMonth: d.startMonth || d.date.slice(0,7), repayments: [], ref: d.ref || "", viaPayment: true, by, at: new Date().toISOString()};
+      if(b.id && S.entries.some(x => x.id === b.id)){ const e = S.entries.find(x => x.id === b.id), m0 = e.date.slice(0,7), s0 = await S.db.doc("entries/" + m0).get(); if(!await writeOk(S.db.doc("entries/" + m0).set({month: m0, rows: (s0.exists ? s0.data().rows || [] : []).filter(r => r.id !== b.id)}))) return; }
+      if(!await writeOk(S.db.doc("driverItems/i-" + uid()).set(rec))) return;
+      S.bk = null; await loadPeriod(); render(); toast(`${ITEM_KINDS[p]} recorded for ${dName(drId)}. It is on his Accounts tab.`); return;
+    }
+    if(p === "repay"){
+      const it = S.ditems[d.itemId]; if(!it){ toast("Choose the loan or advance."); return; } const {id:_, ...ib} = it;
+      if(!await writeOk(S.db.doc("driverItems/" + it.id).set({...ib, repayments: [...(ib.repayments || []), {date: d.date, amount: amt, paidTo: d.paidFrom || "1100", note: d.ref || d.desc || ""}]}))) return;
+      S.bk = null; render(); toast("Repayment recorded."); return;
+    }
+    b.lines = [{account: "2100", desc: d.desc || (k === "payment" ? "Salary / balance payment" : "Cash received from the driver"), amount: String(amt), vat: ""}];
+  }
   const keep = k === "journal" ? l => num(l.dr) || num(l.cr) : l => lineNet(k, l) || l.account || l.desc;
   const lines = b.lines.filter(keep).map(l => { const o = {...l}; Object.keys(o).forEach(x => { if(o[x] === "" || o[x] == null) delete o[x]; }); return o; });
   if(!lines.length){ toast("Add at least one line."); return; }
@@ -186,9 +256,17 @@ function docList(k){
     ${list.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td style="white-space:normal">${esc(e.ref || e.note)}</td><td class="small" style="white-space:normal">${esc([...new Set((e.lines || []).map(l => l.account + " " + acctName(l.account)))].join(", "))}</td><td class="num">${fmt(sum(e.lines || [], l => num(l.dr)))}</td><td><button class="btn sm" data-bkedit="${esc(e.id)}">Edit</button></td></tr>`).join("")}
     </tbody></table></div>` : `<div class="empty"><b>No journal entries in this period</b>Use journal entries for adjustments, accruals, depreciation and corrections.</div>`;
   } else {
-    table = list.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Reference</th><th>${c.cash}</th><th>${c.partyLabel}</th><th>Description</th><th class="num">Amount</th><th></th></tr></thead><tbody>
-    ${list.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td class="small">${esc(e.ref)}</td><td>${esc(acctName(e.paidFrom || "1100"))}</td><td>${esc(partyName(e.party) || e.payee || "")}</td><td class="small" style="white-space:normal">${esc((e.lines || []).map(l => l.desc || acctName(l.account)).join(", "))}</td><td class="num">${fmt(docTotals(e).total)}</td><td><button class="btn sm" data-bkedit="${esc(e.id)}">Edit</button></td></tr>`).join("")}
-    </tbody><tfoot><tr><td colspan="5">${list.length} ${c.plural.toLowerCase()}</td><td class="num">${fmt(sum(list, e => docTotals(e).total))}</td><td></td></tr></tfoot></table></div>` : `<div class="empty"><b>No ${c.plural.toLowerCase()} in this period</b>Click “New ${c.title.toLowerCase()}” to add one.</div>`;
+    // driver accounts given (payments) and their cash repayments (receipts) are listed with the documents
+    const rows = list.map(e => ({date: e.date, ref: e.ref, acct: e.paidFrom || "1100", who: partyName(e.party) || e.payee || "", desc: (e.lines || []).map(l => l.desc || acctName(l.account)).join(", "), amt: docTotals(e).total, btn: `<button class="btn sm" data-bkedit="${esc(e.id)}">Edit</button>`}));
+    Object.values(S.ditems).forEach(it => {
+      const lbl = `${ITEM_KINDS[it.kind] || "Loan"}${it.desc ? " – " + it.desc : ""}`, btn = `<button class="btn sm" data-itemedit="${esc(it.id)}">Open</button>`;
+      if(k === "payment" && it.date >= S.from && it.date <= S.to) rows.push({date: it.date, ref: it.ref || "", acct: it.paidFrom || "1100", who: dName(it.driverId), desc: lbl, amt: r2(num(it.amount) + num(it.vat) || num(it.driverAmount)), btn});
+      if(k === "receipt") (it.repayments || []).forEach(r => { if(r.date >= S.from && r.date <= S.to) rows.push({date: r.date, ref: r.note || "", acct: r.paidTo || "1100", who: dName(it.driverId), desc: "Repayment – " + lbl, amt: num(r.amount), btn}); });
+    });
+    rows.sort((a,b) => b.date.localeCompare(a.date));
+    table = rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Reference</th><th>${c.cash}</th><th>${c.partyLabel}</th><th>Description</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${esc(dmyS(r.date))}</td><td class="small">${esc(r.ref)}</td><td>${esc(acctName(r.acct))}</td><td>${esc(r.who)}</td><td class="small" style="white-space:normal">${esc(r.desc)}</td><td class="num">${fmt(r.amt)}</td><td>${r.btn}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td colspan="5">${rows.length} ${c.plural.toLowerCase()}</td><td class="num">${fmt(sum(rows, r => r.amt))}</td><td></td></tr></tfoot></table></div>` : `<div class="empty"><b>No ${c.plural.toLowerCase()} in this period</b>Click “New ${c.title.toLowerCase()}” to add one.</div>`;
   }
   return editing + `<div class="section"><div class="head"><div><h2>${c.plural} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2></div><button class="btn primary" data-bknew="${k}">New ${esc(c.title.toLowerCase())}</button></div>${table}</div>`;
 }
@@ -253,16 +331,99 @@ async function invoicePdf(id){
   box.remove();
 }
 
+/* ---------- chart of accounts ---------- */
+const TYPE_ORDER = ["Asset","Liability","Equity","Income","Expense"];
+function allCodes(){
+  return [...new Set([...Object.keys(ACCT), ...cashAccounts().map(a => a.id), ...Object.keys(S.platforms).map(clearingAcct), ...Object.keys(S.coa || {})])].sort();
+}
+// opening balance at the books start, debit positive (cash accounts, customers, suppliers and drivers keep theirs on their own pages)
+function openingOf(code){
+  let o = num((S.coa[code] || {}).opening);
+  const ca = cashAccounts().find(a => a.id === code); if(ca) o += num(ca.opening);
+  if(code === "1200") o += sum(Object.values(S.customers), c => num(c.opening));
+  if(code === "2000") o -= sum(Object.values(S.suppliers), x => num(x.opening));
+  if(code === "2100") o -= sum(Object.values(S.drivers), d => num(d.openingBalance));
+  return r2(o);
+}
+const natural = (code, v) => ["Asset","Expense"].includes(TYPE_OF(code)) ? v : -v;
+function coaBalances(J){
+  const mv = {}; J.forEach(l => { mv[l.acct] = (mv[l.acct] || 0) + l.dr - l.cr; });
+  return allCodes().map(code => ({code, name: acctName(code), type: TYPE_OF(code), open: openingOf(code), bal: r2(openingOf(code) + (mv[code] || 0)), used: code in mv}));
+}
+function coaView(){
+  const ce = S.ce ? coaForm(S.ce.code) : "", wait = needHistory();
+  if(wait) return ce + `<div class="section"><h2>Chart of accounts</h2>${wait}</div>`;
+  if(S.coaView) return ce + coaLedger(S.coaView);
+  const rows = coaBalances(historyJournal());
+  return ce + `<div class="section"><div class="head"><div><h2>Chart of accounts</h2><p class="sub">Every account with its opening balance (books start ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}) and balance at ${esc(dmyS(S.to))}. Click an account for its ledger. Codes: 1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses.</p></div><button class="btn primary" data-coanew="1">Add account</button></div>
+  <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th>Type</th><th class="num">Opening</th><th class="num">Balance ${esc(dmyS(S.to))}</th><th></th></tr></thead><tbody>
+  ${TYPE_ORDER.map(ty => { const rs = rows.filter(r => r.type === ty); return `<tr><td colspan="6" style="background:var(--bg)"><b>${ty === "Liability" ? "Liabilities" : ty + "s"}</b></td></tr>` + rs.map(r => `<tr><td class="mono">${esc(r.code)}</td><td><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button>${S.coa[r.code] && !(r.code in ACCT_BASE) && !cashAccounts().some(a => a.id === r.code) ? ' <span class="pill">Custom</span>' : ""}</td><td class="small">${ty}</td><td class="num">${r.open ? aed(natural(r.code, r.open)) : ""}</td><td class="num">${aed(natural(r.code, r.bal))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`).join(""); }).join("")}
+  </tbody></table></div><p class="small muted" style="margin-top:6px">Balances are shown the natural way round: assets and expenses as debits, liabilities, equity and income as credits.</p></div>`;
+}
+function coaForm(code){
+  const a = S.coa[code] || {}, isCash = cashAccounts().some(x => x.id === code), builtIn = code && (code in ACCT_BASE);
+  return `<div class="section"><h2>${code ? "Edit " + esc(code) + " · " + esc(acctName(code)) : "New account"}</h2>
+  ${isCash ? `<p class="sub">This is a bank / cash account: edit it on the Bank & cash accounts page.</p><button class="btn ghost" data-coacancel="1">Close</button>` : `<form class="form" id="fCoa" data-code="${esc(code || "")}">
+    <div class="f"><label for="ca_c">Code (4 digits: 1 asset, 2 liability, 3 equity, 4 income, 5 expense)</label><input id="ca_c" name="code" required pattern="[1-9][0-9]{3}" value="${esc(code || "")}" ${code ? "readonly" : ""}></div>
+    <div class="f"><label for="ca_n">Name</label><input id="ca_n" name="name" required value="${esc(a.name || (code ? acctName(code) : ""))}"></div>
+    <div class="f"><label for="ca_o">Opening balance (debit +, credit −)</label><input id="ca_o" name="opening" type="number" step="0.01" value="${esc(a.opening ?? "")}"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-coacancel="1">Cancel</button>${code && !builtIn && S.coa[code] ? `<button class="btn danger" type="button" data-del="coa" data-id="${esc(code)}">Delete</button>` : ""}</div>
+  </form>${["1200","2000","2100"].includes(code) ? `<p class="small muted">Opening balances of customers, suppliers and drivers are entered on their own forms and added to this account.</p>` : ""}`}</div>`;
+}
+function coaLedger(code){
+  const J = historyJournal().filter(l => l.acct === code).sort((a,b) => a.date.localeCompare(b.date)); let bal = openingOf(code); const open = bal;
+  const rows = J.map(l => { bal = r2(bal + l.dr - l.cr); return {...l, bal}; });
+  return `<div class="section"><div class="head"><div><h2>${esc(code)} · ${esc(acctName(code))}</h2><p class="sub">${TYPE_OF(code)} · from the books start to ${esc(dmyS(S.to))}. Totals that come from the trips are dated at the end of the period.</p></div><button class="btn ghost" data-coaview="">← Chart of accounts</button></div>
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance (Dr +)</th></tr></thead><tbody>
+  <tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(open)}</b></td></tr>
+  ${rows.slice(-1000).map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="2">Balance</td><td class="num">${fmt(sum(rows, l => l.dr))}</td><td class="num">${fmt(sum(rows, l => l.cr))}</td><td class="num"><b>${aed(bal)}</b></td></tr></tfoot></table></div></div>`;
+}
+
+/* ---------- financial statements ---------- */
+function statementsView(){
+  // profit & loss for the period at the top
+  const L = journal(compute()), mv = {}; L.forEach(l => { mv[l.acct] = (mv[l.acct] || 0) + l.dr - l.cr; });
+  const inc = Object.keys(mv).filter(c => TYPE_OF(c) === "Income" && r2(mv[c])).sort(), exp = Object.keys(mv).filter(c => TYPE_OF(c) === "Expense" && r2(mv[c])).sort();
+  const tInc = sum(inc, c => -mv[c]), tExp = sum(exp, c => mv[c]);
+  const line = (c, v) => `<tr><td class="mono small">${esc(c)}</td><td>${esc(acctName(c))}</td><td class="num">${aed(v)}</td></tr>`;
+  const pl = `<div class="section"><h2>Profit & loss · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
+    <tr><td colspan="3"><b>Income</b></td></tr>${inc.map(c => line(c, -mv[c])).join("")}<tr class="tot"><td></td><td><b>Total income</b></td><td class="num"><b>${aed(tInc)}</b></td></tr>
+    <tr><td colspan="3"><b>Expenses</b></td></tr>${exp.map(c => line(c, mv[c])).join("")}<tr class="tot"><td></td><td><b>Total expenses</b></td><td class="num"><b>${aed(tExp)}</b></td></tr>
+    <tr class="tot"><td></td><td><b>${tInc - tExp >= 0 ? "Net profit" : "Net loss"}</b></td><td class="num"><b>${aed(tInc - tExp)}</b></td></tr></tbody></table></div>
+    <p class="small muted" style="margin-top:6px">Driver earnings share (5100) and investor share (5900) are expenses. The company's share of a driver's visa or loan is an expense; the driver's own share is not – it sits in 1170 until recovered.</p></div>`;
+  const wait = needHistory();
+  if(wait) return pl + `<div class="section"><h2>Balance sheet</h2>${wait}</div>`;
+  // balance sheet at the end of the period: opening balances + everything posted since the books start
+  const B = coaBalances(historyJournal()).filter(r => r.bal || r.open);
+  const grp = ty => B.filter(r => r.type === ty), val = r => natural(r.code, r.bal);
+  const profit = -sum(B.filter(r => r.type === "Income" || r.type === "Expense"), r => r.bal);
+  const tA = sum(grp("Asset"), val), tL = sum(grp("Liability"), val), tE = sum(grp("Equity"), val) + profit, diff = r2(tA - tL - tE), gap = Math.abs(diff) > 0.01;
+  const bl = r => `<tr><td class="mono small">${esc(r.code)}</td><td>${esc(r.name)}</td><td class="num">${aed(val(r))}</td></tr>`;
+  const bs = `<div class="section"><h2>Balance sheet at ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
+    <tr><td colspan="3"><b>Assets</b></td></tr>${grp("Asset").map(bl).join("")}<tr class="tot"><td></td><td><b>Total assets</b></td><td class="num"><b>${aed(tA)}</b></td></tr>
+    <tr><td colspan="3"><b>Liabilities</b></td></tr>${grp("Liability").map(bl).join("")}<tr class="tot"><td></td><td><b>Total liabilities</b></td><td class="num"><b>${aed(tL)}</b></td></tr>
+    <tr><td colspan="3"><b>Equity</b></td></tr>${grp("Equity").map(bl).join("")}<tr><td></td><td>Profit since ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}</td><td class="num">${aed(profit)}</td></tr>
+    ${gap ? `<tr><td></td><td>Opening balances not yet entered (difference)</td><td class="num">${aed(diff)}</td></tr>` : ""}
+    <tr class="tot"><td></td><td><b>Total liabilities & equity</b></td><td class="num"><b>${aed(tL + tE + (gap ? diff : 0))}</b></td></tr></tbody></table></div>
+    ${gap ? `<p class="small muted" style="margin-top:6px">The difference is the opening position not yet entered. Enter the opening balances (owner's capital, retained earnings, other assets and liabilities at the books start) in the Chart of accounts and it disappears.</p>` : ""}</div>`;
+  return `<div class="grid2">${pl}${bs}</div>`;
+}
+
 /* ---------- wiring ---------- */
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines};
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),
-  customers: () => partyView("customer"), suppliers: () => partyView("supplier"),
+  customers: () => partyView("customer"), suppliers: () => partyView("supplier"), coa: () => coaView(), statements: () => statementsView(),
 };
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
-  if(t.dataset.nav){ S.bk = null; S.pe = null; S.pv = null; return; }
+  if(t.dataset.nav){ S.bk = null; S.pe = null; S.pv = null; S.ce = null; return; }
+  if(t.dataset.coanew){ S.ce = {code: ""}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.coaedit){ S.ce = {code: t.dataset.coaedit}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.coacancel){ S.ce = null; render(); return; }
+  if(t.dataset.coaview != null){ S.coaView = t.dataset.coaview; S.ce = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.bknew){ newDoc(t.dataset.bknew); render(); window.scrollTo(0,0); return; }
   if(t.dataset.bkedit){ openDocRow(t.dataset.bkedit); render(); window.scrollTo(0,0); return; }
   if(t.dataset.bkcancel){ S.bk = null; render(); return; }
@@ -278,7 +439,9 @@ document.addEventListener("click", async ev => {
 });
 function onField(ev){
   const t = ev.target, b = S.bk; if(!b) return;
-  if(t.dataset.hf){ b.data[t.dataset.hf] = t.value; if(t.dataset.hf === "party" && ev.type === "change") render(); return; }
+  if(t.dataset.hf){ b.data[t.dataset.hf] = t.value;
+    if(["party","purpose","itemId"].includes(t.dataset.hf) && ev.type === "change"){ render(); return; }
+    const pv = document.getElementById("bkPrev"); if(pv) pv.innerHTML = drvPreview(b); return; }
   if(t.dataset.lf != null && t.dataset.line != null){
     const l = b.lines[+t.dataset.line]; if(!l) return; l[t.dataset.lf] = t.value;
     if(t.dataset.lf === "account" && ev.type === "change"){ render(); return; }
@@ -291,6 +454,14 @@ document.addEventListener("change", onField);
 document.addEventListener("submit", async ev => {
   const f = ev.target;
   if(f.id === "fBk"){ ev.preventDefault(); if(S.db) saveBk(); return; }
+  if(f.id === "fCoa"){
+    ev.preventDefault(); if(!S.db) return;
+    const fd = Object.fromEntries(new FormData(f).entries()), code = f.dataset.code || fd.code;
+    if(!/^[1-9][0-9]{3}$/.test(code)){ toast("The code must be 4 digits."); return; }
+    if(!f.dataset.code && (allCodes().includes(code))){ toast("Account " + code + " already exists."); return; }
+    if(await writeOk(S.db.doc("coa/" + code).set({name: (fd.name || "").trim(), opening: num(fd.opening)}))){ S.ce = null; toast("Account saved."); render(); }
+    return;
+  }
   if(f.id === "fParty"){
     ev.preventDefault(); if(!S.db) return;
     const kind = f.dataset.kind, col = kind === "customer" ? "customers" : "suppliers", id = f.dataset.id || (kind[0] + "-" + uid());
