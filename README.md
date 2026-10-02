@@ -51,9 +51,9 @@ Note: automating the Uber portal may conflict with Uber's terms. If Uber grants 
 
 ## Car and machine assignment
 
-- The driver's form holds the assigned car and payment machine (terminal number), each change with an effective date. Earlier trips and card payments stay with the earlier car and machine, and the history is kept in driver.assign.
-- A machine has one holder. Giving it to a driver ends the previous holder's assignment from the same date.
-- The Machines page shows which drivers held each machine.
+- Cars are assigned to drivers on the **Vehicles** page. Click a car to open two tabs: **Assignment history** (assign a driver with an effective date; see from / until for each driver) and **Ledger** (fares, platform fee, VAT, refunds, driver cost, expenses and investor share, with a running balance that ends at the company share).
+- Payment machines are assigned on the **Machines** page. Click a machine to open two tabs: **Assignment history** (hand-over date) and **Transactions** (card payments with fee, net and running total).
+- One car and one machine have one driver at a time. Earlier trips and card payments keep the earlier driver. The driver form shows the current car and machine automatically.
 
 ## Books (books.js), Manager.io style
 

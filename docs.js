@@ -11,7 +11,7 @@ S.docs = S.docs || {}; S.docEdit = null;
 
 /* ---------- defaults from the fleet data ---------- */
 function offerDefaults(d) {
-  const v = d.vehicleId && S.vehicles[d.vehicleId];
+  const vid = (d.id && typeof vehAt === "function" && vehAt(d.id, iso(new Date()))) || d.vehicleId, v = vid && S.vehicles[vid];
   return {
     name: d.name || "", nationality: "", passport: "", phone: d.phone || "", position: "Limousine Driver", place: "Dubai, UAE",
     start: iso(new Date()), probation: 6, payModel: d.payModel || "commission", commissionPct: num(d.commissionPct),
