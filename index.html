@@ -6,6 +6,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
 <style>
 /* Layout: fixed left rail (collapses to a scrolling tab strip on phones) + working canvas with a sticky period bar */
@@ -161,14 +162,15 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"",
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"",
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:""}, edit:null
 };
 const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["usage","Driver & car usage"],["import","Import trip data"],
-  ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],["terminals","Card terminals"],
+  ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
+  ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines & drivers"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["settlement","Driver settlement"],["driverledger","Driver ledger & loans"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
@@ -229,7 +231,9 @@ function itemOutstanding(it, day){ const p = itemPlan(it); return r2(num(it.driv
 const POS = "__pos";
 const TRM_TERMS = ["driverId"];
 const POS_FIELDS = [["ref","Transaction / reference no."],["date","Date (or date & time)"],["time","Time (if separate)"],["tid","Terminal ID (TID)"],["amount","Amount"],["fee","Fee / commission (MDR)"],["card","Card number / type"],["type","Transaction type / status"]];
-const termByTid = tid => Object.values(S.terminals).find(x => norm(x.tid) === norm(tid));
+// machine ↔ statement by terminal number; Excel often drops leading zeros, so they are ignored
+const tidKey = t => norm(t).replace(/^0+/, "");
+const termByTid = tid => Object.values(S.terminals).find(x => tidKey(x.tid) === tidKey(tid));
 function cardDriver(x){ if(x.dr) return x.dr; const tm = termByTid(x.tid); if(!tm) return ""; const a = termAt(termList(tm, TRM_TERMS), x.d); return (a && a.driverId) || ""; }
 const trmText = t => t && t.driverId ? dName(t.driverId) : "Not assigned";
 function guessPos(h){
@@ -551,7 +555,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
+  const fns = {posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -629,14 +633,13 @@ const FIELDS = UberParse.FIELDS;
 const guessMap = UberParse.guessMap;
 function vImport(){
   const st = S.importState;
-  const pl = S.importPlatform || "uber", plList = {...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id, p.name||p.id])), [POS]:"Card terminal statement"};
+  const pl = S.importPlatform || "uber", plList = {...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id, p.name||p.id]))};
   let body = `<div class="section"><h2>Import trip data</h2>
   <div class="form" style="margin-bottom:10px"><div class="f"><label for="impPl">Platform of these files</label><select id="impPl">${opts(plList, pl)}</select></div></div>
   ${pl === POS ? `<p class="sub">Download the statement of a card terminal (payment machine) from the bank / provider portal as CSV. Each payment is credited to the driver the terminal was assigned to on that date. Several terminals in one file are fine if it has a terminal ID column. Rows already imported are skipped.</p>`
   : pl === "uber" ? `<p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report</b> and download two reports for the same dates: <b>Payments Transaction</b> (the money) and <b>Trip activity</b> (car, distance and status of each trip). Drop both CSV files below – each is recognised automatically. Rows already imported are skipped, so overlapping files are safe.</p>`
   : `<p class="sub">Download the trips / earnings report from the <b>${esc(pName(pl))}</b> fleet portal as CSV (open an Excel file and <i>Save as CSV</i> first). After you drop it, match its columns to the fields once – the mapping is remembered for ${esc(pName(pl))}'s files. Rows already imported are skipped.</p>`}
   <label class="drop" id="drop" for="file"><b>Drop ${esc(pl === POS ? "card terminal statement" : pName(pl))} CSV files here</b><br>or click to choose files<input type="file" id="file" accept=".csv,text/csv" multiple hidden></label></div>`;
-  if(st && st.kind === "pos") body += posPreview(st);
   if(st && st.kind === "activity"){
     const a = UberParse.activityRows(st.rows, st.headers), days = [...new Set(a.map(x=>x.d))].sort();
     const by = k => a.reduce((o,x) => (o[x[k]||"—"] = (o[x[k]||"—"]||0) + 1, o), {});
@@ -700,32 +703,32 @@ function posPreview(st){
   const unassigned = rows.filter(x => x.tid && termByTid(x.tid) && !cardDriver(x)).length;
   const byT = tids.map(t => { const rs = rows.filter(x => x.tid === t), tm = t && termByTid(t), drs = [...new Set(rs.map(cardDriver))];
     return `<tr><td class="mono">${esc(t || "—")}</td><td>${tm ? esc(tm.name || "") : t ? '<span class="pill warn">New – will be added</span>' : ""}</td><td>${drs.map(d => d ? esc(dName(d)) : '<span class="pill warn">Not assigned</span>').join(", ")}</td><td class="num">${rs.length}</td><td class="num">${fmt(sum(rs, x => x.amt))}</td></tr>`; }).join("");
-  return `<div class="section"><div class="head"><div><h2>Card terminal statement</h2><p class="sub">${esc(st.files.join(", "))} · ${rows.length} payments${days.length ? " · " + esc(dmyS(days[0])) + " to " + esc(dmyS(days[days.length-1])) : ""}. Each payment is credited to the driver the terminal was assigned to on that date (Card terminals page).</p></div>
-    <div class="row"><button class="btn ghost" id="impCancel">Cancel</button><button class="btn primary" id="impPos" ${rows.length && S.canWrite && S.db && !noTid ? "" : "disabled"}>Import ${rows.length} card payments</button></div></div>
+  return `<div class="section"><div class="head"><div><h2>Check the statement</h2><p class="sub">${esc(st.files.join(", "))} · ${rows.length} payments${days.length ? " · " + esc(dmyS(days[0])) + " to " + esc(dmyS(days[days.length-1])) : ""}. Each payment is credited to the driver the terminal was assigned to on that date (Machines &amp; drivers page).</p></div>
+    <div class="row"><button class="btn ghost" id="posCancel">Cancel</button><button class="btn primary" id="posGo" ${rows.length && S.canWrite && S.db && !noTid ? "" : "disabled"}>Import ${rows.length} card payments</button></div></div>
     <div class="kpis"><div class="kpi"><div class="l">Card payments</div><div class="v">${fmt(tot)}</div></div><div class="kpi"><div class="l">Fees</div><div class="v">${fmt(fee)}</div></div><div class="kpi"><div class="l">Net to bank</div><div class="v">${fmt(tot - fee)}</div></div><div class="kpi"><div class="l">Terminals</div><div class="v">${tids.filter(Boolean).length}</div></div></div>
     ${noTid ? `<div class="banner">${noTid} payments have no terminal ID. Choose the terminal ID column below, or type the terminal this whole file belongs to.</div>` : ""}
-    ${unknown.length || unassigned ? `<div class="banner">${unknown.length ? `New terminal(s) ${esc(unknown.join(", "))} will be added. ` : ""}Assign each terminal to its driver on the Card terminals page – payments follow the assignment, so this can be done after importing.</div>` : ""}
+    ${unknown.length || unassigned ? `<div class="banner">${unknown.length ? `New terminal(s) ${esc(unknown.join(", "))} will be added. ` : ""}Assign each machine to its driver on the Machines &amp; drivers page – payments follow the assignment, so this can be done after importing.</div>` : ""}
     <div class="form" style="margin:10px 0"><div class="f"><label for="posTid">Terminal ID for the whole file (only if there is no TID column)</label><input id="posTid" list="tidList" value="${esc(st.fileTid)}"><datalist id="tidList">${Object.values(S.terminals).map(x => `<option value="${esc(x.tid)}">${esc(x.name || "")}</option>`).join("")}</datalist></div></div>
     <div class="mapgrid">${POS_FIELDS.map(([k,l]) => `<div class="form"><div class="f"><label for="pm_${k}">${esc(l)}</label><select id="pm_${k}" data-posmap="${k}"><option value="">— none —</option>${st.headers.map(h => `<option value="${esc(h)}" ${st.map[k] === h ? "selected" : ""}>${esc(h)}</option>`).join("")}</select></div></div>`).join("")}</div>
     <div class="tbl" style="margin-top:12px"><table><thead><tr><th>TID</th><th>Terminal</th><th>Driver</th><th class="num">Payments</th><th class="num">Amount</th></tr></thead><tbody>${byT}</tbody></table></div></div>`;
 }
 async function runPosImport(){
-  const st = S.importState, rows = posRows(st); if(!rows.length) return;
-  $("#impPos").disabled = true; $("#impPos").textContent = "Importing…";
+  const st = S.posState, rows = posRows(st); if(!rows.length) return;
+  $("#posGo").disabled = true; $("#posGo").textContent = "Importing…";
   for(const tid of [...new Set(rows.map(x => x.tid))]){
     if(tid && !termByTid(tid)){ const id = "t-" + norm(tid).slice(0,20); if(!await writeOk(S.db.doc("terminals/" + id).set({tid, name:"", provider:"", driverId:"", active:true, createdFromImport:true}))) return; S.terminals[id] = {id, tid, driverId:""}; }
   }
   const byDay = {}; rows.forEach(x => (byDay[x.d] ||= []).push(x)); let added = 0, dup = 0;
   for(const [day, list] of Object.entries(byDay)){
     const ref = S.db.doc("cardtx/" + day), snap = await ref.get(), ex = snap.exists ? (snap.data().rows || {}) : {}, merged = {...ex};
-    for(const x of list){ if(ex[x.id]){ dup++; continue; } const {id, ...r} = x; merged[id] = r; added++; }
+    for(const x of list){ if(ex[x.id]){ dup++; continue; } const {id, ...r} = x; merged[id] = {...r, file: st.files[0].slice(0,80)}; added++; }
     if(!await writeOk(ref.set({date:day, rows:merged}))) return;
   }
   const days = Object.keys(byDay).sort();
   const mappings = {...(S.settings.mappings||{}), [norm(st.sig).slice(0,180)]: st.map};
-  const log = [...(S.settings.importLog||[]), {at: new Date().toLocaleString("en-GB"), files: ("Card terminal: " + st.files.join(", ")).slice(0,120), added, dup, range: `${days[0]} → ${days[days.length-1]}`}].slice(-30);
-  await writeOk(S.db.doc("settings/main").set({...S.settings, mappings, importLog: log}));
-  S.importState = (S.importQueue||[]).shift() || null; await loadPeriod(); render();
+  const posLog = [...(S.settings.posLog||[]), {at: new Date().toLocaleString("en-GB"), file: st.files.join(", ").slice(0,120), tids: [...new Set(rows.map(x => x.tid))].join(", ").slice(0,120), added, dup, total: r2(sum(rows, x => x.amt)), range: `${days[0]} → ${days[days.length-1]}`}].slice(-60);
+  await writeOk(S.db.doc("settings/main").set({...S.settings, mappings, posLog}));
+  S.posState = (S.posQueue||[]).shift() || null; await loadPeriod(); render();
   toast(`Imported ${added} card payments. ${dup} already existed and were skipped.`);
 }
 function previewRows(){
@@ -1093,6 +1096,56 @@ function repForm(id){
   </form></div>`;
 }
 
+/* ---------- payment machine statements ---------- */
+/* Statements from any provider (Network International, Magnati, Geidea…), as CSV or Excel. Bank files
+   often start with title lines, so the header row is found first. Each payment is linked to its machine
+   by the terminal number (TID), and through the machine to the driver who held it that day. */
+const cellText = v => v instanceof Date ? iso(v) + " " + String(v.getHours()).padStart(2,"0") + ":" + String(v.getMinutes()).padStart(2,"0") : (v ?? "");
+function tableFromRows(arr){
+  const filled = r => (r || []).filter(c => String(c ?? "").trim()).length;
+  let hi = arr.findIndex(r => filled(r) >= 3 && r.some(c => /terminal|tid|amount/i.test(String(c))));
+  if(hi < 0) hi = arr.findIndex(r => filled(r) >= 3);
+  if(hi < 0) return {headers:[], rows:[]};
+  const seen = {}, headers = arr[hi].map((h,i) => { let k = String(h ?? "").trim() || "Column " + (i+1); if(seen[k]) k += " (" + (++seen[k]) + ")"; else seen[k] = 1; return k; });
+  const rows = arr.slice(hi+1).filter(r => filled(r)).map(r => Object.fromEntries(headers.map((h,i) => [h, cellText(r[i])])));
+  return {headers, rows};
+}
+async function readPosFiles(files){
+  const list = [...files].filter(f => /\.(csv|xlsx|xls)$/i.test(f.name)); if(!list.length){ toast("Choose the statement as a CSV or Excel file."); return; }
+  S.posQueue = [];
+  for(const f of list){
+    let tables = [];
+    try{
+      if(/\.csv$/i.test(f.name)){ const t = await f.text(); tables = [Papa.parse(t.charCodeAt(0) === 0xFEFF ? t.slice(1) : t, {skipEmptyLines:true}).data]; }
+      else { if(!window.XLSX){ toast("The Excel reader didn't load. Check the internet connection, or save the file as CSV."); return; }
+        const wb = XLSX.read(await f.arrayBuffer(), {type:"array", cellDates:true}); tables = wb.SheetNames.map(n => XLSX.utils.sheet_to_json(wb.Sheets[n], {header:1, raw:true, defval:""})); }
+    }catch(e){ console.warn(e); toast(`Couldn't read ${f.name}.`); continue; }
+    const tb = tables.map(tableFromRows).find(x => x.headers.length && x.rows.length);
+    if(!tb){ toast(`${f.name}: no table of payments found.`); continue; }
+    const sig = POS + "|" + tb.headers.join("|"), saved = (S.settings.mappings||{})[norm(sig).slice(0,180)];
+    S.posQueue.push({kind:"pos", rows: tb.rows, headers: tb.headers, files:[f.name], map: saved || guessPos(tb.headers), fileTid:"", sig});
+  }
+  S.posState = S.posQueue.shift() || null; render();
+}
+function vPosUpload(){
+  const st = S.posState, f = S.posFilter, log = (S.settings.posLog || []).slice().reverse();
+  const tx = (S.cardtx || []).filter(x => !f || tidKey(x.tid) === tidKey(f)).sort((a,b) => (b.d + b.t).localeCompare(a.d + a.t));
+  const tids = [...new Set((S.cardtx || []).map(x => x.tid))].sort();
+  const mName = tid => { const m = termByTid(tid); return m && m.name ? m.name : ""; };
+  return `<div class="section"><h2>Upload payment machine statements</h2>
+    <p class="sub">Download the statement from the machine provider's portal (Network International, Magnati, Geidea or any other) as <b>Excel or CSV</b> and drop it here – several files at once are fine. Each payment is matched to its machine by the <b>terminal number (TID)</b>, and through the machine to the driver who held it that day (Machines & drivers). The first time a provider's format is used, check the columns once; it is remembered after that. Payments already uploaded are skipped.</p>
+    <label class="drop" id="posDrop" for="posFile"><b>Drop statements here (Excel or CSV)</b><br>or click to choose files<input type="file" id="posFile" accept=".csv,.xlsx,.xls,text/csv" multiple hidden></label></div>
+  ${st ? posPreview(st) + (S.posQueue.length ? `<p class="small muted">${S.posQueue.length} more file(s) waiting after this one.</p>` : "") : ""}
+  <div class="section"><div class="head"><div><h2>Card payments · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">${tx.length} payments · AED ${fmt(sum(tx, x => x.amt))} · fees ${fmt(sum(tx, x => x.fee))}</p></div>
+    <select id="posF" aria-label="Machine">${opts(Object.fromEntries(tids.map(t => [t, (mName(t) ? mName(t) + " · " : "") + t])), f, "All machines")}</select></div>
+  ${tx.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Terminal no.</th><th>Machine</th><th>Driver</th><th>Card</th><th class="num">Amount</th><th class="num">Fee</th><th>Reference</th><th>Statement</th></tr></thead><tbody>
+  ${tx.slice(0, 500).map(x => { const dr = cardDriver(x); return `<tr><td>${esc(dmyS(x.d))}</td><td>${esc(x.t)}</td><td class="mono">${esc(x.tid)}</td><td>${esc(mName(x.tid))}</td><td>${dr ? esc(dName(dr)) : '<span class="pill warn">Not assigned</span>'}</td><td class="mono small">${esc(x.card)}</td><td class="num">${aed(x.amt)}</td><td class="num">${fmt(x.fee)}</td><td class="mono small">${esc(x.ref)}</td><td class="small muted">${esc(x.file || "")}</td></tr>`; }).join("")}
+  </tbody></table></div>${tx.length > 500 ? `<p class="small muted">First 500 shown.</p>` : ""}` : `<div class="empty"><b>No card payments in this period</b>Upload a statement, or change the dates at the top.</div>`}</div>
+  <div class="section"><h2>Uploaded statements</h2>${log.length ? `<div class="tbl"><table><thead><tr><th>When</th><th>File</th><th>Terminal no.</th><th class="num">New payments</th><th class="num">Skipped duplicates</th><th class="num">Amount</th><th>Dates</th></tr></thead><tbody>
+  ${log.map(l => `<tr><td>${esc(l.at)}</td><td>${esc(l.file)}</td><td class="mono small">${esc(l.tids)}</td><td class="num">${l.added}</td><td class="num">${l.dup}</td><td class="num">${fmt(l.total)}</td><td>${esc(l.range)}</td></tr>`).join("")}
+  </tbody></table></div>` : `<p class="sub">No statements uploaded yet.</p>`}</div>`;
+}
+
 /* ---------- card terminals ---------- */
 function vTerminals(){
   const e = S.edit && S.edit.kind === "terminal" ? S.edit : null, today = iso(new Date());
@@ -1100,7 +1153,7 @@ function vTerminals(){
   return `${e ? terminalForm(e.id, S.terminals[e.id] || {}) : ""}
   <div class="section"><div class="head"><div><h2>Card terminals</h2><p class="sub">Payment machines given to drivers. Card payments in each terminal statement are credited to the driver the terminal was assigned to on that date, so a driver who took a card instead of cash is not charged for that cash.</p></div><button class="btn primary" data-edit="terminal" data-id="">Add terminal</button></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Terminal ID</th><th>Name</th><th>Bank / provider</th><th>Driver now</th><th class="num">Payments</th><th class="num">Amount</th><th></th></tr></thead><tbody>
-  ${list.map(x => { const rs = (S.cardtx || []).filter(c => norm(c.tid) === norm(x.tid)), tl = termList(x, TRM_TERMS), cur = termAt(tl, today);
+  ${list.map(x => { const rs = (S.cardtx || []).filter(c => tidKey(c.tid) === tidKey(x.tid)), tl = termList(x, TRM_TERMS), cur = termAt(tl, today);
     return `<tr><td class="mono">${esc(x.tid)}</td><td>${esc(x.name)}</td><td>${esc(x.provider)}</td><td>${cur && cur.driverId ? esc(dName(cur.driverId)) : '<span class="pill warn">Not assigned</span>'}${tl.length > 1 ? ` <span class="pill">${tl.length} assignments</span>` : ""}</td><td class="num">${rs.length}</td><td class="num">${fmt(sum(rs, c => c.amt))}</td><td><button class="btn sm" data-edit="terminal" data-id="${esc(x.id)}">Edit</button></td></tr>`; }).join("")}
   </tbody></table></div><p class="small muted" style="margin-top:6px">Payments and amounts are for the period at the top.</p>` : `<div class="empty"><b>No terminals yet</b>Add each payment machine with its terminal ID (TID), or import a terminal statement and they are added automatically.</div>`}</div>`;
 }
@@ -1108,7 +1161,7 @@ function terminalForm(id, x0){
   const x = {...x0, ...latestTerms(x0, TRM_TERMS)};
   return `<div class="section"><h2>${id ? "Edit terminal" : "New terminal"}</h2><p class="sub">When the machine moves to another driver, choose the new driver and the date – earlier payments stay with the earlier driver.</p>
   <form class="form" id="fTerminal" data-id="${esc(id)}">
-    <div class="f"><label for="tt">Terminal ID (TID)</label><input id="tt" name="tid" required value="${esc(x.tid)}"></div>
+    <div class="f"><label for="tt">Terminal number (TID) – as on the statement</label><input id="tt" name="tid" required value="${esc(x.tid)}"></div>
     <div class="f"><label for="tn">Name / label</label><input id="tn" name="name" value="${esc(x.name)}" placeholder="e.g. POS-03"></div>
     <div class="f"><label for="tpv">Bank / provider</label><input id="tpv" name="provider" value="${esc(x.provider)}" placeholder="e.g. Network International"></div>
     <div class="f"><label for="tdr">Assigned driver</label><select id="tdr" name="driverId">${listOpts(S.drivers, d => d.name || d.id, x.driverId, "Not assigned")}</select></div>
@@ -1150,7 +1203,7 @@ function vRecon(){
     </tbody></table></div></div>`;
   }
   return `<div class="banner info"><b>Total payment = Payout from application + Card payment + Cash from driver + Difference.</b> Total payment is what riders paid for the driver's trips (plus direct bookings he collected). The difference is cash the driver still holds – it is deducted from his pay in the Driver settlement. A negative difference means card and cash are more than his trips: check the terminal assignment or record the booking.</div>
-  ${unas.length ? `<div class="banner">${unas.length} card payments (AED ${fmt(sum(unas, x => x.amt))}) are on terminals with no driver assigned for that date: ${esc([...new Set(unas.map(x => x.tid))].join(", "))}. Assign them on the Card terminals page.</div>` : ""}
+  ${unas.length ? `<div class="banner">${unas.length} card payments (AED ${fmt(sum(unas, x => x.amt))}) are on terminals with no driver assigned for that date: ${esc([...new Set(unas.map(x => x.tid))].join(", "))}. Assign them on the Payment machines → Machines &amp; drivers page.</div>` : ""}
   ${detail}
   <div class="section"><div class="head"><div><h2>Reconciliation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">Click a driver to see each day.</p></div><button class="btn" id="expRecon">Export CSV</button></div>
   ${R.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th class="num">Trips</th><th class="num">Total payment</th><th class="num">Payout from application</th><th class="num">Card payment</th><th class="num">Cash from driver</th><th class="num">Difference</th><th></th></tr></thead><tbody>
@@ -1333,7 +1386,8 @@ document.addEventListener("click", async ev => {
   if(t.id === "impCancel"){ S.importState = (S.importQueue||[]).shift() || null; render(); return; }
   if(t.id === "impGo"){ runImport(); return; }
   if(t.id === "impAct"){ runActivityImport(); return; }
-  if(t.id === "impPos"){ runPosImport(); return; }
+  if(t.id === "posGo"){ runPosImport(); return; }
+  if(t.id === "posCancel"){ S.posState = (S.posQueue||[]).shift() || null; render(); return; }
   if(t.dataset.recon != null){ S.reconDriver = t.dataset.recon === S.reconDriver ? "" : t.dataset.recon; render(); return; }
   if(t.id === "expRecon"){ const R = reconRows(); saveCsv(`reconciliation_${S.from}_${S.to}.csv`, [["Driver","Trips","Total payment","Payout from application","Card payment (terminal)","Cash from driver (handed over / spent)","Difference (cash still with driver)"], ...R.map(r => [dName(r.id), r.n, ...[r.total, r.app, r.card, r.handed, r.diff].map(x => r2(x).toFixed(2))])]); return; }
   if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [S.to, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
@@ -1432,12 +1486,14 @@ document.addEventListener("change", async ev => {
   if(t.id === "ik"){ const f = t.form; f.querySelectorAll("[data-shared]").forEach(x => x.hidden = t.value !== "shared"); return; }
   if(t.id === "impPl"){ S.importPlatform = t.value; S.importState = null; S.importQueue = []; render(); return; }
   if(t.id === "file"){ handleFiles(t.files); t.value = ""; return; }
-  if(t.dataset.posmap && S.importState){ S.importState.map[t.dataset.posmap] = t.value; render(); return; }
-  if(t.id === "posTid" && S.importState){ S.importState.fileTid = t.value.trim(); render(); return; }
+  if(t.dataset.posmap && S.posState){ S.posState.map[t.dataset.posmap] = t.value; render(); return; }
+  if(t.id === "posTid" && S.posState){ S.posState.fileTid = t.value.trim(); render(); return; }
+  if(t.id === "posFile"){ readPosFiles(t.files); t.value = ""; return; }
+  if(t.id === "posF"){ S.posFilter = t.value; render(); return; }
   if(t.dataset.map && S.importState){ S.importState.map[t.dataset.map] = [...t.selectedOptions].map(o=>o.value).filter(Boolean); render(); return; }
 });
-["dragenter","dragover"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("#drop"); if(d){ ev.preventDefault(); d.classList.add("over"); } }));
-["dragleave","drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("#drop"); if(d){ ev.preventDefault(); d.classList.remove("over"); if(n === "drop") handleFiles(ev.dataTransfer.files); } }));
+["dragenter","dragover"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("#drop, #posDrop"); if(d){ ev.preventDefault(); d.classList.add("over"); } }));
+["dragleave","drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("#drop, #posDrop"); if(d){ ev.preventDefault(); d.classList.remove("over"); if(n === "drop") (d.id === "posDrop" ? readPosFiles : handleFiles)(ev.dataTransfer.files); } }));
 
 /* ============ sign-in ============ */
 function showLogin(msg){ $("#login").hidden = false; $("#lmsg").textContent = msg || ""; render(); }
