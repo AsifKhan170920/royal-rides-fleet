@@ -383,11 +383,12 @@ function salaryPrintHtml(M, d, fin){
     <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
   </div>`;
 }
+const lateFor = (id, fin) => fin ? ((S.ledger && S.ledger.trips) || []).filter(t => (fin.late || []).includes(t.id)) : (lateSelected(id) || []);
 async function printSalary(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
-  const x = selX(id, compute().D[id]) || {}, late = lateSelected(id) || [], M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
   const fin = Object.values(S.payroll).find(p => p.driverId === id && p.from === S.from && p.to === S.to);
+  const x = selX(id, compute().D[id]) || {}, late = lateFor(id, fin), M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
   box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, d, fin)}`; document.body.appendChild(box);
   const name = `Salary_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
@@ -512,6 +513,58 @@ DL.dperf = id => { const C = compute(), x = C.D[id] || {}, trips = S.trips.filte
 DL.daccts = id => [`driver_accounts_${norm(dName(id))}_${S.to}.csv`, [["Date","Account","Description","Total cost","Driver share","Company bears","Monthly instalment","From month","Recovered","Outstanding"],
   ...Object.values(S.ditems).filter(it => it.driverId === id).sort((a,b) => (a.date || "").localeCompare(b.date || "")).map(it => { const cost = num(it.amount) + num(it.vat) || num(it.driverAmount), da = num(it.driverAmount), out = itemOutstanding(it, S.to); return [it.date, ITEM_KINDS[it.kind] || "", it.desc || "", r2(cost), r2(da), r2(cost - da), num(it.installment) || "in full", it.startMonth || "", r2(da - out), out]; })]];
 
+/* ---------- bulk salary statements ---------- */
+/* Drivers page → "Bulk salary statements": the salaries finalised between two dates (date of finalising),
+   downloaded as one PDF with each driver's signing statement on its own page, plus a summary. */
+S.bulk = S.bulk || null;
+const bulkRecs = () => { const b = S.bulk || {}; return Object.values(S.payroll).filter(p => p.at && p.at.slice(0,10) >= b.from && p.at.slice(0,10) <= b.to).sort((a,b) => dName(a.driverId).localeCompare(dName(b.driverId)) || a.from.localeCompare(b.from)); };
+function bulkPanel(){
+  if(!S.bulk) return "";
+  const b = S.bulk, recs = bulkRecs(), off = new Set(b.off || []), on = recs.filter(p => !off.has(p.id));
+  return `<div class="section"><div class="head"><div><h2>Bulk salary statements</h2><p class="sub">Salaries finalised between the dates below – one PDF with each driver's statement on its own page, ready to print and sign.</p></div><button class="btn ghost" data-bulkclose="1">Close</button></div>
+  <div class="form" style="grid-template-columns:repeat(auto-fit,minmax(160px,220px))"><div class="f"><label for="bkF">Finalised from</label><input id="bkF" type="date" value="${esc(b.from)}"></div><div class="f"><label for="bkT">Finalised to</label><input id="bkT" type="date" value="${esc(b.to)}"></div></div>
+  ${recs.length ? `<div class="tbl" style="margin-top:10px"><table><thead><tr><th><input type="checkbox" data-bulkall="1" ${on.length === recs.length ? "checked" : ""} aria-label="All"></th><th>Driver</th><th>Period</th><th class="num">Trips</th><th class="num">Salary</th><th class="num">Balance after</th><th>Finalised</th></tr></thead><tbody>
+    ${recs.map(p => `<tr><td><input type="checkbox" data-bulkone="${esc(p.id)}" ${off.has(p.id) ? "" : "checked"} aria-label="Include"></td><td>${esc(dName(p.driverId))}</td><td>${esc(dmyS(p.from))} – ${esc(dmyS(p.to))}</td><td class="num">${p.n || 0}</td><td class="num">${aed(num(p.salary))}</td><td class="num">${p.closing == null ? "—" : aed(p.closing)}</td><td class="small muted">${esc(dmyS(p.at.slice(0,10)))}${p.by ? " · " + esc(p.by) : ""}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td></td><td colspan="3">${on.length} of ${recs.length} selected</td><td class="num">${fmt(sum(on, p => num(p.salary)))}</td><td colspan="2"></td></tr></tfoot></table></div>
+    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-bulkpdf="1" ${on.length ? "" : "disabled"}>Download statements PDF (${on.length})</button>${dlBtn("bulksal")}</div>`
+  : `<p class="sub" style="margin-top:10px">No salary was finalised between these dates.</p>`}</div>`;
+}
+DL.bulksal = () => { const off = new Set((S.bulk || {}).off || []), recs = bulkRecs().filter(p => !off.has(p.id));
+  return [`salaries_finalised_${S.bulk.from}_${S.bulk.to}.csv`, [["Driver","Period from","Period to","Trips","Driver share","Salary for the period","Balance after","Finalised on","Finalised by"],
+    ...recs.map(p => [dName(p.driverId), p.from, p.to, p.n || 0, r2(num(p.ent)), r2(num(p.salary)), p.closing == null ? "" : r2(p.closing), p.at.slice(0,10), p.by || ""])]]; };
+async function bulkStatements(){
+  const off = new Set((S.bulk || {}).off || []), recs = bulkRecs().filter(p => !off.has(p.id)); if(!recs.length) return;
+  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+  try{ if(!window.jspdf) await loadJs("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"); }catch(e){ toast("The PDF tool could not load – check the internet connection."); return; }
+  const keep = {from: S.from, to: S.to, preset: $("#preset").value}, doc = new window.jspdf.jsPDF({unit: "mm", format: "a4", compress: true}); let pages = 0;
+  const groups = {}; recs.forEach(p => (groups[p.from + "|" + p.to] ||= []).push(p));
+  try{
+    for(const [key, list] of Object.entries(groups)){
+      // each statement is worked out for its own period
+      const [a, b] = key.split("|"); S.from = a; S.to = b; await loadPeriod(); await loadLedger();
+      for(const p of list){
+        toast(`Making statement ${pages + 1} of ${recs.length} – ${dName(p.driverId)}…`);
+        const id = p.driverId, x = selX(id, compute().D[id]) || {}, late = lateFor(id, p), M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id));
+        const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
+        box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, S.drivers[id] || {}, p)}`; document.body.appendChild(box);
+        const canvas = await html2pdf().set({html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}}).from(box.querySelector(".sp")).toCanvas().get("canvas");
+        box.remove();
+        const h = Math.min(297, 210 * canvas.height / canvas.width), w = h < 297 ? 210 : 297 * canvas.width / canvas.height;
+        if(pages) doc.addPage(); doc.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (210 - w) / 2, 0, w, h); pages++;
+      }
+    }
+    doc.save(`Salary_statements_finalised_${S.bulk.from}_${S.bulk.to}.pdf`); toast(`Downloaded ${pages} salary statements.`);
+  }catch(e){ console.warn(e); toast("Could not make the PDF. Try again."); }
+  S.from = keep.from; S.to = keep.to; $("#pFrom").value = keep.from; $("#pTo").value = keep.to; $("#preset").value = keep.preset; await loadPeriod(); render();
+}
+window.bulkPanel = bulkPanel;
+document.addEventListener("change", ev => {
+  const t = ev.target; if(!S.bulk) return;
+  if(t.id === "bkF" || t.id === "bkT"){ S.bulk[t.id === "bkF" ? "from" : "to"] = t.value; S.bulk.off = []; render(); }
+  if(t.dataset && t.dataset.bulkone){ const off = new Set(S.bulk.off || []); t.checked ? off.delete(t.dataset.bulkone) : off.add(t.dataset.bulkone); S.bulk.off = [...off]; render(); }
+  if(t.dataset && t.dataset.bulkall){ S.bulk.off = t.checked ? [] : bulkRecs().map(p => p.id); render(); }
+});
+
 /* ---------- events ---------- */
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
@@ -527,6 +580,9 @@ document.addEventListener("click", async ev => {
     return;
   }
   if(t.dataset.salprint){ printSalary(t.dataset.salprint); return; }
+  if(t.dataset.bulkopen){ const today = iso(new Date()); S.bulk = {from: today.slice(0,8) + "01", to: today, off: []}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.bulkclose){ S.bulk = null; render(); return; }
+  if(t.dataset.bulkpdf){ t.disabled = true; t.textContent = "Making the PDF…"; await bulkStatements(); return; }
   if(t.dataset.tselall){ const id = t.dataset.tselall, open = S.trips.filter(x => x.dr === id && moneyRow(x) && !settleStatus(x).ok).map(x => x.id); await saveSel(id, {excluded: t.dataset.on === "1" ? [] : open}); render(); return; }
   if(t.dataset.tripview || t.dataset.tripedit){ S.tripEdit = {day: t.dataset.day, id: t.dataset.id, mode: t.dataset.tripview ? "view" : "edit"}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.tripclose){ S.tripEdit = null; render(); return; }
