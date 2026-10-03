@@ -167,7 +167,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, reminders:{}, rcpt:{}, payouts:{}, feeinv:{}, pltView:"", pltTab:"ledger", rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, reminders:{}, rcpt:{}, payouts:{}, feeinv:{}, pladj:{}, pltView:"", pltTab:"ledger", rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -403,7 +403,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("payouts","payouts"); sub("feeinv","feeinv"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("payouts","payouts"); sub("feeinv","feeinv"); sub("pladj","pladj"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -945,7 +945,8 @@ function vImport(){
       <div class="kpi"><div class="l">Other earnings</div><div class="v">${fmt(T.oe)}</div></div><div class="kpi"><div class="l">Paid to bank</div><div class="v">${fmt(T.po)}</div></div>
     </div>
     ${st.paid != null ? (Math.abs(ours - st.paid) < 0.05 ? `<div class="banner info">✓ Checked: these rows add up to the report's “Paid to you” total of AED ${fmt(st.paid)}.</div>`
-      : `<div class="banner">These rows add up to AED ${fmt(ours)}, but the report's “Paid to you” total is AED ${fmt(st.paid)}. A column is missing or counted twice – check the mapping below before importing.</div>`) : ""}
+      : `<div class="banner">These rows add up to AED ${fmt(ours)}, but the report's “Paid to you” total is AED ${fmt(st.paid)} – a difference of <b>AED ${fmt(r2(st.paid - ours))}</b>. A column may be missing (a charge or earning the software has no field for) or counted twice – check the mapping below.
+        <label style="display:block;margin-top:6px"><input type="checkbox" id="impAdj" ${st.noAdj ? "" : "checked"}> Book the difference as a balancing adjustment – ${st.paid - ours > 0 ? "platform income (4030 Platform adjustments)" : "platform expense (5020 Platform adjustments / other deductions)"} – so ${esc(pName(st.pl))}'s account agrees with its report</label></div>`) : ""}
     ${cPct && T.f ? (Math.abs(feePct - cPct) <= 1 ? `<div class="banner info">✓ Fee in this file is ${feePct.toFixed(1)}% of fares – matches the ${cPct}% commission in the ${esc(pName(st.pl))} contract.</div>`
       : `<div class="banner">Fee in this file is ${feePct.toFixed(1)}% of fares, but the ${esc(pName(st.pl))} contract says ${cPct}% commission. Check the mapping, or raise it with ${esc(pName(st.pl))}.</div>`) : ""}
     ${days.length ? `<p class="small muted">Trip dates ${esc(days[0])} to ${esc(days[days.length-1])}.${bad ? ` <span class="pill bad">${bad} rows have no readable date and will be skipped</span>` : ""}</p>` : ""}
@@ -1047,6 +1048,10 @@ async function runImport(){
     if(!await writeOk(ref.set({date:day, rows:merged}))) return;
   }
   const days = Object.keys(byDay).sort();
+  // balancing adjustment: the report's "Paid to you" total less what the imported rows add up to
+  { const st = S.importState, all = previewRows().filter(t => t.d), diff = st.paid != null ? r2(st.paid - UberParse.balanceOf(all)) : 0;
+    if(Math.abs(diff) >= 0.01 && !st.noAdj){ const id = "adj-" + norm(pl + "|" + st.files.join("|") + "|" + days[0] + "|" + days[days.length-1]).slice(0, 80);
+      await writeOk(S.db.doc("pladj/" + id).set({pl, date: days[days.length-1], from: days[0], amount: diff, file: st.files.join(", ").slice(0, 120), by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()})); } }
   const mappings = {...(S.settings.mappings||{}), [norm(S.importState.sig).slice(0,180)]: S.importState.map};
   const log = [...(S.settings.importLog||[]), {at: new Date().toLocaleString("en-GB"), files: ((isUber ? "" : pName(pl) + ": ") + S.importState.files.join(", ")).slice(0,120), added, dup, range: `${days[0]} → ${days[days.length-1]}`}].slice(-30);
   await writeOk(S.db.doc("settings/main").set({...S.settings, mappings, importLog: log}));
@@ -2018,6 +2023,7 @@ document.addEventListener("change", async ev => {
   if(t.id === "lgrp"){ S.ledgerGroup = t.value; render(); return; }
   if(t.id === "vgrp"){ S.vehGroup = t.value; render(); return; }
   if(t.id === "ik"){ return; }
+  if(t.id === "impAdj" && S.importState){ S.importState.noAdj = !t.checked; return; }
   if(t.id === "impPl"){ S.importPlatform = t.value; S.importState = null; S.importQueue = []; render(); return; }
   if(t.id === "file"){ handleFiles(t.files); t.value = ""; return; }
   if(t.dataset.posmap && S.posState){ S.posState.map[t.dataset.posmap] = t.value; render(); return; }
@@ -2061,6 +2067,6 @@ boot();
 <script src="rta.js?v=2"></script>
 <script src="reminders.js?v=2"></script>
 <script src="purchases.js?v=3"></script>
-<script src="platforms.js?v=1"></script>
+<script src="platforms.js?v=2"></script>
 
 </body></html>

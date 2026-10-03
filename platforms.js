@@ -13,7 +13,9 @@
      the fee is already booked from the trips.
    Trip files differ by platform: each platform's file is mapped to the fields once on Import trip data; the mapping
    is remembered for that file layout. Excel files (.xlsx) can be dropped as well as CSV. */
-Object.assign(ACCT, {"1158": "Platform payouts in transit"}); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"1158": "Platform payouts in transit"});
+const PLT_ACCTS = {"1158": "Platform payouts in transit", "4030": "Platform adjustments (income)", "5020": "Platform adjustments / other deductions"};
+Object.assign(ACCT, PLT_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, PLT_ACCTS);
+S.pladj = S.pladj || {};
 S.pltView = S.pltView || ""; S.pltTab = S.pltTab || "ledger"; S.pltGroup = S.pltGroup || "week"; S.payouts = S.payouts || {}; S.feeinv = S.feeinv || {}; S.feeEdit = S.feeEdit || null; S.poMatch = S.poMatch || null;
 const PLT_TABS = {ledger: "Ledger", payouts: "Payouts", fees: "Fee invoices"};
 const pltConfirm = pl => !!(S.platforms[pl] || {}).payoutConfirm;
@@ -27,6 +29,11 @@ function statementPayouts(pl){
 }
 /* journal: matched payouts (confirm mode) */
 function postPlt(add){
+  // balancing adjustments from imports: the report's total that no field of the trip data covers
+  for(const a of Object.values(S.pladj)){
+    if(!a.date || a.date < S.from || a.date > S.to) continue; const v = r2(num(a.amount)), c = clearingAcct(a.pl), memo = `${pName(a.pl)} balancing adjustment – ${a.file || "import"}`;
+    if(v > 0){ add(c, v, 0, memo, a.date); add("4030", 0, v, memo, a.date); } else if(v < 0){ add("5020", -v, 0, memo, a.date); add(c, 0, -v, memo, a.date); }
+  }
   for(const m of Object.values(S.payouts)){
     if(!m.bankDate || m.bankDate < S.from || m.bankDate > S.to || !pltConfirm(m.pl)) continue;
     const memo = `${pName(m.pl)} payout of ${dmyS(m.date)} received`, diff = r2(num(m.bankAmount) - num(m.amount));
@@ -48,6 +55,7 @@ function pltLedger(pl){
     if(r2(g.c)) L.push({date, desc: `Cash collected by our drivers · ${per}`, cr: r2(g.c)}); });
   statementPayouts(pl).forEach(p => L.push({date: p.date, desc: `Payout to bank${pltConfirm(pl) ? (p.m && p.m.bankDate ? ` – received ${dmyS(p.m.bankDate)} AED ${fmt(num(p.m.bankAmount))}` : " – not yet matched with the bank") : ""}`, cr: p.amount, po: true}));
   histEnts().filter(e => e.type === "uber_payout" && (e.platformId || "uber") === pl).forEach(e => L.push({date: e.date, desc: `Payout received${e.note ? " – " + e.note : ""} (entered)`, cr: num(e.amount), ref: {kind: "entry", id: e.id, date: e.date}}));
+  Object.values(S.pladj).filter(a => a.pl === pl).forEach(a => { const v = r2(num(a.amount)); L.push({date: a.date, desc: `Balancing adjustment (${v > 0 ? "income 4030" : "expense 5020"}) – ${a.file || "import"}: report total vs. imported rows`, ...(v > 0 ? {dr: v} : {cr: -v}), adj: a.id}); });
   L.sort((a, b) => a.date.localeCompare(b.date) || (a.po ? 1 : 0) - (b.po ? 1 : 0));
   let bal = typeof openingOf === "function" ? openingOf(clearingAcct(pl)) : 0; const open = bal, shown = []; let before = bal;
   L.forEach(l => { bal = r2(bal + (l.dr || 0) - (l.cr || 0)); l.bal = bal; if(l.date < S.from) before = bal; else if(l.date <= S.to) shown.push(l); });
@@ -58,10 +66,10 @@ function pltLedgerTab(pl){
   const R = pltLedger(pl);
   return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(pName(pl))}'s account (${esc(clearingAcct(pl))} · ${esc(acctName(clearingAcct(pl)))}) from ${esc(dmyS(R.start))}: collected for us = debit; fee, VAT, cash kept by drivers and payouts = credit. Balance = what ${esc(pName(pl))} still owes us. Newest first.</span>
     <select id="pltGrp" aria-label="Group">${opts({day: "By day", week: "By week", month: "By month"}, S.pltGroup)}</select></div>
-  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
-  ${(R.pg = paged("pltled-" + pl, R.shown.slice().reverse())).rows.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nothing in this period.</td></tr>`}
-  ${R.pg.last ? `<tr><td>${esc(dmyS(S.from < R.start ? R.start : S.from))}</td><td><b>${S.from <= R.start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= R.start ? R.open : R.before)}</b></td></tr>` : ""}
-  </tbody><tfoot><tr><td colspan="2">Balance ${esc(dmyS(S.to))} – ${R.close >= 0 ? "owed by " + esc(pName(pl)) : "we owe " + esc(pName(pl))}</td><td class="num">${fmt(sum(R.shown, l => l.dr || 0))}</td><td class="num">${fmt(sum(R.shown, l => l.cr || 0))}</td><td class="num"><b>${aed(R.close)}</b></td></tr></tfoot></table></div>${R.pg.bar}`;
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th><th></th></tr></thead><tbody>
+  ${(R.pg = paged("pltled-" + pl, R.shown.slice().reverse())).rows.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td>${l.adj ? `<button class="btn sm danger" data-pladjdel="${esc(l.adj)}">Delete</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Nothing in this period.</td></tr>`}
+  ${R.pg.last ? `<tr><td>${esc(dmyS(S.from < R.start ? R.start : S.from))}</td><td><b>${S.from <= R.start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= R.start ? R.open : R.before)}</b></td><td></td></tr>` : ""}
+  </tbody><tfoot><tr><td colspan="2">Balance ${esc(dmyS(S.to))} – ${R.close >= 0 ? "owed by " + esc(pName(pl)) : "we owe " + esc(pName(pl))}</td><td class="num">${fmt(sum(R.shown, l => l.dr || 0))}</td><td class="num">${fmt(sum(R.shown, l => l.cr || 0))}</td><td class="num"><b>${aed(R.close)}</b></td><td></td></tr></tfoot></table></div>${R.pg.bar}`;
 }
 
 /* ---------- payouts ---------- */
@@ -120,6 +128,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.poconfirm){ const p = S.platforms[t.dataset.poconfirm]; if(!p){ toast("Add the platform on Platforms & contracts first."); return; } const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, payoutConfirm: !p.payoutConfirm}))) toast(p.payoutConfirm ? "Payouts are taken as received again." : "Reconciliation on – match each payout with the bank credit."); render(); return; }
   if(t.dataset.pomatch != null){ S.poMatch = t.dataset.pomatch ? {pl: t.dataset.pl, id: t.dataset.pomatch} : null; render(); return; }
+  if(t.dataset.pladjdel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; } if(await writeOk(S.db.doc("pladj/" + t.dataset.pladjdel).delete())){ toast("Adjustment deleted."); render(); } return; }
   if(t.dataset.pounmatch){ if(await writeOk(S.db.doc("payouts/" + t.dataset.pounmatch).delete())){ S.poMatch = null; toast("Match removed – the payout is in transit again."); render(); } return; }
   if(t.dataset.feeedit != null){ S.feeEdit = t.dataset.feeedit ? {pl: t.dataset.pl || S.pltView, id: t.dataset.feeedit === "new" ? "" : t.dataset.feeedit} : null; render(); return; }
   if(t.dataset.feedel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; } if(await writeOk(S.db.doc("feeinv/" + t.dataset.feedel).delete())){ S.feeEdit = null; toast("Fee invoice deleted."); render(); } return; }
