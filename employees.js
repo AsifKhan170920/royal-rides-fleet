@@ -115,7 +115,7 @@ function empDetail(id){
       ${docs.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Status</th><th>Last saved</th><th></th></tr></thead><tbody>${docs.map(d => `<tr><td>${esc(dmyS((d.fields || {}).start || ""))}</td><td><span class="pill ${d.status === "final" ? "good" : "warn"}">${d.status === "final" ? "Final" : "Draft"}</span></td><td class="small muted">${esc(d.updatedText || "")}</td><td class="row"><button class="btn sm" data-docopen="${esc(d.id)}" data-goto="empoffers">Open</button><button class="btn sm" data-docpdf="${esc(d.id)}">PDF</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="sub">No offer letter for this employee yet.</p>`}`;
   }
   return `<div class="section"><div class="head"><div><h2>${esc(e.name)}${e.code ? ` <span class="mono small muted">${esc(e.code)}</span>` : ""}</h2><p class="sub">${esc(e.designation || "")}${e.dept ? " · " + esc(DEPTS[e.dept]) : ""} · monthly gross AED ${fmt(gross(e))}</p></div>
-    <div class="row"><button class="btn ghost" data-empview="">← All employees</button><button class="btn" data-empedit="${esc(id)}">Edit</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-empedit="${esc(id)}">Edit</button></div></div>
   ${tabBtns("data-emptab", tab, EMP_TABS)}${body}</div>`;
 }
 const histEntries2 = () => (S.ledger && S.ledger.entries && !S.ledger.loading) ? S.ledger.entries : S.entries;

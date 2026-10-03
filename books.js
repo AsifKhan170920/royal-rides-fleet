@@ -322,7 +322,7 @@ function partyStatement(kind, id, hist){
   const mv = partyMoves(hist, p, acct), sign = kind === "customer" ? 1 : -1; let bal = num(x.opening), before = bal; const shown = [];
   mv.forEach(m => { bal = r2(bal + sign * (m.dr - m.cr)); if(m.date < S.from) before = bal; else shown.push({...m, bal}); });
   const invType = kind === "customer" ? "sale_invoice" : "purchase_invoice", open = hist.filter(e => e.type === invType && e.party === p).map(e => [e, invStatus(e, hist)]).filter(([, s]) => s.due > 0.005);
-  return `<div class="section"><div class="head"><div><h2>${esc(x.name)} · statement</h2><p class="sub">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}${x.trn ? " · TRN " + esc(x.trn) : ""}</p></div><div class="row"><button class="btn ghost" data-pback="1">← All ${kind}s</button><button class="btn" data-pedit="${kind}" data-id="${esc(id)}">Edit</button></div></div>
+  return `<div class="section"><div class="head"><div><h2>${esc(x.name)} · statement</h2><p class="sub">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}${x.trn ? " · TRN " + esc(x.trn) : ""}</p></div><div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-pedit="${kind}" data-id="${esc(id)}">Edit</button></div></div>
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">${kind === "customer" ? "Invoiced" : "Paid"}</th><th class="num">${kind === "customer" ? "Received" : "Invoiced"}</th><th class="num">Balance</th></tr></thead><tbody>
   <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(before)}</b></td></tr>
   ${shown.map(m => `<tr><td>${esc(dmyS(m.date))}</td><td style="white-space:normal">${esc(m.desc)}</td><td class="num">${m.dr ? fmt(m.dr) : ""}</td><td class="num">${m.cr ? fmt(m.cr) : ""}</td><td class="num">${aed(m.bal)}</td></tr>`).join("")}
@@ -346,7 +346,7 @@ async function invoicePdf(id){
     ${e.note ? `<p style="margin-top:14px;font-size:10pt">${esc(e.note)}</p>` : ""}</div>`;
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = html; document.body.appendChild(box);
   const name = `Invoice_${(e.number || "draft").replace(/[^\w-]+/g, "_")}.pdf`;
-  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.96}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}}).from(box.firstChild).save(); toast("Downloaded " + name); }
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.96}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}}).from(box.firstChild).save(); toast("Downloaded " + name); }
   catch(err){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
@@ -393,7 +393,7 @@ function coaForm(code){
 function coaLedger(code){
   const J = historyJournal().filter(l => l.acct === code).sort((a,b) => a.date.localeCompare(b.date)); let bal = openingOf(code); const open = bal;
   const rows = J.map(l => { bal = r2(bal + l.dr - l.cr); return {...l, bal}; });
-  return `<div class="section"><div class="head"><div><h2>${esc(code)} · ${esc(acctName(code))}</h2><p class="sub">${TYPE_OF(code)} · from the books start to ${esc(dmyS(S.to))}. Totals that come from the trips are dated at the end of the period.</p></div><button class="btn ghost" data-coaview="">← Chart of accounts</button></div>
+  return `<div class="section"><div class="head"><div><h2>${esc(code)} · ${esc(acctName(code))}</h2><p class="sub">${TYPE_OF(code)} · from the books start to ${esc(dmyS(S.to))}. Totals that come from the trips are dated at the end of the period.</p></div><button class="btn ghost" data-back="1">← Back</button></div>
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance (Dr +)</th></tr></thead><tbody>
   <tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(open)}</b></td></tr>
   ${rows.slice(-1000).map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}

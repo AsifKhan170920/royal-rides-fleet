@@ -195,7 +195,7 @@ async function downloadPdf(kind, x, body) {
   document.body.appendChild(box);
   const name = `${DOCS[kind].file}_${(x.name || "draft").replace(/[^\w]+/g, "_")}_${iso(new Date())}.pdf`;
   try {
-    await html2pdf().set({ margin: 0, filename: name, image: { type: "jpeg", quality: 0.96 }, html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+    await html2pdf().set({ margin: 0, filename: name, image: { type: "jpeg", quality: 0.96 }, html2canvas: { scale: 2, scrollX: 0, scrollY: 0, useCORS: true, backgroundColor: "#ffffff" },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }, pagebreak: { mode: ["css", "legacy"], avoid: ["h4", ".sigs", "p"] } }).from(box.firstChild).save();
     toast("Downloaded " + name);
   } catch (e) { toast("Could not make the PDF. Try again."); }

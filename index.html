@@ -128,6 +128,7 @@ select[multiple]{min-height:96px}
   </aside>
   <div class="main">
     <div class="bar">
+      <button class="btn ghost sm" id="backBtn" data-back="1" hidden aria-label="Back">← Back</button>
       <h1 id="pageTitle">Dashboard</h1>
       <div class="period" role="group" aria-label="Reporting period">
         <select id="preset" aria-label="Period preset">
@@ -712,7 +713,7 @@ function accountForm(id){
 function acctLedgerView(code){
   const a = cashAccounts().find(x => x.id === code) || {id:code, name:acctName(code)}, R = acctLines(code, historyJournal());
   return `<div class="section"><div class="head"><div><h2>${esc(a.name)} <span class="mono small muted">${esc(code)}</span></h2><p class="sub">${esc(CASH_TYPES[a.type] || "")}${a.bankName || a.number ? " · " + esc([a.bankName, a.number].filter(Boolean).join(" · ")) : ""} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</p></div>
-    <div class="row"><button class="btn ghost" data-acctview="">← All accounts</button><button class="btn" id="expAcct">Export CSV</button><button class="btn" data-nav="transfers">Transfer</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" id="expAcct">Export CSV</button><button class="btn" data-nav="transfers">Transfer</button></div></div>
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">Balance</th></tr></thead><tbody>
   <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(R.before)}</b></td></tr>
   ${R.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
@@ -739,9 +740,28 @@ function vTransfers(){
 function renderNav(){
   $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<div class="grp">${esc(k)}</div>` : `<button data-nav="${k}" ${S.view===k?'aria-current="page"':""}>${esc(l)}</button>`).join("");
 }
+/* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
+const NAV_KEYS = ["view","drvView","drvTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","drvview","drvtab","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+S.navStack = [];
+const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
+document.addEventListener("click", ev => {
+  const t = ev.target.closest("button,[data-nav]"); if(!t || t.dataset.back) return;
+  if(NAV_ATTRS.some(a => t.dataset[a] != null)){ const snap = navSnap(); if(S.navStack[S.navStack.length - 1] !== snap) S.navStack.push(snap); if(S.navStack.length > 50) S.navStack.shift(); }
+}, true);
+document.addEventListener("click", ev => {
+  const t = ev.target.closest("[data-back]"); if(!t) return;
+  ev.stopImmediatePropagation();
+  const prev = S.navStack.pop();
+  if(prev) Object.assign(S, JSON.parse(prev));
+  else { S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
+  S.edit = null; S.bk = null; S.pe = null; S.tripEdit = null; S.docEdit = null; S.empEdit = null; S.pdcEdit = null; S.ce = null;
+  render(); window.scrollTo(0, 0);
+}, true);
 function render(){
   if(window.BOOKS && BOOKS.applyCoa) BOOKS.applyCoa();
   renderNav();
+  const bb = $("#backBtn"); if(bb) bb.hidden = !S.navStack.length;
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : (S.view === "expiries" ? "Visa & document expiry" : "");
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
@@ -1085,7 +1105,7 @@ function vehicleDetail(id){
     <div class="row" style="margin-top:10px;gap:18px"><span>Operating profit <b class="mono">${fmt(R.v.op)}</b></span><span>Management fee <b class="mono">${fmt(R.v.mgmt)}</b> <span class="small muted">(company's, before the investor split)</span></span><span>Investor share <b class="mono">${fmt(R.v.invShare)}</b></span><span>Company share <b class="mono">${fmt(R.v.company)}</b></span></div>`;
   }
   return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p><p class="sub">Mulkiya ${v.mulkiyaNo ? esc(v.mulkiyaNo) + " " : ""}expires ${expiryCell(v.mulkiyaExpiry)} · Insurance${v.insurer ? " (" + esc(v.insurer) + (v.policyNo ? " " + esc(v.policyNo) : "") + ")" : ""} expires ${expiryCell(v.insuranceExpiry)}</p></div>
-    <div class="row"><button class="btn ghost" data-vehview="">← All vehicles</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
   ${tabBtns("data-vehtab", tab, {assign:"Assignment history", ledger:"Ledger"})}${body}</div>`;
 }
 function vehLedger(vid){
@@ -1469,7 +1489,7 @@ function terminalDetail(id){
     </tbody><tfoot><tr><td colspan="4">Total</td><td class="num">${fmt(sum(tx, x => x.amt))}</td><td class="num">${fmt(sum(tx, x => x.fee))}</td><td class="num">${fmt(sum(tx, x => x.amt - x.fee))}</td><td colspan="3"></td></tr></tfoot></table></div>`;
   }
   return `<div class="section"><div class="head"><div><h2>${esc(tm.name || "Machine")} <span class="mono small muted">TID ${esc(tm.tid)}</span></h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b>${tm.provider ? " · " + esc(tm.provider) : ""} · payments go to ${esc(acctName(tm.networkAcct || "1120"))}</p></div>
-    <div class="row"><button class="btn ghost" data-trmview="">← All machines</button><button class="btn" data-edit="terminal" data-id="${esc(id)}">Edit machine</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-edit="terminal" data-id="${esc(id)}">Edit machine</button></div></div>
   ${tabBtns("data-trmtab", tab, {assign:"Assignment history", tx:"Transactions"})}${body}</div>`;
 }
 
@@ -1859,10 +1879,10 @@ document.addEventListener("click", async ev => {
 
 boot();
 </script>
-<script src="docs.js?v=3"></script>
-<script src="books.js?v=8"></script>
-<script src="drivers.js?v=17"></script>
+<script src="docs.js?v=4"></script>
+<script src="books.js?v=9"></script>
+<script src="drivers.js?v=19"></script>
 <script src="pdc.js?v=1"></script>
-<script src="employees.js?v=2"></script>
+<script src="employees.js?v=3"></script>
 
 </body></html>

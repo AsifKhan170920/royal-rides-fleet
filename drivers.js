@@ -14,11 +14,11 @@ function historyReady(){
 function driverDetail(id){
   const d = S.drivers[id], tab = DRV_TABS[S.drvTab] ? S.drvTab : "trips", today = iso(new Date());
   const car = vehAt(id, today), m = machineAt(id, today), tm = termAt(termList(d, DRV_TERMS), today);
-  S.ledgerDriver = id;
+  S.ledgerDriver = id; S.hdrBtns = "";
   const body = tab === "trips" ? dTrips(id) : tab === "tx" ? dTx(id) : tab === "salary" ? dSalary(id) : tab === "perf" ? dPerf(id) : dAccts(id);
   return `<div class="section"><div class="head"><div><h2>${esc(d.name)}${d.code ? ` <span class="mono small muted">${esc(d.code)}</span>` : ""}</h2>
     <p class="sub">${esc(drvTermTextFull(tm))} · Car ${car ? esc(vName(car)) : "—"} · Machine ${m ? esc(m.name || m.tid) : "—"}${d.phone ? " · " + esc(d.phone) : ""}</p></div>
-    <div class="row"><button class="btn ghost" data-drvview="">← All drivers</button><button class="btn" data-edit="driver" data-id="${esc(id)}">Edit driver</button><button class="btn" data-offerfor="${esc(id)}">Offer letter</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button>${S.hdrBtns || ""}<button class="btn" data-edit="driver" data-id="${esc(id)}">Edit driver</button><button class="btn" data-offerfor="${esc(id)}">Offer letter</button></div></div>
   ${tabBtns("data-drvtab", tab, DRV_TABS)}${body}</div>`;
 }
 
@@ -349,13 +349,13 @@ function salaryHtml(M, print, locked){
   </tbody></table></div>${forms[n] || ""}`).join("");
 }
 // the printed statement: its own clean layout (letterhead, details, bordered sections, signatures)
-const SAL_CSS = `.sp{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;padding:9mm 11mm 8mm;width:210mm;box-sizing:border-box;background:#fff}
+const SAL_CSS = `.sp{font:8.6pt/1.3 "Segoe UI",Arial,sans-serif;color:#111;padding:7mm 11mm 5mm;width:210mm;box-sizing:border-box;background:#fff}
 .sp .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:6px;margin-bottom:8px}
 .sp .co{font:700 15pt "Segoe UI",Arial,sans-serif;color:#16213a;line-height:1.1}.sp .co small{display:block;font:400 7.5pt "Segoe UI",Arial;color:#555;margin-top:3px}
 .sp .ttl{text-align:right;color:#16213a}.sp .ttl b{display:block;font-size:11.5pt;letter-spacing:.08em}.sp .ttl span{font-size:8.5pt;color:#444}
-.sp table{width:100%;border-collapse:collapse;margin:0 0 6px;page-break-inside:avoid}
+.sp table{width:100%;border-collapse:collapse;margin:0 0 4px;page-break-inside:avoid}
 .sp th,.sp td{white-space:normal;text-transform:none;letter-spacing:0;position:static;font-family:inherit;font-size:inherit;color:inherit;background:none}
-.sp th,.sp td{border:1px solid #c5c9d2;padding:3px 7px;vertical-align:top}
+.sp th,.sp td{border:1px solid #c5c9d2;padding:2px 7px;vertical-align:top}
 .sp .info td{padding:3px 7px;font-size:8.5pt}.sp .info td.l{background:#f3f4f7;color:#555;width:15%;font-size:8pt}
 .sp .perf th{background:#f3f4f7;color:#444;font-weight:600;font-size:7.5pt;text-align:center;padding:3px 2px}.sp .perf td{text-align:center;font-weight:700;padding:4px 2px}
 .sp tr.sec th{background:#16213a;color:#fff;text-align:left;font-size:8.5pt;font-weight:600;letter-spacing:.03em}
@@ -363,8 +363,8 @@ const SAL_CSS = `.sp{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;paddin
 .sp tr.t td{font-weight:700;background:#f3f4f7}.sp tr.g td{font-weight:700;background:#e4e8f0;border-top:2px solid #16213a}
 .sp .tg th{background:#f3f4f7;color:#444;font-weight:600;font-size:7.5pt;text-align:center}.sp .tg tr.sec th{text-align:left}.sp .tg td.c{text-align:center}.sp .tg td.ok{color:#11703a;font-weight:700}.sp .tg td.no{color:#b3261e;font-weight:700}
 .sp .sub{color:#666;font-size:7.5pt}.sp .neg{color:#111}
-.sp .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:20px;page-break-inside:avoid}
-.sp .sigs .who{font-weight:700;color:#16213a}.sp .sigs .line{border-bottom:1px solid #333;height:40px;margin:4px 0 4px}.sp .sigs .cap{font-size:8pt;color:#555}
+.sp .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:12px;page-break-inside:avoid}
+.sp .sigs .who{font-weight:700;color:#16213a}.sp .sigs .line{border-bottom:1px solid #333;height:30px;margin:2px 0 3px}.sp .sigs .cap{font-size:8pt;color:#555}
 .sp .foot{margin-top:10px;font-size:7pt;color:#888;text-align:center}`;
 function salaryPrintHtml(M, d, fin){
   const s = S.settings, co = s.company || "Royal Rides Limousine LLC", tm = M.tm, today = iso(new Date());
@@ -372,7 +372,7 @@ function salaryPrintHtml(M, d, fin){
   const amt = v => v == null ? "" : (v < 0 ? "-" : "") + fmt(Math.abs(v));
   const cells = perfCells(M.perf), car = vehAt(M.id, S.to);
   return `<div class="sp">
-  <div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>DRIVER SALARY STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</span></div></div>
+  <div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>DRIVER SALARY STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
   <table class="info"><tr><td class="l">Driver</td><td><b>${esc(d.name || "")}</b>${d.code ? " (" + esc(d.code) + ")" : ""}</td><td class="l">Period</td><td>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</td></tr>
     <tr><td class="l">Pay terms</td><td>${esc(drvTermTextFull(tm))}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Draft – not finalised"}</td></tr>
     <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
@@ -381,7 +381,7 @@ function salaryPrintHtml(M, d, fin){
   ${salaryRows(M).map(([n, title, rows]) => `<table><tr class="sec"><th colspan="2">${n}. ${title}</th></tr>${rows.map(r => `<tr${r.kind ? ` class="${r.kind}"` : ""}><td>${r.label}</td><td class="n">${amt(r.v)}</td></tr>`).join("")}</table>`).join("")}
   <div class="sigs"><div><div class="who">For Driver</div><div class="line"></div><div>${esc(d.name || "")}</div><div class="cap">Signature & date</div></div>
     <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
-  <div class="foot">Amounts in AED</div></div>`;
+  </div>`;
 }
 async function printSalary(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
@@ -391,7 +391,7 @@ async function printSalary(id){
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
   box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, d, fin)}`; document.body.appendChild(box);
   const name = `Salary_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
-  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".sp")).save(); toast("Downloaded " + name); }
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".sp")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
@@ -431,11 +431,12 @@ function dSalary(id){
       <p class="small muted" style="margin-top:6px">Finalising stores this computation and marks its ${S.trips.filter(t => t.dr === id && moneyRow(t)).length + late.length} trip rows as settled. A finalised period can't be finalised again or overlapped.</p>`;
   }
   const pay = T && same && payable > 0.005 ? `<button class="btn" data-paysalary="${esc(id)}" data-amt="${r2(payable)}">Pay AED ${fmt(payable)} to the driver</button>` : "";
+  S.hdrBtns = `${pay}<button class="btn" data-salprint="${esc(id)}">Print / PDF for signing</button>`;
   const finBtn = same || overlap ? "" : `<button class="btn primary" data-finalise="${esc(id)}" ${S.canWrite && S.db && ready ? "" : "disabled"}>Finalise salary</button>`;
   return `<div style="max-width:980px"><h2>Salary statement · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}${same ? ' <span class="pill good">Finalised</span>' : ""}</h2>
     ${same || overlap ? fin : ""}
     ${salaryHtml(M, false, !!same)}${!T ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}
-    <div class="row" style="margin-top:14px;gap:8px">${finBtn}${pay}<button class="btn" data-salprint="${esc(id)}">Print / PDF for signing</button>${!same && !overlap && next && next !== S.from ? `<button class="btn ghost" data-setperiod="${next}|${monthEnd(next.slice(0,7))}">Next period to finalise: ${esc(dmyS(next))} – ${esc(dmyS(monthEnd(next.slice(0,7))))}</button>` : ""}</div>
+    <div class="row" style="margin-top:14px;gap:8px">${finBtn}${!same && !overlap && next && next !== S.from ? `<button class="btn ghost" data-setperiod="${next}|${monthEnd(next.slice(0,7))}">Next period to finalise: ${esc(dmyS(next))} – ${esc(dmyS(monthEnd(next.slice(0,7))))}</button>` : ""}</div>
     <p class="small muted" style="margin-top:6px">Finalised salaries are listed in Transactions (View / Edit / Delete).</p></div>`;
 }
 async function finalise(id){
