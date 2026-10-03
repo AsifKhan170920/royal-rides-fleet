@@ -23,15 +23,78 @@ function driverDetail(id){
 }
 
 /* ---------- trip history ---------- */
+/* Trip selection for a salary: in the driver's Trip history, the unsettled trips of the period are ticked
+   (all by default); a trip left unticked stays unsettled and is offered again in a later period. Trips from
+   earlier periods that are still unsettled are listed apart, unticked – tick them to pay them in this salary.
+   The choice is kept in drvAdj/sel-<driver>-<from>-<to> {excluded:[row ids], late:[row ids]}. */
+const selKey = id => `sel-${id}-${S.from}-${S.to}`;
+const selDoc = id => (S.drvAdj || {})[selKey(id)] || {excluded: [], late: []};
+async function saveSel(id, patch){
+  const d = {...selDoc(id), ...patch}; delete d.id;
+  await writeOk(S.db.doc("drvAdj/" + selKey(id)).set({...d, kind: "sel", driverId: id, from: S.from, to: S.to}));
+}
+function tripShare(t){
+  const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, model = tm.payModel || "commission", net = (t.f||0) - (t.sf||0) - (t.tx||0);
+  return (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct) / 100 : model === "rent" ? net : 0;
+}
+// the period's computation without the trips left out of this salary
+function selX(id, x0){
+  const ex = new Set(selDoc(id).excluded || []); if(!x0 || !ex.size) return x0;
+  const x = {...x0}, out = S.trips.filter(t => t.dr === id && ex.has(t.id)), tips2 = setting("tipsToDriver", true);
+  out.forEach(t => { const net = (t.f||0) - (t.sf||0) - (t.tx||0), sh = tripShare(t), tp = tips2 ? (t.tp||0) : 0;
+    x.fare -= t.f||0; x.fee -= t.sf||0; x.tax -= t.tx||0; x.net -= net; x.tip -= t.tp||0; x.tipsDue -= tp; x.cash -= t.c||0; x.ref -= t.rf||0; x.km -= t.km||0;
+    x.ent -= sh; x.balance -= sh + tp - (t.c||0); });
+  x.n -= new Set(out.filter(t => t.tr || t.f).map(t => t.tr || t.id)).size; x.excluded = out.length;
+  return x;
+}
+// earlier unsettled trips the company chose to pay in this salary
+const lateSelected = id => { const L = lateTrips(id); if(!L) return null; const pick = new Set(selDoc(id).late || []); return L.filter(t => pick.has(t.id)); };
+const lockedPeriod = id => Object.values(S.payroll).some(p => p.driverId === id && p.from <= S.to && p.to >= S.from);
+function tripBtns(t){
+  const k = `data-day="${esc(t.d)}" data-id="${esc(t.id)}"`;
+  return `<div class="row" style="gap:3px;flex-wrap:nowrap"><button class="btn sm" data-tripview="1" ${k}>View</button><button class="btn sm" data-tripedit="1" ${k}>Edit</button><button class="btn sm danger" data-tripdel="1" ${k}>Delete</button></div>`;
+}
 function dTrips(id){
   const rows = S.trips.filter(t => t.dr === id && (t.tr || t.f || t.sf || t.tp || t.c || t.rf || t.oe));
-  if(!rows.length) return `<div class="empty"><b>No trips in this period</b>Change the dates at the top, or import the platform reports.</div>`;
+  const lock = lockedPeriod(id), ex = new Set(selDoc(id).excluded || []), late = historyReady() ? (lateTrips(id) || []) : null, pick = new Set(selDoc(id).late || []);
   const multi = new Set(rows.map(plOf)).size > 1, shown = rows.slice(0, 500), net = t => (t.f||0) - (t.sf||0) - (t.tx||0);
-  const sm = settledMap(id), runs = Object.values(S.payroll).filter(p => p.driverId === id);
-  return `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi ? "<th>Platform</th>" : ""}<th>Car</th><th class="num">Fare</th><th class="num">Fee + VAT</th><th class="num">Tips</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Payment</th><th>Settlement</th></tr></thead><tbody>
-  ${shown.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td>${multi ? `<td>${esc(pName(plOf(t)))}</td>` : ""}<td>${esc(vName(vehicleForTrip(t) || "unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.sf||0) + (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt(net(t))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc((t.st || "").replace(/_/g, " "))}</td><td class="small">${esc(t.pay || (t.c ? "cash" : ""))}</td><td>${settleBadge(t)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.rf))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="2"></td><td class="small">${rows.filter(t => moneyRow(t) && settleStatus(t).ok).length} settled · ${rows.filter(t => moneyRow(t) && !settleStatus(t).ok).length} unsettled</td></tr></tfoot></table></div>`;
+  const open = rows.filter(t => moneyRow(t) && !settleStatus(t).ok), sel = open.filter(t => !ex.has(t.id));
+  const box = t => !moneyRow(t) || settleStatus(t).ok || lock ? "" : `<input type="checkbox" data-tsel="${esc(t.id)}" data-drv="${esc(id)}" ${ex.has(t.id) ? "" : "checked"} aria-label="Include in this salary">`;
+  const head = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span>${lock ? '<span class="pill good">This period is finalised</span> – the selection is closed.' : `<b>${sel.length}</b> of ${open.length} unsettled trip rows selected for this salary${open.length - sel.length ? ` · <span class="pill bad">${open.length - sel.length} left out</span>` : ""}`}</span>
+    ${lock || !open.length ? "" : `<div class="row" style="gap:6px"><button class="btn sm" data-tselall="${esc(id)}" data-on="1">Select all</button><button class="btn sm" data-tselall="${esc(id)}" data-on="0">Select none</button></div>`}</div>`;
+  const tbl = rows.length ? `<div class="tbl"><table><thead><tr><th></th><th>Date</th><th>Time</th>${multi ? "<th>Platform</th>" : ""}<th>Car</th><th class="num">Fare</th><th class="num">Fee + VAT</th><th class="num">Tips</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Settlement</th><th></th></tr></thead><tbody>
+  ${shown.map(t => `<tr${ex.has(t.id) && !settleStatus(t).ok ? ' style="opacity:.55"' : ""}><td>${box(t)}</td><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td>${multi ? `<td>${esc(pName(plOf(t)))}</td>` : ""}<td>${esc(vName(vehicleForTrip(t) || "unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.sf||0) + (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt(net(t))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc((t.st || "").replace(/_/g, " "))}${t.pay ? " · " + esc(t.pay) : ""}</td><td>${settleBadge(t)}${ex.has(t.id) && !settleStatus(t).ok ? ' <span class="small muted">left out</span>' : ""}</td><td>${tripBtns(t)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td></td><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="3"></td></tr></tfoot></table></div>`
+    : `<div class="empty"><b>No trips in this period</b>Change the dates at the top, or import the platform reports.</div>`;
+  const lateBox = late == null ? `<p class="small muted">Loading earlier unsettled trips…</p>` : !late.length ? "" : `<h2 style="margin-top:18px">Unsettled trips from earlier periods</h2>
+    <p class="sub">Dated in periods that are already finalised but not paid there (left out, or arrived in a later report). Tick the ones to pay in this salary; the others stay unsettled.</p>
+    <div class="tbl"><table><thead><tr><th></th><th>Date</th><th>Time</th><th>Trip</th><th class="num">Fare</th><th class="num">Net</th><th class="num">Tips</th><th class="num">Cash</th><th class="num">Effect on salary</th></tr></thead><tbody>
+    ${late.map(t => `<tr><td>${lock ? "" : `<input type="checkbox" data-tlate="${esc(t.id)}" data-drv="${esc(id)}" ${pick.has(t.id) ? "checked" : ""} aria-label="Pay in this salary">`}</td><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td><td class="mono small">${esc(String(t.tr || t.id).slice(0,13))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(net(t))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.c)}</td><td class="num">${aed(tripEffect(t))}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td></td><td colspan="7">${late.filter(t => pick.has(t.id)).length} of ${late.length} selected</td><td class="num"><b>${aed(sum(late.filter(t => pick.has(t.id)), tripEffect))}</b></td></tr></tfoot></table></div>`;
+  return (window.tripEditor ? tripEditor() : "") + head + tbl + lateBox;
 }
+
+/* ---------- view / edit / delete a trip row (trips/{day}) ---------- */
+const TRIP_FIELDS = [["f","Fare"],["sf","Platform fee"],["tx","VAT on fee"],["tp","Tip"],["rf","Refunds / tolls"],["c","Cash collected"],["oe","Other earnings"],["po","Paid to bank"],["km","Distance (km)"]];
+function tripEditor(){
+  const e = S.tripEdit; if(!e) return "";
+  const t = S.trips.find(x => x.id === e.id && x.d === e.day); if(!t){ S.tripEdit = null; return ""; }
+  const st = settleStatus(t), net = (t.f||0) - (t.sf||0) - (t.tx||0);
+  if(e.mode === "view") return `<div class="section"><div class="head"><div><h2>Trip ${esc(String(t.tr || t.id).slice(0, 18))}</h2><p class="sub">${esc(dmyS(t.d))} ${esc(t.t || "")} · ${esc(pName(plOf(t)))} · ${settleBadge(t)}</p></div><div class="row"><button class="btn" data-tripedit="1" data-day="${esc(t.d)}" data-id="${esc(t.id)}">Edit</button><button class="btn ghost" data-tripclose="1">Close</button></div></div>
+    <div class="tbl"><table><tbody>${[["Driver", dName(t.dr)], ["Car", vName(vehicleForTrip(t) || "unassigned") + (t.p ? " (plate " + t.p + ")" : "")], ["Status", (t.st || "").replace(/_/g, " ")], ["Product", t.prod], ["Payment", t.pay], ["Trip ID", t.tr], ["Row ID", t.id]].map(([l, v]) => `<tr><td class="muted">${l}</td><td>${esc(v || "—")}</td></tr>`).join("")}
+    ${TRIP_FIELDS.map(([k, l]) => `<tr><td class="muted">${l}</td><td class="num">${fmt(t[k] || 0)}</td></tr>`).join("")}<tr class="tot"><td><b>Net (fare − fee − VAT)</b></td><td class="num"><b>${fmt(net)}</b></td></tr></tbody></table></div></div>`;
+  if(st.ok) return `<div class="section"><div class="banner">This trip is settled in the salary for ${esc(dmyS(st.p.from))} – ${esc(dmyS(st.p.to))}. Reopen that salary (Transactions → Edit) before changing the trip.</div><button class="btn ghost" data-tripclose="1">Close</button></div>`;
+  return `<div class="section"><h2>Edit trip ${esc(String(t.tr || t.id).slice(0, 18))}</h2><form class="form" id="fTrip" data-day="${esc(t.d)}" data-id="${esc(t.id)}">
+    <div class="f"><label for="tr_d">Date</label><input id="tr_d" name="d" type="date" required value="${esc(t.d)}"></div>
+    <div class="f"><label for="tr_t">Time</label><input id="tr_t" name="t" value="${esc(t.t || "")}" placeholder="HH:MM"></div>
+    <div class="f"><label for="tr_dr">Driver</label><select id="tr_dr" name="dr">${listOpts(S.drivers, d => d.name || d.id, t.dr)}</select></div>
+    <div class="f"><label for="tr_p">Plate</label><input id="tr_p" name="p" value="${esc(t.p || "")}"></div>
+    ${TRIP_FIELDS.map(([k, l]) => `<div class="f"><label for="tr_${k}">${l}</label><input id="tr_${k}" name="${k}" type="number" step="0.01" value="${esc(t[k] ?? "")}"></div>`).join("")}
+    <div class="f wide"><label for="tr_note">Reason for the change</label><input id="tr_note" name="note" required placeholder="e.g. fare corrected from the Uber statement"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save trip</button><button class="btn ghost" type="button" data-tripclose="1">Cancel</button></div>
+  </form></div>`;
+}
+window.tripEditor = tripEditor; window.tripBtns = tripBtns;
 
 /* ---------- transactions (the driver's account) ---------- */
 /* Trips are not listed one by one: a salary period, once finalised, is credited to the driver as one line
@@ -62,7 +125,7 @@ function dTx(id){
   const T = drvTx(id), start = setting("ledgerStart", "2026-09-01");
   const loanOut = sum(Object.values(S.ditems).filter(it => it.driverId === id), it => itemOutstanding(it, S.to));
   const fin = Object.values(S.payroll).some(p => p.driverId === id && p.from <= S.to && p.to >= S.from);
-  const x = compute().D[id], late = lateTrips(id) || [], pending = x ? r2(salaryOf(x) + sum(late, tripEffect)) : 0;
+  const x = selX(id, compute().D[id]), late = lateSelected(id) || [], pending = x ? r2(salaryOf(x) + sum(late, tripEffect)) : 0;
   return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">The driver's account from ${esc(dmyS(start))}: when a salary period is finalised, its salary entitled is a credit, and the cash he collected from riders in that period a debit (card payments on the company machine a credit); payments to him are debits. Positive balance = the company owes the driver.</span><button class="btn" id="expLedger">Export CSV</button></div>
   ${!fin && (x && (x.n || x.inst || x.adv) || late.length) ? `<div class="banner">The salary for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} is not finalised yet (AED ${fmt(pending)} so far), so it is not in this account. <button class="btn sm" data-drvtab="salary">Open Salary</button></div>` : ""}
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th><th></th></tr></thead><tbody>
@@ -163,7 +226,8 @@ window.settleBadge = settleBadge; window.settleStatus = settleStatus;
 function salaryModel(id, x, late, lateEff, T){
   const tm = termAt(termList(S.drivers[id] || {}, DRV_TERMS), S.to) || {}, mode = tm.expMode === "before" ? "before" : "after";
   const mine = S.trips.filter(t => t.dr === id), byPl = {};
-  mine.forEach(t => { const b = byPl[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0) + (t.tx||0); if(t.tr || t.f) b.n.add(t.tr || t.id); });
+  const exS = new Set(selDoc(id).excluded || []);
+  mine.filter(t => !exS.has(t.id)).forEach(t => { const b = byPl[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0) + (t.tx||0); if(t.tr || t.f) b.n.add(t.tr || t.id); });
   const platforms = Object.entries(byPl).map(([k, b]) => ({name: pName(k), n: b.n.size, fares: r2(b.f), fee: r2(b.fee), net: r2(b.f - b.fee)})).filter(p => p.n || p.net).sort((a,b) => b.net - a.net);
   const earnings = r2(x.net + num(x.other));
   const recov = S.entries.filter(e => e.driverId === id && e.type === "expense" && e.recover), byCat = {};
@@ -202,6 +266,7 @@ function salaryRows(M){
   const payLabel = model === "rent" ? "Driver earnings after company fee" : model === "salary" ? "Salary" : model === "salary_comm" ? `Salary + commission (${pct}%)` : `Commission (${pct}%)`;
   const S2 = M.platforms.map(p => L(`${esc(p.name)} <span class="sub">${p.n} trips · fares ${fmt(p.fares)} − fee & VAT ${fmt(p.fee)}</span>`, p.net));
   if(num(x.other)) S2.push(L("Other bookings (direct)", x.other));
+  if(x.excluded) S2.push(L(`<span class="sub">${x.excluded} trip row(s) of this period are left out of this salary (Trip history)</span>`, null));
   S2.push(L("Total earnings", M.earnings, "t"));
   const S3 = Object.entries(M.byCat).map(([c, v]) => L(esc(EXP_CATS[c] || "Expense"), -v));
   if(!S3.length) S3.push(L('<span class="sub">No direct expenditure this period</span>', null));
@@ -321,7 +386,7 @@ function salaryPrintHtml(M, d, fin){
 async function printSalary(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
-  const x = compute().D[id] || {}, late = lateTrips(id) || [], M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
+  const x = selX(id, compute().D[id]) || {}, late = lateSelected(id) || [], M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
   const fin = Object.values(S.payroll).find(p => p.driverId === id && p.from === S.from && p.to === S.to);
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
   box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, d, fin)}`; document.body.appendChild(box);
@@ -332,12 +397,12 @@ async function printSalary(id){
 }
 
 function dSalary(id){
-  const C = compute(), x = C.D[id] || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
+  const C = compute(), x = selX(id, C.D[id]) || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
   const runs = Object.values(S.payroll).filter(p => p.driverId === id).sort((a,b) => b.from.localeCompare(a.from));
   const overlap = runs.find(p => p.from <= S.to && p.to >= S.from), same = runs.find(p => p.from === S.from && p.to === S.to);
   const next = runs.length ? addDays(runs[0].to, 1) : null, ready = historyReady(), T = ready ? drvTx(id) : null;
   // late trips: settled by this period unless it is already finalised (then they were settled by it, or wait for the next)
-  const late = same ? [] : (lateTrips(id) || []), lateEff = r2(sum(late, tripEffect)), sal = r2(salaryOf(x) + lateEff);
+  const late = same ? [] : (lateSelected(id) || []), lateEff = r2(sum(late, tripEffect)), sal = r2(salaryOf(x) + lateEff);
   const payable = T ? r2(T.before + sal + (x.balance - salaryOf(x))) : null;
   const M = salaryModel(id, x, late, lateEff, T);
   const lateTbl = late.length ? `<h2 style="margin-top:16px">Unsettled trips from earlier periods</h2><p class="sub">These trips are dated in a period that was already finalised, but they were not part of it (they arrived in a later report). They are added to this salary and settled when you finalise.</p>
@@ -349,7 +414,7 @@ function dSalary(id){
     let note;
     if(Array.isArray(same.rows)){
       // compare the trips it settled and the rest of the computation separately
-      const inRec = new Set(same.rows), periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t));
+      const inRec = new Set(same.rows), exS = new Set(selDoc(id).excluded || []), periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t) && !exS.has(t.id));
       const newTrips = periodTrips.filter(t => !inRec.has(t.id)), nonTrip = r2(salaryOf(x) - sum(periodTrips, tripEffect));
       const changed = Math.abs(nonTrip - num(same.nonTrip)) > 0.05;
       note = `${newTrips.length ? `${newTrips.length} trip(s) dated in this period arrived after it was finalised (AED ${fmt(sum(newTrips, tripEffect))}); they show as unsettled in the next salary. ` : ""}${changed ? `Other items changed since (deductions, instalments…): AED ${fmt(num(same.nonTrip))} then, AED ${fmt(nonTrip)} now – reopen and finalise again if needed.` : "Payments to or from the driver don't change it."}`;
@@ -377,8 +442,8 @@ async function finalise(id){
   const runs = Object.values(S.payroll).filter(p => p.driverId === id);
   if(runs.some(p => p.from <= S.to && p.to >= S.from)){ toast("Part of this period is already finalised."); return; }
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
-  const x = compute().D[id] || {}, T = drvTx(id), late = lateTrips(id) || [], lateEff = r2(sum(late, tripEffect));
-  const periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t));
+  const x = selX(id, compute().D[id]) || {}, T = drvTx(id), late = lateSelected(id) || [], lateEff = r2(sum(late, tripEffect)), exSet = new Set(selDoc(id).excluded || []);
+  const periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t) && !exSet.has(t.id) && !settleStatus(t).ok);
   const k = ["n","daysWorked","fare","fee","tax","net","ent","tipsDue","cash","card","deduct","adv","inst","viaDriver","books","paid","recv","balance"];
   const rec = {driverId: id, from: S.from, to: S.to, termsText: x.termsText || "", ...Object.fromEntries(k.map(f => [f, r2(num(x[f]))])),
     salary: r2(salaryOf(x) + lateEff), nonTrip: r2(salaryOf(x) - sum(periodTrips, tripEffect)), lateEffect: lateEff,
@@ -445,6 +510,17 @@ document.addEventListener("click", async ev => {
     return;
   }
   if(t.dataset.salprint){ printSalary(t.dataset.salprint); return; }
+  if(t.dataset.tselall){ const id = t.dataset.tselall, open = S.trips.filter(x => x.dr === id && moneyRow(x) && !settleStatus(x).ok).map(x => x.id); await saveSel(id, {excluded: t.dataset.on === "1" ? [] : open}); render(); return; }
+  if(t.dataset.tripview || t.dataset.tripedit){ S.tripEdit = {day: t.dataset.day, id: t.dataset.id, mode: t.dataset.tripview ? "view" : "edit"}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.tripclose){ S.tripEdit = null; render(); return; }
+  if(t.dataset.tripdel){
+    const tr = S.trips.find(x => x.id === t.dataset.id && x.d === t.dataset.day); if(!tr) return;
+    if(settleStatus(tr).ok){ toast("This trip is settled in a finalised salary – reopen that salary first."); return; }
+    if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Sure?"; return; }
+    const snap = await S.db.doc("trips/" + tr.d).get(), rows = {...(snap.exists ? snap.data().rows || {} : {})}; delete rows[tr.id];
+    if(await writeOk(S.db.doc("trips/" + tr.d).set({date: tr.d, rows}))){ S.tripEdit = null; await loadPeriod(); render(); toast("Trip deleted."); }
+    return;
+  }
   if(t.dataset.txview || t.dataset.txedit){
     const ref = JSON.parse(t.dataset.txview || t.dataset.txedit);
     if(t.dataset.txedit && ref.kind === "payroll" && t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Reopen?"; return; }
@@ -478,3 +554,24 @@ document.addEventListener("click", async ev => {
   if(t.dataset.itemedit){ const it = S.ditems[t.dataset.itemedit]; if(!it) return; S.view = "drivers"; S.drvView = it.driverId; S.drvTab = "accts"; S.edit = {kind: "ditem", id: it.id}; render(); window.scrollTo(0,0); return; }
 });
 window.driverDetail = driverDetail; window.drvTx = drvTx; window.drvBalance = drvBalance;
+
+document.addEventListener("change", async ev => {
+  const t = ev.target;
+  if(t.dataset && t.dataset.tsel){ const id = t.dataset.drv, ex = new Set(selDoc(id).excluded || []); t.checked ? ex.delete(t.dataset.tsel) : ex.add(t.dataset.tsel); await saveSel(id, {excluded: [...ex]}); render(); }
+  if(t.dataset && t.dataset.tlate){ const id = t.dataset.drv, pk = new Set(selDoc(id).late || []); t.checked ? pk.add(t.dataset.tlate) : pk.delete(t.dataset.tlate); await saveSel(id, {late: [...pk]}); render(); }
+});
+document.addEventListener("submit", async ev => {
+  const f = ev.target; if(f.id !== "fTrip") return; ev.preventDefault(); if(!S.db) return;
+  const fd = Object.fromEntries(new FormData(f).entries()), day0 = f.dataset.day, id = f.dataset.id;
+  const snap0 = await S.db.doc("trips/" + day0).get(), rows0 = {...(snap0.exists ? snap0.data().rows || {} : {})}, old = rows0[id]; if(!old){ toast("Trip not found."); return; }
+  const row = {...old, d: fd.d, t: fd.t || "", dr: fd.dr, p: fd.p || "", edited: {at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", note: fd.note || ""}};
+  TRIP_FIELDS.forEach(([k]) => row[k] = r2(num(fd[k])));
+  if(fd.d === day0){ rows0[id] = row; if(!await writeOk(S.db.doc("trips/" + day0).set({date: day0, rows: rows0}))) return; }
+  else {
+    // moved to another day: write the new day first, then remove it from the old one
+    const s1 = await S.db.doc("trips/" + fd.d).get(), rows1 = {...(s1.exists ? s1.data().rows || {} : {}), [id]: row};
+    if(!await writeOk(S.db.doc("trips/" + fd.d).set({date: fd.d, rows: rows1}))) return;
+    delete rows0[id]; if(!await writeOk(S.db.doc("trips/" + day0).set({date: day0, rows: rows0}))) return;
+  }
+  S.tripEdit = null; await loadPeriod(); render(); toast("Trip saved.");
+});

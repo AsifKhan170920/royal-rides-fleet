@@ -123,3 +123,9 @@ The driver's **Transactions**: when a salary period is finalised, it adds "salar
 - **Own targets** (driver form): with "Own targets" on, the general targets don't apply to that driver. A blank box means no target for that measure.
 - Trips, days and km are pro-rated to the selected period (a full month counts as 1); completion is not.
 - Target against actual, with achieved % and met / not met, is shown on the driver's Performance tab, in section 1 of the salary statement (screen and PDF), and as "x of y" in the Drivers list.
+
+## Choosing the trips for a salary
+
+- Drivers → driver → **Trip history**: the period's unsettled trip rows have a tick box, all ticked by default ("Select all / Select none"). Untick a trip to leave it out of this salary; the salary statement and the finalised record use only the ticked trips. Choices are saved in `drvAdj/sel-<driver>-<from>-<to>`.
+- A trip left out (or arriving later) stays unsettled. In a later period it is listed under **Unsettled trips from earlier periods**, unticked. Tick it to pay it in that salary, or leave it.
+- Every trip (Trips page and Trip history) has **View / Edit / Delete**. Editing (with a reason, stored on the trip) and deleting are blocked for trips settled in a finalised salary; reopen that salary first.
