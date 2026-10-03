@@ -170,11 +170,11 @@ const S = {
 const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import trip data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
-  ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],["expiries","Visa & EID expiry"],["empoffers","Employee offer letters"],
+  ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
   ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
-  ["Documents",null],["offers","Driver offer letters"],["agreements","Investor agreements"],
+  ["Documents",null],["offers","Driver offer letters"],["empoffers","Employee offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
 ];
 const EXP_CATS = {
@@ -517,7 +517,7 @@ function compute(){
     d.recv = sum(mine.filter(e => e.type === "driver_receipt"), e => num(e.amount));
     d.tipsDue = tips2drv ? d.tip : 0;
     const items = Object.values(S.ditems||{}).filter(it => it.driverId === d.id);
-    d.inst = sum(items, it => sum(itemPlan(it).inst.filter(x => x.date >= from && x.date <= to), x => x.amt));
+    d.inst = sum(items, it => sum(itemPlan(it).inst.filter(x => x.date >= from && x.date <= to), x => x.amt) + sum((it.repayments || []).filter(r => r.paidTo === "2100" && r.date >= from && r.date <= to), r => num(r.amount)));   // instalments + extra recoveries through the salary
     d.loanOut = sum(items, it => itemOutstanding(it, to));
     // company costs the driver paid from his cash (+), company money he collected (−)
     d.viaDriver = sum(mine.filter(e => e.paidFrom === "driver" && e.type === "expense"), e => num(e.amount) + num(e.vat)) - sum(mine.filter(e => e.paidFrom === "driver" && e.type === "income"), e => num(e.amount) + num(e.vat));
@@ -720,7 +720,7 @@ function renderNav(){
 function render(){
   if(window.BOOKS && BOOKS.applyCoa) BOOKS.applyCoa();
   renderNav();
-  const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : "";
+  const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : (S.view === "expiries" ? "Visa & document expiry" : "");
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
   const fns = {...(window.BOOK_VIEWS || {}), cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
@@ -760,7 +760,7 @@ function vDashboard(){
     <div class="kpi"><div class="l">Company profit</div><div class="v ${company<0?"neg":""}">${fmt(company)}</div><div class="n">After drivers & investors</div></div>
     <div class="kpi"><div class="l">Owed to drivers</div><div class="v ${drvDue<0?"neg":""}">${fmt(drvDue)}</div><div class="n">Negative = drivers owe you</div></div>
   </div>
-  ${contractAlerts()}${vehicleAlerts()}
+  ${contractAlerts()}${vehicleAlerts()}${window.EMP ? EMP.dashList() : ""}
   ${(()=>{ const by = {}; T.forEach(t => { const b = by[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0)+(t.tx||0); if(t.tr || t.f) b.n.add(t.tr||t.id); });
     const ks = Object.keys(by); if(ks.length < 2 && !Object.keys(S.platforms).length) return "";
     return `<div class="section"><h2>By platform</h2><div class="tbl"><table><thead><tr><th>Platform</th><th class="num">Trips</th><th class="num">Gross fares</th><th class="num">Fee + VAT</th><th class="num">Fee %</th><th>Contract commission</th></tr></thead><tbody>
@@ -1678,7 +1678,7 @@ document.addEventListener("click", async ev => {
     if(await writeOk(S.db.doc("driverItems/" + t.dataset.item).set({...b, repayments: (b.repayments || []).filter((_, i) => i !== +t.dataset.repdel)}))){ toast("Repayment removed."); render(); }
     return;
   }
-  if(t.id === "expLedger"){ const R = ledgerLines(S.ledgerDriver); saveCsv(`driver_ledger_${norm(dName(S.ledgerDriver))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit (driver owes)","Credit (owed to driver)","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.desc, l.dr ? r2(l.dr).toFixed(2) : "", l.cr ? r2(l.cr).toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
+  if(t.id === "expLedger"){ const R = window.drvTx ? drvTx(S.ledgerDriver) : ledgerLines(S.ledgerDriver); saveCsv(`driver_ledger_${norm(dName(S.ledgerDriver))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit (driver owes)","Credit (owed to driver)","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.desc, l.dr ? r2(l.dr).toFixed(2) : "", l.cr ? r2(l.cr).toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
   if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Card on terminal","Loan instalments","Driver's cash used","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.card,d.inst,d.viaDriver,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
 });
 async function saveCsv(name, rows){
@@ -1825,9 +1825,9 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=3"></script>
-<script src="books.js?v=6"></script>
-<script src="drivers.js?v=4"></script>
+<script src="books.js?v=7"></script>
+<script src="drivers.js?v=5"></script>
 <script src="pdc.js?v=1"></script>
-<script src="employees.js?v=1"></script>
+<script src="employees.js?v=2"></script>
 
 </body></html>

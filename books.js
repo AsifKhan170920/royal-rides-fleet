@@ -149,7 +149,7 @@ function driverPanel(b){
   const k = b.kind, d = b.data, p = drvPurpose(b), drId = d.party.slice(2), P = k === "payment" ? DRV_PAY : DRV_REC;
   const ready = S.ledger && S.ledger.key === setting("ledgerStart", "2026-09-01") + "|" + S.to && !S.ledger.loading && !S.ledger.error;
   if(!ready && S.db) needHistory();
-  const bal = ready ? ledgerLines(drId).closing : null, items = Object.values(S.ditems).filter(it => it.driverId === drId), out = sum(items, it => itemOutstanding(it, S.to));
+  const bal = ready ? (window.drvBalance ? drvBalance(drId) : ledgerLines(drId).closing) : null, items = Object.values(S.ditems).filter(it => it.driverId === drId), out = sum(items, it => itemOutstanding(it, S.to));
   const f = (n, l, type = "number", extra = "") => `<div class="f"><label for="bh_${n}">${l}</label><input id="bh_${n}" data-hf="${n}" type="${type}" ${type === "number" ? 'step="0.01"' : ""} value="${esc(d[n] ?? "")}"${extra}></div>`;
   let fields = `<div class="f"><label for="bh_purpose">What is it for?</label><select id="bh_purpose" data-hf="purpose">${opts(P, p)}</select></div>`;
   if(p === "salary" || p === "cash") fields += f("amount", "Amount", "number", bal != null && p === "salary" && bal > 0 ? ` placeholder="${r2(bal)}"` : "") + f("desc", "Description", "text");

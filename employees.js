@@ -37,9 +37,18 @@ function expPill(d){ const n = daysLeft(d); return n < 0 ? `<span class="pill ba
 function empBanner(){
   const due = staffExpiries().filter(x => daysLeft(x.date) <= remindDays()); if(!due.length) return "";
   try{ if("Notification" in window && Notification.permission === "granted"){ const k = "staffNotified-" + iso(new Date()); if(!localStorage.getItem(k)){ localStorage.setItem(k, "1"); new Notification("Staff documents expiring", {body: due.slice(0, 6).map(x => `${x.who}: ${x.label} ${dmyS(x.date)}`).join("\n")}); } } }catch(e){}
-  if(S.view === "expiries") return "";
+  if(S.view === "expiries" || S.view === "dashboard") return "";   // the dashboard lists them
   const exp = due.filter(x => daysLeft(x.date) < 0).length;
-  return `<div class="banner"><b>Staff documents:</b> ${exp ? `${exp} expired, ` : ""}${due.length - exp} expiring within ${remindDays()} days (${esc(due.slice(0, 3).map(x => `${x.who} – ${x.label} ${dmyS(x.date)}`).join("; "))}${due.length > 3 ? "…" : ""}). <button class="btn sm" data-nav="expiries">Visa & EID expiry</button></div>`;
+  return `<div class="banner"><b>Staff documents:</b> ${exp ? `${exp} expired, ` : ""}${due.length - exp} expiring within ${remindDays()} days (${esc(due.slice(0, 3).map(x => `${x.who} – ${x.label} ${dmyS(x.date)}`).join("; "))}${due.length > 3 ? "…" : ""}). <button class="btn sm" data-nav="dashboard">See on dashboard</button></div>`;
+}
+// dashboard section: documents expired or expiring within the reminder window
+function dashList(){
+  const due = staffExpiries().filter(x => daysLeft(x.date) <= remindDays()); if(!due.length) return "";
+  const notif = ("Notification" in window) && Notification.permission === "default" ? '<button class="btn sm" data-empnotif="1">Turn on browser notifications</button>' : "";
+  return `<div class="section"><div class="head"><div><h2>Visa, Emirates ID & documents expiring</h2><p class="sub">Drivers and employees – expired or within ${remindDays()} days.</p></div><div class="row">${notif}<button class="btn sm" data-nav="expiries">All document dates</button></div></div>
+  <div class="tbl"><table><thead><tr><th>Expiry</th><th>Status</th><th>Name</th><th></th><th>Document</th><th>Number</th><th></th></tr></thead><tbody>
+  ${due.map(x => `<tr><td>${esc(dmyS(x.date))}</td><td>${expPill(x.date)}</td><td>${esc(x.who)}</td><td class="small muted">${x.kind}</td><td>${esc(x.label)}</td><td class="mono small">${esc(x.no)}</td><td><button class="btn sm" ${x.kind === "Driver" ? `data-edit="driver" data-id="${esc(x.id)}" data-goto="drivers"` : `data-empedit="${esc(x.id)}"`}>Update</button></td></tr>`).join("")}
+  </tbody></table></div></div>`;
 }
 function vExpiries(){
   const lim = S.expFilter, all = staffExpiries(), list = all.filter(x => lim === "all" || daysLeft(x.date) <= num(lim));
@@ -205,5 +214,5 @@ document.addEventListener("submit", async ev => {
   ["basic","housing","transport","otherAllow","opening"].forEach(k => fd[k] = num(fd[k])); fd.active = fd.active !== "false";
   if(await writeOk(S.db.doc("employees/" + id).set({...prev, ...fd}))){ S.empEdit = null; toast("Employee saved."); render(); }
 });
-window.EMP = {banner: empBanner, post: postPayroll, docFields};
+window.EMP = {banner: empBanner, post: postPayroll, docFields, dashList};
 window.BOOK_VIEWS = {...(window.BOOK_VIEWS || {}), employees: vEmployees, emppayroll: vEmpPayroll, expiries: vExpiries, empoffers: () => docsView("empoffer")};

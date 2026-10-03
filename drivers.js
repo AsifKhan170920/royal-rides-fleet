@@ -33,18 +33,56 @@ function dTrips(id){
   </tbody><tfoot><tr><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.rf))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="2"></td><td class="small">${rows.filter(t => moneyRow(t) && settleStatus(t).ok).length} settled · ${rows.filter(t => moneyRow(t) && !settleStatus(t).ok).length} unsettled</td></tr></tfoot></table></div>`;
 }
 
-/* ---------- transactions (running account) ---------- */
+/* ---------- transactions (the driver's account) ---------- */
+/* Trips are not listed one by one: a salary period, once finalised, is credited to the driver as one line
+   (what the company owes him), and every payment to him is a debit; money he hands over is a credit. */
+function drvTx(id){
+  const d = S.drivers[id] || {}, ents = (S.ledger && S.ledger.entries) || [], lines = [];
+  Object.values(S.payroll).filter(p => p.driverId === id && p.to <= S.to).forEach(p => {
+    const v = num(p.salary != null ? p.salary : salaryOf(p));
+    lines.push({date: p.to, desc: `Salary ${dmyS(p.from)} – ${dmyS(p.to)} (finalised, ${p.n || 0} trips${p.late && p.late.length ? ` + ${p.late.length} earlier` : ""})`, ...(v >= 0 ? {cr: v} : {dr: -v}), sal: true});
+  });
+  ents.filter(e => e.driverId === id).forEach(e => { const a = num(e.amount), n = e.note ? " – " + e.note : "";
+    if(e.type === "driver_payment") lines.push({date: e.date, desc: "Payment to driver" + n, dr: a});
+    else if(e.type === "driver_receipt") lines.push({date: e.date, desc: "Received from driver" + n, cr: a}); });
+  if(window.BOOKS) BOOKS.driverLines(ents, id).forEach(l => lines.push({...l}));
+  lines.sort((a,b) => a.date.localeCompare(b.date) || (b.sal ? 1 : 0) - (a.sal ? 1 : 0));
+  let bal = num(d.openingBalance), before = bal; const open = bal, shown = [];
+  lines.forEach(l => { bal = r2(bal + (l.cr || 0) - (l.dr || 0)); l.bal = bal; if(l.date < S.from) before = bal; else shown.push(l); });
+  return {open, before, shown, closing: bal};
+}
+const drvBalance = id => historyReady() ? drvTx(id).closing : null;
 function dTx(id){
-  if(!historyReady()) return `<p class="sub">${S.ledger && S.ledger.error ? "Couldn't load the history. Change the dates to retry." : "Loading the driver's history…"}</p>`;
-  const R = ledgerLines(id), start = setting("ledgerStart", "2026-09-01");
+  if(!historyReady()) return `<p class="sub">${S.ledger && S.ledger.error ? "Couldn't load the history. Change the dates to retry." : "Loading the driver's account…"}</p>`;
+  const T = drvTx(id), start = setting("ledgerStart", "2026-09-01");
   const loanOut = sum(Object.values(S.ditems).filter(it => it.driverId === id), it => itemOutstanding(it, S.to));
-  return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">Running account from ${esc(dmyS(start))}. Positive = the company owes the driver; negative = the driver owes the company.</span>
-    <div class="row"><select id="lgrp" aria-label="Group trips">${opts({day:"Trips by day", week:"Trips by week", month:"Trips by month"}, S.ledgerGroup)}</select><button class="btn" id="expLedger">Export CSV</button></div></div>
-  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit (driver owes)</th><th class="num">Credit (owed to driver)</th><th class="num">Balance</th></tr></thead><tbody>
-  <tr><td>${esc(dmyS(S.from < start ? start : S.from))}</td><td><b>${S.from <= start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= start ? R.open : R.before)}</b></td></tr>
-  ${R.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="2">Closing balance ${esc(dmyS(S.to))}</td><td class="num">${fmt(sum(R.shown, l => l.dr))}</td><td class="num">${fmt(sum(R.shown, l => l.cr))}</td><td class="num"><b>${aed(R.closing)}</b></td></tr></tfoot></table></div>
-  <div class="row" style="margin-top:10px;gap:18px"><span>Salary account <b class="mono">${fmt(R.closing)}</b></span><span>Loans & advances still to recover <b class="mono">${fmt(loanOut)}</b></span><span>Net position <b class="mono ${R.closing - loanOut < 0 ? "neg" : ""}">${fmt(R.closing - loanOut)}</b></span></div>`;
+  const fin = Object.values(S.payroll).some(p => p.driverId === id && p.from <= S.to && p.to >= S.from);
+  const x = compute().D[id], late = lateTrips(id) || [], pending = x ? r2(salaryOf(x) + sum(late, tripEffect)) : 0;
+  return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">The driver's account from ${esc(dmyS(start))}: each finalised salary is a credit (owed to him), each payment a debit. Positive balance = the company owes the driver.</span><button class="btn" id="expLedger">Export CSV</button></div>
+  ${!fin && (x && (x.n || x.inst || x.adv) || late.length) ? `<div class="banner">The salary for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} is not finalised yet (AED ${fmt(pending)} so far), so it is not in this account. <button class="btn sm" data-drvtab="salary">Open Salary</button></div>` : ""}
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit (paid to driver)</th><th class="num">Credit (salary due)</th><th class="num">Balance</th></tr></thead><tbody>
+  <tr><td>${esc(dmyS(S.from < start ? start : S.from))}</td><td><b>${S.from <= start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= start ? T.open : T.before)}</b></td></tr>
+  ${T.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${l.sal ? "<b>" + esc(l.desc) + "</b>" : esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No finalised salary or payment in this period.</td></tr>`}
+  </tbody><tfoot><tr><td colspan="2">Balance ${esc(dmyS(S.to))} – ${T.closing >= 0 ? "payable to the driver" : "the driver owes the company"}</td><td class="num">${fmt(sum(T.shown, l => l.dr))}</td><td class="num">${fmt(sum(T.shown, l => l.cr))}</td><td class="num"><b>${aed(T.closing)}</b></td></tr></tfoot></table></div>
+  <div class="row" style="margin-top:10px;gap:18px"><span>Salary account <b class="mono">${fmt(T.closing)}</b></span><span>Loans & advances still to recover <b class="mono">${fmt(loanOut)}</b></span><span>Net position <b class="mono ${T.closing - loanOut < 0 ? "neg" : ""}">${fmt(T.closing - loanOut)}</b></span></div>`;
+}
+
+/* ---------- recoveries shown under the salary computation ---------- */
+function recovTbl(id, locked){
+  const items = Object.values(S.ditems).filter(it => it.driverId === id && (itemOutstanding(it, addDays(S.from, -1)) > 0.004 || itemPlan(it).inst.some(x => x.date >= S.from && x.date <= S.to) || (it.repayments || []).some(r => r.date >= S.from && r.date <= S.to)));
+  const fines = S.entries.filter(e => e.driverId === id && e.type === "expense" && e.recover);
+  if(!items.length && !fines.length) return "";
+  const rows = items.map(it => {
+    const before = it.date > addDays(S.from, -1) ? 0 : itemOutstanding(it, addDays(S.from, -1)), given = it.date >= S.from && it.date <= S.to ? num(it.driverAmount) : 0;
+    const sched = sum(itemPlan(it).inst.filter(x => x.date >= S.from && x.date <= S.to), x => x.amt), extra = sum((it.repayments || []).filter(r => r.paidTo === "2100" && r.date >= S.from && r.date <= S.to), r => num(r.amount));
+    const cash = sum((it.repayments || []).filter(r => r.paidTo !== "2100" && r.date >= S.from && r.date <= S.to), r => num(r.amount)), after = itemOutstanding(it, S.to);
+    return `<tr><td>${esc(ITEM_KINDS[it.kind] || "")}${it.desc ? ` <span class="small muted">${esc(it.desc)}</span>` : ""}</td><td class="num">${fmt(before + given)}</td><td class="num">${fmt(sched)}</td><td class="num">${extra ? fmt(extra) : ""}</td><td class="num">${cash ? fmt(cash) : ""}</td><td class="num"><b>${fmt(after)}</b></td>
+      <td>${!locked && after > 0.004 && S.canWrite ? `<div class="row" style="gap:4px;flex-wrap:nowrap"><input type="number" step="0.01" data-recov="${esc(it.id)}" placeholder="${r2(after)}" style="width:90px;text-align:right" aria-label="Amount to recover"><button class="btn sm" data-recadd="${esc(it.id)}">Add to salary</button></div>` : ""}</td></tr>`;
+  }).join("");
+  return `<h2 style="margin-top:16px">Advances, loans & other recoveries</h2><p class="sub">Balances of the driver's accounts. The monthly instalments are already in the computation above; to recover more in this salary, enter the amount and click “Add to salary”.</p>
+  <div class="tbl"><table><thead><tr><th>Account</th><th class="num">Balance at start</th><th class="num">Instalment this period</th><th class="num">Extra recovered</th><th class="num">Repaid in cash</th><th class="num">Balance after</th><th></th></tr></thead><tbody>${rows}
+  ${fines.length ? `<tr><td>Fines / tolls charged to the driver (${fines.length})</td><td></td><td class="num">${fmt(sum(fines, e => num(e.amount) + num(e.vat)))}</td><td></td><td></td><td></td><td class="small muted">in the computation</td></tr>` : ""}
+  </tbody></table></div>`;
 }
 
 /* ---------- salary ---------- */
@@ -89,9 +127,10 @@ function dSalary(id){
   const C = compute(), x = C.D[id] || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
   const runs = Object.values(S.payroll).filter(p => p.driverId === id).sort((a,b) => b.from.localeCompare(a.from));
   const overlap = runs.find(p => p.from <= S.to && p.to >= S.from), same = runs.find(p => p.from === S.from && p.to === S.to);
-  const next = runs.length ? addDays(runs[0].to, 1) : null, ready = historyReady(), R = ready ? ledgerLines(id) : null;
+  const next = runs.length ? addDays(runs[0].to, 1) : null, ready = historyReady(), T = ready ? drvTx(id) : null;
   // late trips: settled by this period unless it is already finalised (then they were settled by it, or wait for the next)
   const late = same ? [] : (lateTrips(id) || []), lateEff = r2(sum(late, tripEffect)), sal = r2(salaryOf(x) + lateEff);
+  const payable = T ? r2(T.before + sal + (x.balance - salaryOf(x))) : null;
   const ln = (label, v, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><td style="white-space:normal">${label}</td><td class="num">${v == null ? "" : aed(v)}</td></tr>`;
   const rows = [
     ln(`Trips: ${x.n} · days worked: ${x.daysWorked || 0}`, null),
@@ -104,8 +143,8 @@ function dSalary(id){
     ln("<b>Salary for the period</b> (before payments)", sal, "tot"),
     (x.books || x.paid || x.recv) ? ln("Paid to / received from the driver in the period", r2(x.balance - salaryOf(x))) : "",
     ln("<b>Balance for the period</b>", r2(x.balance + lateEff), "tot"),
-    R ? ln("Balance brought forward" + (late.length ? " (without the unsettled trips)" : ""), r2(R.before - lateEff)) : "",
-    R ? ln(`<b>${R.closing >= 0 ? "Payable to the driver" : "Driver owes the company"} at ${esc(dmyS(S.to))}</b>`, R.closing, "tot") : ""].join("");
+    T ? ln("Balance brought forward (finalised salaries less payments)", T.before) : "",
+    T ? ln(`<b>${payable >= 0 ? "Payable to the driver" : "Driver owes the company"} at ${esc(dmyS(S.to))}</b>`, payable, "tot") : ""].join("");
   const lateTbl = late.length ? `<h2 style="margin-top:16px">Unsettled trips from earlier periods</h2><p class="sub">These trips are dated in a period that was already finalised, but they were not part of it (they arrived in a later report). They are added to this salary and settled when you finalise.</p>
     <div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Trip</th><th class="num">Fare</th><th class="num">Net</th><th class="num">Tips</th><th class="num">Cash</th><th class="num">Effect on salary</th></tr></thead><tbody>
     ${late.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td><td class="mono small">${esc(String(t.tr || t.id).slice(0,13))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.f||0) - (t.sf||0) - (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.c)}</td><td class="num">${aed(tripEffect(t))}</td></tr>`).join("")}
@@ -131,9 +170,9 @@ function dSalary(id){
       ${next && next !== S.from ? `<span class="small muted">Last finalised period ended ${esc(dmyS(runs[0].to))}.</span> <button class="btn sm" data-setperiod="${next}|${monthEnd(next.slice(0,7))}">Next period: ${esc(dmyS(next))} – ${esc(dmyS(monthEnd(next.slice(0,7))))}</button>` : ""}</div>
       <p class="small muted" style="margin-top:6px">Finalising stores this computation and marks its ${S.trips.filter(t => t.dr === id && moneyRow(t)).length + late.length} trip rows as settled. A finalised period can't be finalised again or overlapped.</p>`;
   }
-  const pay = R && R.closing > 0.005 ? `<button class="btn" data-paysalary="${esc(id)}" data-amt="${r2(R.closing)}">Pay AED ${fmt(R.closing)} to the driver</button>` : "";
+  const pay = T && same && payable > 0.005 ? `<button class="btn" data-paysalary="${esc(id)}" data-amt="${r2(payable)}">Pay AED ${fmt(payable)} to the driver</button>` : "";
   return `<div class="grid2"><div><h2>Salary computation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2>
-    <div class="tbl"><table><tbody>${rows}</tbody></table></div>${!R ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}</div>
+    <div class="tbl"><table><tbody>${rows}</tbody></table></div>${!T ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}${recovTbl(id, !!same)}</div>
     <div><h2>Finalise</h2>${fin}<div class="row" style="margin-top:10px">${pay}</div>
     <h2 style="margin-top:16px">Finalised periods</h2>${runs.length ? `<div class="tbl"><table><thead><tr><th>Period</th><th class="num">Trips</th><th class="num">Driver's share</th><th class="num">Salary</th><th class="num">Closing balance</th><th>Finalised</th><th></th></tr></thead><tbody>
     ${runs.map(p => `<tr><td>${esc(dmyS(p.from))} – ${esc(dmyS(p.to))}${p.late && p.late.length ? `<div class="small muted">+ ${p.late.length} earlier trip(s)</div>` : ""}</td><td class="num">${p.n}</td><td class="num">${fmt(p.ent)}</td><td class="num">${aed(p.salary != null ? p.salary : salaryOf(p))}</td><td class="num">${p.closing == null ? "—" : aed(p.closing)}</td><td class="small muted">${esc(p.by || "")}${p.at ? " · " + esc(new Date(p.at).toLocaleDateString("en-GB")) : ""}</td>
@@ -144,12 +183,12 @@ async function finalise(id){
   const runs = Object.values(S.payroll).filter(p => p.driverId === id);
   if(runs.some(p => p.from <= S.to && p.to >= S.from)){ toast("Part of this period is already finalised."); return; }
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
-  const x = compute().D[id] || {}, R = ledgerLines(id), late = lateTrips(id) || [], lateEff = r2(sum(late, tripEffect));
+  const x = compute().D[id] || {}, T = drvTx(id), late = lateTrips(id) || [], lateEff = r2(sum(late, tripEffect));
   const periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t));
   const k = ["n","daysWorked","fare","fee","tax","net","ent","tipsDue","cash","card","deduct","adv","inst","viaDriver","books","paid","recv","balance"];
   const rec = {driverId: id, from: S.from, to: S.to, termsText: x.termsText || "", ...Object.fromEntries(k.map(f => [f, r2(num(x[f]))])),
     salary: r2(salaryOf(x) + lateEff), nonTrip: r2(salaryOf(x) - sum(periodTrips, tripEffect)), lateEffect: lateEff,
-    rows: [...periodTrips.map(t => t.id), ...late.map(t => t.id)], late: late.map(t => t.id), opening: r2(R.before - lateEff), closing: R.closing,
+    rows: [...periodTrips.map(t => t.id), ...late.map(t => t.id)], late: late.map(t => t.id), opening: T.before, closing: r2(T.before + salaryOf(x) + lateEff + num(x.balance) - salaryOf(x)),
     by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
   if(await writeOk(S.db.doc("payroll/" + id + "_" + S.from).set(rec))) toast(`Salary finalised for ${dmyS(S.from)} – ${dmyS(S.to)}: ${rec.rows.length} trip rows settled.`);
 }
@@ -185,7 +224,7 @@ function dAccts(id){
   return `${form}<div class="row" style="margin-bottom:10px">${Object.entries({loan:"New loan", advance:"New salary advance", visa:"New visa", shared:"Other expense", other:"Other amount"}).map(([k,l]) => `<button class="btn ${k === "loan" ? "primary" : ""}" data-newitem="${k}">${l}</button>`).join("")}</div>
   ${items.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Account</th><th>Description</th><th class="num">Total cost</th><th class="num">Driver share</th><th class="num">Company bears</th><th>Recovery</th><th class="num">Recovered</th><th class="num">Outstanding</th><th></th></tr></thead><tbody>
   ${items.map(it => { const p = itemPlan(it), out = itemOutstanding(it, S.to), next = p.inst.find(x => x.date > S.to), cost = num(it.amount) + num(it.vat) || num(it.driverAmount), da = num(it.driverAmount);
-    return `<tr><td>${esc(dmyS(it.date))}</td><td>${esc(ITEM_KINDS[it.kind] || "")}</td><td style="white-space:normal">${esc(it.desc)}${(it.repayments || []).length ? `<div class="small muted">${it.repayments.length} cash repayment(s)</div>` : ""}</td>
+    return `<tr><td>${esc(dmyS(it.date))}</td><td>${esc(ITEM_KINDS[it.kind] || "")}</td><td style="white-space:normal">${esc(it.desc)}${(it.repayments || []).length ? `<div class="small muted">${it.repayments.length} repayment(s)</div>` : ""}</td>
       <td class="num">${fmt(cost)}</td><td class="num">${fmt(da)} <span class="small muted">${cost ? Math.round(100 * da / cost) : 100}%</span></td><td class="num">${fmt(cost - da)}</td>
       <td class="small">${num(it.installment) > 0 && num(it.installment) < da ? fmt(num(it.installment)) + "/month from " + esc(it.startMonth) : "In full, " + esc(it.startMonth)}${next && out > 0 ? `<div class="muted">Next ${esc(dmyS(next.date))}: ${fmt(next.amt)}</div>` : ""}</td>
       <td class="num">${fmt(da - out)}</td><td class="num">${out > 0.004 ? `<b>${fmt(out)}</b>` : '<span class="pill good">Cleared</span>'}</td>
@@ -200,6 +239,14 @@ document.addEventListener("click", async ev => {
   if(t.dataset.drvview != null){ S.drvView = t.dataset.drvview; S.edit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.drvtab){ S.drvTab = t.dataset.drvtab; S.edit = null; render(); return; }
   if(t.dataset.newitem){ S.edit = {kind: "ditem", id: "", preset: t.dataset.newitem}; render(); return; }
+  if(t.dataset.recadd){
+    const it = S.ditems[t.dataset.recadd], inp = document.querySelector(`[data-recov="${t.dataset.recadd}"]`); if(!it || !inp) return;
+    const amt = r2(num(inp.value || inp.placeholder)), out = itemOutstanding(it, S.to);
+    if(amt <= 0 || amt > out + 0.004){ toast(`Enter an amount up to AED ${fmt(out)}.`); return; }
+    const {id:_, ...b} = it;
+    if(await writeOk(S.db.doc("driverItems/" + it.id).set({...b, repayments: [...(b.repayments || []), {date: S.to, amount: amt, paidTo: "2100", note: `Recovered in salary ${dmyS(S.from)} – ${dmyS(S.to)}`}]}))) toast(`AED ${fmt(amt)} added to this salary.`);
+    return;
+  }
   if(t.dataset.finalise){ t.disabled = true; await finalise(t.dataset.finalise); render(); return; }
   if(t.dataset.payrolldel){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to reopen"; return; }
@@ -212,4 +259,4 @@ document.addEventListener("click", async ev => {
   if(t.dataset.paysalary){ S.view = "payments"; S.drvView = ""; if(window.BOOKS) BOOKS.newDriverDoc("payment", t.dataset.paysalary, "salary", num(t.dataset.amt)); render(); window.scrollTo(0,0); return; }
   if(t.dataset.itemedit){ const it = S.ditems[t.dataset.itemedit]; if(!it) return; S.view = "drivers"; S.drvView = it.driverId; S.drvTab = "accts"; S.edit = {kind: "ditem", id: it.id}; render(); window.scrollTo(0,0); return; }
 });
-window.driverDetail = driverDetail;
+window.driverDetail = driverDetail; window.drvTx = drvTx; window.drvBalance = drvBalance;
