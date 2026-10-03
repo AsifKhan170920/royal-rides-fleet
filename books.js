@@ -416,7 +416,9 @@ function statementsView(){
   const inc = codes("income"), cos = codes("cos"), adm = codes("admin"), fins = codes("finance"), invs = codes("investor");
   const tInc = sum(inc, c => -mv[c]), tCos = sum(cos, c => mv[c]), tAdm = sum(adm, c => mv[c]), tInv = sum(invs, c => mv[c]), tFin = sum(fins, c => mv[c]);
   const gp = tInc - tCos, op = gp - tAdm, np = op - tFin - tInv;
-  const line = (c, v) => `<tr><td class="mono small">${esc(c)}</td><td>${esc(acctName(c))}</td><td class="num">${aed(v)}</td></tr>`;
+  // every amount opens the account's ledger
+  const amtBtn = (c, v) => `<button class="btn sm ghost" data-coaview="${esc(c)}" data-tocoa="1" style="padding:1px 6px" title="Open the ledger of ${esc(acctName(c))}">${aed(v)}</button>`;
+  const line = (c, v) => `<tr><td class="mono small">${esc(c)}</td><td>${esc(acctName(c))}</td><td class="num">${amtBtn(c, v)}</td></tr>`;
   const head = t => `<tr><td colspan="3"><b>${t}</b></td></tr>`, tot = (t, v) => `<tr class="tot"><td></td><td><b>${t}</b></td><td class="num"><b>${aed(v)}</b></td></tr>`;
   const pl = `<div class="section"><h2>Profit & loss · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
     ${head("Revenue")}${inc.map(c => line(c, -mv[c])).join("")}${tot("Total revenue", tInc)}
@@ -435,7 +437,7 @@ function statementsView(){
   const grp = ty => B.filter(r => r.type === ty), val = r => natural(r.code, r.bal);
   const profit = -sum(B.filter(r => r.type === "Income" || r.type === "Expense"), r => r.bal);
   const tA = sum(grp("Asset"), val), tL = sum(grp("Liability"), val), tE = sum(grp("Equity"), val) + profit, diff = r2(tA - tL - tE), gap = Math.abs(diff) > 0.01;
-  const bl = r => `<tr><td class="mono small">${esc(r.code)}</td><td>${esc(r.name)}</td><td class="num">${aed(val(r))}</td></tr>`;
+  const bl = r => `<tr><td class="mono small">${esc(r.code)}</td><td>${esc(r.name)}</td><td class="num">${amtBtn(r.code, val(r))}</td></tr>`;
   // current and non-current, each with its subtotal
   const split = (ty, nc, title) => { const rs = grp(ty).filter(r => NON_CURRENT.has(r.code) === nc); return rs.length ? `<tr><td></td><td><i>${title}</i></td><td></td></tr>${rs.map(bl).join("")}<tr><td></td><td><i>Total ${title.toLowerCase()}</i></td><td class="num"><i>${aed(sum(rs, val))}</i></td></tr>` : ""; };
   const bs = `<div class="section"><h2>Balance sheet at ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
@@ -468,7 +470,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.coanew){ S.ce = {code: ""}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.coaedit){ S.ce = {code: t.dataset.coaedit}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.coacancel){ S.ce = null; render(); return; }
-  if(t.dataset.coaview != null){ S.coaView = t.dataset.coaview; S.ce = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.coaview != null){ if(t.dataset.tocoa) S.view = "coa"; S.coaView = t.dataset.coaview; S.ce = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.bknew){ newDoc(t.dataset.bknew); render(); window.scrollTo(0,0); return; }
   if(t.dataset.bkedit){ openDocRow(t.dataset.bkedit); render(); window.scrollTo(0,0); return; }
   if(t.dataset.bkcancel){ S.bk = null; render(); return; }

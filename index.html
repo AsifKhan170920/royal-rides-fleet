@@ -768,7 +768,9 @@ document.addEventListener("click", ev => { const t = ev.target.closest("[data-na
    paged(key, rows) → {rows, bar}; a download button is <button data-dl="key" data-id="…">, handled by DL[key](id) → [file name, rows]. */
 const PAGE = 50; S.pg = {};
 window.DL = window.DL || {};
+let PAGE_ALL = false;
 function paged(key, rows){
+  if(PAGE_ALL) return {rows, bar: "", last: true};
   const n = rows.length, pages = Math.max(1, Math.ceil(n / PAGE)), p = Math.min(S.pg[key] || 0, pages - 1);
   const bar = n <= PAGE ? "" : `<div class="row" style="justify-content:space-between;margin-top:8px"><span class="small muted">${p * PAGE + 1}–${Math.min(n, (p + 1) * PAGE)} of ${n} · newest first</span>
     <div class="row" style="gap:4px"><button class="btn sm" data-pg="${key}" data-to="0" ${p ? "" : "disabled"}>« Newest</button><button class="btn sm" data-pg="${key}" data-to="${p - 1}" ${p ? "" : "disabled"}>‹ Newer</button>
@@ -800,6 +802,7 @@ document.addEventListener("click", ev => {
   S.edit = null; S.bk = null; S.pe = null; S.tripEdit = null; S.docEdit = null; S.empEdit = null; S.pdcEdit = null; S.ce = null;
   render(); window.scrollTo(0, 0);
 }, true);
+const VIEW_FN = () => ({...(window.BOOK_VIEWS || {}), cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)});
 function render(){
   if(window.BOOKS && BOOKS.applyCoa) BOOKS.applyCoa();
   renderNav();
@@ -807,7 +810,7 @@ function render(){
   const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : (S.view === "expiries" ? "Visa & document expiry" : S.view === "purchinv" ? "Purchases & expenses" : "");
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
-  const fns = {...(window.BOOK_VIEWS || {}), cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
+  const fns = VIEW_FN();
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
@@ -815,6 +818,7 @@ function render(){
   if(S.db && window.REM) html += REM.banner(); else if(S.db && window.EMP) html += EMP.banner();   // visa / Emirates ID expiring   // post-dated cheques that are due
   const focus = document.activeElement && document.activeElement.id; const sel = focus && document.activeElement.selectionStart;
   el.innerHTML = html + fns[S.view]();
+  autoDl(el);   // every table section gets Excel / PDF / CSV
   if(focus){ const f = document.getElementById(focus); if(f && f !== document.body){ f.focus(); try{ if(sel != null) f.setSelectionRange(sel, sel); }catch(e){} } }
 }
 const dName = id => (S.drivers[id] && S.drivers[id].name) || (id === "unknown" ? "Unknown driver" : id);
@@ -1701,7 +1705,7 @@ function vLedger(){
   <div class="banner info">Uber balance in the ledger (account 1150): <b class="mono">AED ${fmt(uberBal)}</b>. For a period that matches an Uber Payments report, this equals the report's “Paid to you” total; the Import page shows that total when you import.${accts.filter(a => a !== "1150" && acctName(a).endsWith(" clearing (receivable)")).map(a => ` ${esc(acctName(a))} (${a}): <b class="mono">AED ${fmt(bal(a))}</b>.`).join("")}</div>
   <div class="section"><div class="head"><div><h2>Trial balance · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Built automatically from imported trips, driver and investor terms, and your entries. ${Math.abs(totDr-totCr) < 0.02 ? '<span class="pill good">Balanced</span>' : '<span class="pill bad">Out of balance</span>'}</p></div><div class="row">${fmtGroup('data-legacy="expJournal"')}</div></div>
   <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
-  ${accts.map(a=>`<tr><td class="mono">${a}</td><td>${esc(acctName(a))}</td><td class="num">${fmt(TB[a].dr)}</td><td class="num">${fmt(TB[a].cr)}</td><td class="num">${aed(TB[a].dr-TB[a].cr)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>`}
+  ${accts.map(a=>`<tr><td class="mono">${a}</td><td><button class="btn sm ghost" data-coaview="${esc(a)}" data-tocoa="1" style="padding:1px 6px">${esc(acctName(a))}</button></td><td class="num">${fmt(TB[a].dr)}</td><td class="num">${fmt(TB[a].cr)}</td><td class="num">${aed(TB[a].dr-TB[a].cr)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>`}
   </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${fmt(totDr)}</td><td class="num">${fmt(totCr)}</td><td></td></tr></tfoot></table></div></div>
   <div class="section"><h2>VAT working</h2><p class="sub">Fare treatment: <b>${setting("fareVat","exempt")==="standard" ? "standard-rated 5% (VAT inside the fare)" : "exempt local passenger transport"}</b>. Uber fee VAT: <b>${setting("feeVatRecoverable",false) ? "recoverable" : "not recoverable (cost)"}</b>. Change these in Settings after confirming the position for this business.</p>
   <div class="tbl"><table><tbody>
@@ -1804,6 +1808,49 @@ document.addEventListener("click", async ev => {
 /* Reports: every download goes through saveCsv(name, rows); the button pressed (data-fmt) picks the format –
    "csv", "xlsx" (Excel, SheetJS) or "pdf" (table on the letterhead, landscape for wide reports). */
 document.addEventListener("click", ev => { const t = ev.target.closest("[data-fmt]"); if(t){ window.__fmt = t.dataset.fmt; setTimeout(() => { window.__fmt = null; }, 0); } }, true);
+/* Downloads everywhere: after each render, every section that shows a table and has no download buttons of its
+   own gets "Download: Excel PDF CSV". The file is the section's table(s) as shown – all rows of the list (not only
+   the page on screen), action buttons left out, amounts as numbers. */
+const ACTION_WORDS = /^(view|edit|delete|pay|open|payslip|attach|record payment|record receipt|bounced|re-presented|reopen|close|cancel|update|done|statement|top up|change supplier|click again.*|×|pay fee|agreement|set investor)$/i;
+function autoDl(root){
+  root.querySelectorAll(".section").forEach(sec => {
+    if(sec.querySelector("[data-fmt]") || sec.closest(".sp") || sec.dataset.nodl != null) return;
+    const tables = [...sec.querySelectorAll("table")].filter(t => !t.closest("form") && !t.closest(".sp") && t.querySelector("tr"));
+    if(!tables.length) return;
+    const id = "t" + Math.random().toString(36).slice(2, 8); sec.dataset.tbl = id;
+    const bar = document.createElement("div"); bar.className = "row"; bar.style.cssText = "justify-content:flex-end;margin:4px 0 6px";
+    bar.innerHTML = fmtGroup(`data-tbldl="${id}"`);
+    const head = sec.querySelector(":scope > .head");
+    if(head) head.appendChild(bar); else sec.insertBefore(bar, sec.firstChild);
+  });
+}
+function tableToRows(sec){
+  const out = [], cellText = c => { const x = c.cloneNode(true); x.querySelectorAll("input,select,textarea").forEach(i => i.replaceWith(document.createTextNode(i.tagName === "SELECT" ? (i.options[i.selectedIndex] || {}).text || "" : i.value || ""))); x.querySelectorAll("style,script").forEach(n => n.remove()); return x.innerText.replace(/\s+/g, " ").trim(); };
+  const toVal = v => { const m = String(v).match(/^\(?(-|−)?\s*([\d,]+(\.\d+)?)\)?$/); if(!m || !/\d/.test(v)) return v; const n = Number(m[2].replace(/,/g, "")) * (m[1] || /^\(/.test(v) ? -1 : 1); return isNaN(n) ? v : n; };
+  [...sec.querySelectorAll("table")].filter(t => !t.closest("form") && !t.closest(".sp")).forEach((t, ti) => {
+    const rows = [...t.querySelectorAll("tr")].map(tr => { const r = []; [...tr.children].forEach(c => { r.push(cellText(c)); for(let k = 1; k < (c.colSpan || 1); k++) r.push(""); }); return r; }).filter(r => r.some(x => x !== ""));
+    if(!rows.length) return;
+    const w = Math.max(...rows.map(r => r.length)), body = rows.slice(1);
+    // leave out action columns (only buttons like View / Edit / Delete)
+    const keep = [...Array(w).keys()].filter(j => !(body.length && body.every(r => !r[j] || r[j].split(" ").every(x => !x) || ACTION_WORDS.test(r[j]) || r[j].split(/\s+/).every(x => ACTION_WORDS.test(x)))) || (rows[0][j] && !body.every(r => !r[j])));
+    if(ti){ out.push([]); const cap = t.closest(".tbl") && t.closest(".tbl").previousElementSibling; if(cap && /H2|H3/.test(cap.tagName)) out.push([cap.innerText.trim()]); }
+    rows.forEach((r, i) => out.push(keep.map(j => i ? toVal(r[j] ?? "") : (r[j] ?? ""))));
+  });
+  return out;
+}
+document.addEventListener("click", ev => {
+  const t = ev.target.closest("[data-tbldl]"); if(!t) return;
+  const sec = document.querySelector(`.section[data-tbl="${t.dataset.tbldl}"]`); if(!sec) return;
+  // a paged list: download every row, not only the page on screen
+  const pg = sec.querySelector("[data-pg]"), title = ((sec.querySelector("h2") || {}).innerText || $("#pageTitle").textContent || "report").split("\n")[0];
+  let rows;
+  if(pg){ const key = pg.dataset.pg, keepPg = S.pg[key], keepPage = PAGE; window.__allRows = true; S.pg[key] = 0; PAGE_ALL = true; const el = document.createElement("div"); el.innerHTML = (VIEW_FN()[S.view] || (() => ""))(); PAGE_ALL = false; window.__allRows = false; S.pg[key] = keepPg;
+    const twin = [...el.querySelectorAll(".section")].find(x => (x.querySelector("h2") || {}).innerText === (sec.querySelector("h2") || {}).innerText) || el; rows = tableToRows(twin); }
+  else rows = tableToRows(sec);
+  if(!rows.length){ toast("Nothing to download."); return; }
+  const fmtv = window.__fmt;
+  setTimeout(() => { window.__fmt = fmtv; saveCsv(`${norm(title).slice(0, 40) || "report"}_${S.from}_${S.to}.csv`, rows); window.__fmt = null; }, 0);
+});
 const fmtGroup = (attrs, label = "Download") => `<span class="row" style="gap:3px;flex-wrap:nowrap;align-items:center"><span class="small muted">${label}:</span><button class="btn sm" ${attrs} data-fmt="xlsx">Excel</button><button class="btn sm" ${attrs} data-fmt="pdf">PDF</button><button class="btn sm" ${attrs} data-fmt="csv">CSV</button></span>`;
 const reportTitle = name => name.replace(/\.[a-z]+$/i, "").replace(/_\d{4}-\d{2}-\d{2}(_\d{4}-\d{2}-\d{2})?$/, "").replace(/[_-]+/g, " ").replace(/^./, c => c.toUpperCase());
 async function saveCsv(name, rows){
@@ -1989,7 +2036,7 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=5"></script>
-<script src="books.js?v=17"></script>
+<script src="books.js?v=18"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=9"></script>
