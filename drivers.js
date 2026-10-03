@@ -557,9 +557,46 @@ async function bulkStatements(){
   }catch(e){ console.warn(e); toast("Could not make the PDF. Try again."); }
   S.from = keep.from; S.to = keep.to; $("#pFrom").value = keep.from; $("#pTo").value = keep.to; $("#preset").value = keep.preset; await loadPeriod(); render();
 }
+/* ---------- bulk salary finalisation ---------- */
+/* Drivers page → "Bulk salary finalisation": every driver's salary for the period at the top, with its status.
+   Ticked drivers that are ready are finalised one after the other, exactly as from their own Salary tab
+   (their trip selection and the earlier trips picked for them are respected). */
+S.bulkFin = S.bulkFin || null;
+function bulkFinRows(){
+  const C = compute();
+  return Object.values(S.drivers).filter(d => d.active !== false || (C.D[d.id] && C.D[d.id].n)).map(d => {
+    const id = d.id, x0 = C.D[id], x = selX(id, x0) || {n: 0}, late = lateSelected(id) || [], tm = termAt(termList(d, DRV_TERMS), S.to) || {};
+    const fin = Object.values(S.payroll).find(p => p.driverId === id && p.from <= S.to && p.to >= S.from);
+    const sal = x0 ? r2(salaryOf(x) + sum(late, tripEffect)) : 0, trips = x.n || 0;
+    const status = fin ? (fin.from === S.from && fin.to === S.to ? "done" : "overlap") : !tm.payModel ? "terms" : !trips && !late.length && !sal ? "empty" : "ready";
+    return {id, name: d.name || id, terms: drvTermText(tm), trips, late: late.length, sal, status, fin};
+  }).sort((a,b) => a.name.localeCompare(b.name));
+}
+const BF_STATUS = {ready: ["warn", "Ready"], done: ["good", "Finalised"], overlap: ["good", "Part finalised"], terms: ["bad", "Pay terms needed"], empty: ["", "No trips"]};
+function bulkFinPanel(){
+  if(!S.bulkFin) return "";
+  if(!historyReady()) return `<div class="section"><h2>Bulk salary finalisation</h2><p class="sub">Loading the history (earlier unsettled trips, balances)…</p></div>`;
+  const rows = bulkFinRows(), off = new Set(S.bulkFin.off || []), ready = rows.filter(r => r.status === "ready"), on = ready.filter(r => !off.has(r.id));
+  return `<div class="section"><div class="head"><div><h2>Bulk salary finalisation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">Change the period at the top to finalise another period. Each driver's trip selection (Trip history) and the earlier trips picked for him are used, as on his Salary tab.</p></div><button class="btn ghost" data-bfclose="1">Close</button></div>
+  <div class="tbl"><table><thead><tr><th><input type="checkbox" data-bfall="1" ${on.length && on.length === ready.length ? "checked" : ""} aria-label="All ready"></th><th>Driver</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Earlier trips</th><th class="num">Salary due</th><th>Status</th></tr></thead><tbody>
+  ${rows.map(r => { const [cls, lbl] = BF_STATUS[r.status]; return `<tr><td>${r.status === "ready" ? `<input type="checkbox" data-bfone="${esc(r.id)}" ${off.has(r.id) ? "" : "checked"} aria-label="Finalise">` : ""}</td><td><button class="btn sm ghost" data-drvview="${esc(r.id)}" style="padding:2px 6px">${esc(r.name)}</button></td><td class="small">${esc(r.terms)}</td><td class="num">${r.trips}</td><td class="num">${r.late || ""}</td><td class="num">${aed(r.sal)}</td><td><span class="pill ${cls}">${lbl}</span>${r.fin ? ` <span class="small muted">${esc(dmyS(r.fin.from))}–${esc(dmyS(r.fin.to))}</span>` : ""}</td></tr>`; }).join("")}
+  </tbody><tfoot><tr><td></td><td colspan="4">${on.length} of ${ready.length} ready drivers selected</td><td class="num"><b>${fmt(sum(on, r => r.sal))}</b></td><td></td></tr></tfoot></table></div>
+  <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-bfgo="1" ${on.length && S.canWrite ? "" : "disabled"}>Finalise ${on.length} salar${on.length === 1 ? "y" : "ies"} for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</button>${dlBtn("bulkfin")}</div>
+  <p class="small muted" style="margin-top:6px">A finalised salary can be reopened from the driver's Transactions (Edit). Drivers without pay terms must get them first (Edit driver).</p></div>`;
+}
+DL.bulkfin = () => [`salaries_${S.from}_${S.to}.csv`, [["Driver","Pay terms","Trips","Earlier trips","Salary due","Status"], ...bulkFinRows().map(r => [r.name, r.terms, r.trips, r.late, r.sal, BF_STATUS[r.status][1]])]];
+async function bulkFinalise(){
+  const off = new Set(S.bulkFin.off || []), list = bulkFinRows().filter(r => r.status === "ready" && !off.has(r.id)); let n = 0;
+  for(const r of list){ toast(`Finalising ${++n} of ${list.length} – ${r.name}…`); await finalise(r.id); }
+  toast(`${n} salar${n === 1 ? "y" : "ies"} finalised for ${dmyS(S.from)} – ${dmyS(S.to)}.`); render();
+}
+window.bulkFinPanel = bulkFinPanel;
 window.bulkPanel = bulkPanel;
 document.addEventListener("change", ev => {
-  const t = ev.target; if(!S.bulk) return;
+  const t = ev.target; if(!S.bulk && !S.bulkFin) return;
+  if(t.dataset && t.dataset.bfone && S.bulkFin){ const off = new Set(S.bulkFin.off || []); t.checked ? off.delete(t.dataset.bfone) : off.add(t.dataset.bfone); S.bulkFin.off = [...off]; render(); return; }
+  if(t.dataset && t.dataset.bfall && S.bulkFin){ S.bulkFin.off = t.checked ? [] : bulkFinRows().filter(r => r.status === "ready").map(r => r.id); render(); return; }
+  if(!S.bulk) return;
   if(t.id === "bkF" || t.id === "bkT"){ S.bulk[t.id === "bkF" ? "from" : "to"] = t.value; S.bulk.off = []; render(); }
   if(t.dataset && t.dataset.bulkone){ const off = new Set(S.bulk.off || []); t.checked ? off.delete(t.dataset.bulkone) : off.add(t.dataset.bulkone); S.bulk.off = [...off]; render(); }
   if(t.dataset && t.dataset.bulkall){ S.bulk.off = t.checked ? [] : bulkRecs().map(p => p.id); render(); }
@@ -580,8 +617,11 @@ document.addEventListener("click", async ev => {
     return;
   }
   if(t.dataset.salprint){ printSalary(t.dataset.salprint); return; }
-  if(t.dataset.bulkopen){ const today = iso(new Date()); S.bulk = {from: today.slice(0,8) + "01", to: today, off: []}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.bulkopen){ const today = iso(new Date()); S.bulkFin = null; S.bulk = {from: today.slice(0,8) + "01", to: today, off: []}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.bulkclose){ S.bulk = null; render(); return; }
+  if(t.dataset.bfopen){ S.bulkFin = {off: []}; S.bulk = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.bfclose){ S.bulkFin = null; render(); return; }
+  if(t.dataset.bfgo){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to finalise"; return; } t.disabled = true; t.textContent = "Finalising…"; await bulkFinalise(); return; }
   if(t.dataset.bulkpdf){ t.disabled = true; t.textContent = "Making the PDF…"; await bulkStatements(); return; }
   if(t.dataset.tselall){ const id = t.dataset.tselall, open = S.trips.filter(x => x.dr === id && moneyRow(x) && !settleStatus(x).ok).map(x => x.id); await saveSel(id, {excluded: t.dataset.on === "1" ? [] : open}); render(); return; }
   if(t.dataset.tripview || t.dataset.tripedit){ S.tripEdit = {day: t.dataset.day, id: t.dataset.id, mode: t.dataset.tripview ? "view" : "edit"}; render(); window.scrollTo(0,0); return; }

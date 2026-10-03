@@ -138,3 +138,7 @@ The driver's **Transactions**: when a salary period is finalised, it adds "salar
 ## Bulk salary statements
 
 Drivers → **Bulk salary statements**: choose the dates on which salaries were finalised. All salaries finalised then are listed, with tick boxes. **Download statements PDF** gives one PDF with each driver's signing statement on its own page; each statement is worked out for its own period, including the earlier trips that salary settled. A summary (driver, period, trips, share, salary, balance, finalised on / by) downloads as Excel, PDF or CSV.
+
+## Bulk salary finalisation
+
+Drivers → **Bulk salary finalisation**: every driver's salary for the period at the top, with trips, earlier trips picked, salary due and status (Ready, Finalised, Part finalised, Pay terms needed, No trips). Ready drivers are ticked; **Finalise** (two clicks) finalises them one after the other, exactly as from each driver's Salary tab, using their trip selection. The list downloads as Excel, PDF or CSV.

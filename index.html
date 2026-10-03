@@ -1045,8 +1045,8 @@ function vDrivers(){
   const C = compute(); const list = Object.values(S.drivers).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const e = S.edit && S.edit.kind === "driver" ? S.edit : null; const d = e ? (S.drivers[e.id] || {}) : null;
   if(S.drvView && S.drivers[S.drvView] && window.driverDetail) return (e ? driverForm(e.id, d) : "") + driverDetail(S.drvView);
-  return `${e ? driverForm(e.id, d) : ""}${window.bulkPanel ? bulkPanel() : ""}
-  <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><div class="row"><button class="btn" data-bulkopen="1">Bulk salary statements</button><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div></div>
+  return `${e ? driverForm(e.id, d) : ""}${window.bulkFinPanel ? bulkFinPanel() : ""}${window.bulkPanel ? bulkPanel() : ""}
+  <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><div class="row"><button class="btn" data-bfopen="1">Bulk salary finalisation</button><button class="btn" data-bulkopen="1">Bulk salary statements</button><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th>Targets met</th><th></th></tr></thead><tbody>
   ${list.map(x=>{ const c = C.D[x.id] || {}; const tl = termList(x, DRV_TERMS), cur = termAt(tl, iso(new Date())); const terms = !(cur && cur.payModel) ? `<span class="pill warn">Terms needed</span>` : esc(drvTermText(cur)) + (tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : "");
     return `<tr><td><button class="btn sm ghost" data-drvview="${esc(x.id)}" style="padding:2px 6px"><b>${esc(x.name)}</b></button> ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${(() => { const today = iso(new Date()), vid = vehAt(x.id, today), m = machineAt(x.id, today); return (vid ? esc(vName(vid)) : '<span class="muted">—</span>') + (m ? `<div class="small muted">Machine ${esc(m.name || m.tid)}</div>` : ""); })()}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td>${window.targetSummary ? targetSummary(x.id, C.D[x.id]) : ""}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
@@ -1951,7 +1951,7 @@ boot();
 </script>
 <script src="docs.js?v=4"></script>
 <script src="books.js?v=9"></script>
-<script src="drivers.js?v=22"></script>
+<script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
 
