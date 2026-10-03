@@ -783,8 +783,8 @@ document.addEventListener("click", ev => {
   if(t.dataset.dl && DL[t.dataset.dl]){ const out = DL[t.dataset.dl](t.dataset.id); if(out) saveCsv(out[0], out[1]); }
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
-const NAV_KEYS = ["view","slipShow","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","slipshow","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_KEYS = ["view","slipShow","slipEdit","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","slipshow","slipedit","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
@@ -1992,7 +1992,7 @@ boot();
 <script src="books.js?v=17"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=2"></script>
-<script src="employees.js?v=8"></script>
+<script src="employees.js?v=9"></script>
 <script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=8"></script>
 <script src="loans.js?v=3"></script>
