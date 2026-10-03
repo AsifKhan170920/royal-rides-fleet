@@ -27,7 +27,7 @@ const supKey = src => "purSup_" + src;
 const supOf = src => { const id = setting(supKey(src), ""); return id && S.suppliers[id] ? id : ""; };
 const SUP_NAME = {fuel: "ENOC (fuel)", salik: "Salik", ev: "EV charging"};
 S.purTab = S.purTab || "all"; S.purImp = S.purImp || null; S.rcpt = S.rcpt || {};
-const PUR_TABS = {all: "All entries", purchase: "Purchases", fuel: "Fuel", salik: "Salik", ev: "EV charging", receipts: "Receipts"};
+const PUR_TABS = {all: "All entries", purchase: "Purchases", invoices: "Purchase invoices", fuel: "Fuel", salik: "Salik", ev: "EV charging", receipts: "Receipts"};
 const PUR_SRC = {fuel: {cat: "5200", sub: "fuel", label: "Fuel", unit: "Litres", hint: "ENOC / ADNOC / Emarat fleet card portal – transactions report"},
   salik: {cat: "5210", sub: "salik", label: "Salik", unit: "Trips", hint: "Salik business account – trips / statement export"},
   ev: {cat: "5200", sub: "ev", label: "EV charging", unit: "kWh", hint: "DEWA EV Green Charger / Tesla / other charging portal – sessions report"}};
@@ -151,10 +151,11 @@ function prepaidBox(src){
 function purView(){
   const tab = PUR_TABS[S.purTab] ? S.purTab : "all", head = `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>Purchases & expenses</h2><p class="sub">Every purchase, expense and payment. Fuel, Salik and EV charging are imported from the statements downloaded from their portals; attach the receipt to any expense.</p></div></div>${tabBtns("data-purtab", tab, PUR_TABS)}</div>`;
   if(tab === "all"){ PUR.busy = true; try{ return head + vEntries(); } finally { PUR.busy = false; } }
+  if(tab === "invoices") return head + (PUR.invView ? PUR.invView() : "");   // supplier bills (Purchase invoices) live here
   const E = expEntries(); let body = "";
   if(tab === "purchase"){
     const list = E.filter(e => !["fuel", "salik", "ev"].includes(entSub(e)));
-    body = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">Repairs, parts, tyres, insurance, permits, office and other purchases paid in cash or by bank. Supplier bills on credit go in Purchase invoices.</span><div class="row">${dlBtn("purlist", "purchase")}<button class="btn sm primary" data-puradd="5230">Add purchase</button><button class="btn sm" data-nav="purchinv">Purchase invoices</button></div></div>${byCar(list)}${purTable(list)}`;
+    body = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">Repairs, parts, tyres, insurance, permits, office and other purchases paid in cash or by bank. Supplier bills on credit go in Purchase invoices.</span><div class="row">${dlBtn("purlist", "purchase")}<button class="btn sm primary" data-puradd="5230">Add purchase</button><button class="btn sm" data-purtab="invoices">Purchase invoices</button></div></div>${byCar(list)}${purTable(list)}`;
   } else if(tab === "receipts"){
     const withR = E.filter(e => S.rcpt[e.id]), without = E.filter(e => !S.rcpt[e.id]);
     body = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${withR.length} of ${E.length} expenses in this period have a receipt. Expenses without a receipt are listed first – attach a photo or PDF.</span></div>${purTable([...without, ...withR].reverse())}`;
@@ -169,7 +170,7 @@ DL.purlist = tab => { const E = expEntries().filter(e => tab === "purchase" ? ![
 
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
-  if(t.dataset.purtab){ S.purTab = t.dataset.purtab; S.purImp = null; S.edit = null; render(); return; }
+  if(t.dataset.purtab){ S.purTab = t.dataset.purtab; S.purImp = null; S.edit = null; S.view = "entries"; render(); return; }
   if(t.dataset.puradd){ S.purTab = "all"; S.edit = {kind: "entry", id: "", data: {date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type: "expense", category: t.dataset.puradd, paidFrom: "1100", sub: t.dataset.sub || ""}}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.supmake){ const src = t.dataset.supmake, id = "s-" + uid(); if(await writeOk(S.db.doc("suppliers/" + id).set({name: SUP_NAME[src], creditDays: 0, opening: 0}))){ await writeOk(S.db.doc("settings/main").set({...S.settings, [supKey(src)]: id})); toast(`Supplier "${SUP_NAME[src]}" created – rename it in Suppliers if needed.`); render(); } return; }
   if(t.dataset.supchange){ const k = supKey(t.dataset.supchange); await writeOk(S.db.doc("settings/main").set({...S.settings, [k]: ""})); render(); return; }
@@ -191,3 +192,5 @@ document.addEventListener("change", async ev => {
   if(t.dataset.impopt && S.purImp){ const k = t.dataset.impopt; S.purImp[k] = k === "recover" || k === "group" ? t.value === "true" : t.value; render(); return; }
 });
 window.PUR = {view: purView, busy: false, expand: expandInv};
+// Purchase invoices open inside Purchases & expenses (their own menu item is replaced by it)
+if(window.BOOK_VIEWS && BOOK_VIEWS.purchinv){ PUR.invView = BOOK_VIEWS.purchinv; BOOK_VIEWS.purchinv = () => { S.purTab = "invoices"; return purView(); }; }

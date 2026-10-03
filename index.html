@@ -178,8 +178,8 @@ const VIEWS = [
   ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
   ["RTA",null],["rta","RTA – licences, deposits & fines"],
-  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["bankfin","Bank finance"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
-  ["Money",null],["entries","Purchases & expenses"],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
+  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["bankfin","Bank finance"],["salesinv","Sales invoices"],["customers","Customers"],["entries","Purchases & expenses"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
+  ["Money",null],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["empoffers","Employee offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
 ];
@@ -756,10 +756,10 @@ function vTransfers(){
 /* ============ rendering ============ *//* ============ rendering ============ */
 /* menu groups fold: the group you open stays open and the others close (remembered); the current page's group is always open */
 function renderNav(){
-  let g = "", cur = ""; const grpOf = {}; VIEWS.forEach(([k, l]) => { if(l === null) g = k; else grpOf[k] = g; }); cur = grpOf[S.view] || "";
+  let g = "", cur = ""; const grpOf = {}; VIEWS.forEach(([k, l]) => { if(l === null) g = k; else grpOf[k] = g; }); cur = grpOf[S.view === "purchinv" ? "entries" : S.view] || "";
   if(S.navOpen === undefined){ try{ S.navOpen = localStorage.getItem("rrNavOpen"); }catch(e){} if(S.navOpen == null) S.navOpen = cur; }
   const open = k => k === S.navOpen || k === cur;
-  $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<button class="grp" data-navgrp="${esc(k)}" aria-expanded="${open(k)}">${esc(k)}<span aria-hidden="true">${open(k) ? "▾" : "▸"}</span></button>` : `<button data-nav="${k}" class="${open(grpOf[k]) ? "" : "hid"}" ${S.view===k?'aria-current="page"':""}>${esc(l)}</button>`).join("");
+  $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<button class="grp" data-navgrp="${esc(k)}" aria-expanded="${open(k)}">${esc(k)}<span aria-hidden="true">${open(k) ? "▾" : "▸"}</span></button>` : `<button data-nav="${k}" class="${open(grpOf[k]) ? "" : "hid"}" ${S.view===k || (k === "entries" && S.view === "purchinv")?'aria-current="page"':""}>${esc(l)}</button>`).join("");
 }
 document.addEventListener("click", ev => { const t = ev.target.closest("[data-navgrp]"); if(!t) return; const k = t.dataset.navgrp; S.navOpen = S.navOpen === k ? "" : k; try{ localStorage.setItem("rrNavOpen", S.navOpen); }catch(e){} renderNav(); });
 /* Long lists are shown 50 rows a page, newest first; downloads (CSV) are oldest first.
@@ -802,7 +802,7 @@ function render(){
   if(window.BOOKS && BOOKS.applyCoa) BOOKS.applyCoa();
   renderNav();
   const bb = $("#backBtn"); if(bb) bb.hidden = !S.navStack.length;
-  const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : (S.view === "expiries" ? "Visa & document expiry" : "");
+  const v = VIEWS.find(x => x[0] === S.view); $("#pageTitle").textContent = v ? v[1] : (S.view === "expiries" ? "Visa & document expiry" : S.view === "purchinv" ? "Purchases & expenses" : "");
   const el = $("#view");
   if(!S.ready){ el.innerHTML = `<div class="empty"><b>Loading your fleet data…</b>Drivers, cars and trips for the selected period.</div>`; return; }
   const fns = {...(window.BOOK_VIEWS || {}), cashbank:vCashBank, transfers:vTransfers, posupload:vPosUpload, terminals:vTerminals, recon:vRecon, collections:vCollections, driverledger:vDriverLedger, dashboard:vDashboard, trips:vTrips, usage:vUsage, import:vImport, drivers:vDrivers, vehicles:vVehicles, investors:vInvestors, platforms:vPlatforms, entries:vEntries, settlement:vSettlement, investorpl:vInvestorPL, ledger:vLedger, settings:vSettings, offers:(...a) => vOffers(...a), agreements:(...a) => vAgreements(...a)};
@@ -1996,6 +1996,6 @@ boot();
 <script src="loans.js?v=3"></script>
 <script src="rta.js?v=2"></script>
 <script src="reminders.js?v=2"></script>
-<script src="purchases.js?v=2"></script>
+<script src="purchases.js?v=3"></script>
 
 </body></html>
