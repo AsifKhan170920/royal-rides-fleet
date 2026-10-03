@@ -453,7 +453,7 @@ function statementsView(){
 // payment to / receipt from an investor: account 2200 Investor payables
 function newInvestorDoc(k, id, amt){ newDoc(k); S.bk.data.party = "i:" + id; S.bk.lines = [{...blankLine(k), account: "2200", desc: k === "payment" ? "Profit payment to investor" : "Received from investor", amount: amt > 0 ? String(r2(amt)) : ""}]; }
 function newEmpPayment(id, acct, amt, desc){ newDoc("payment"); S.bk.data.party = "e:" + id; S.bk.lines = [{...blankLine("payment"), account: acct, desc, amount: amt > 0 ? String(r2(amt)) : ""}]; }
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, newInvestorDoc, partyName, partyOpts, partyMoves, openDoc: openDocRow};
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, newInvestorDoc, partyName, partyOpts, partyMoves, invStatus, histEntries, openDoc: openDocRow};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),

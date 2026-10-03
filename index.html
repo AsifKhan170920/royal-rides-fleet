@@ -163,13 +163,13 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, reminders:{}, rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
 };
 const VIEWS = [
-  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import trip data"],
+  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import trip data"],["reminders","Reminders & expiries"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
@@ -392,7 +392,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -798,7 +798,7 @@ function render(){
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
   if(S.db && window.PDC) html += PDC.banner();
-  if(S.db && window.EMP) html += EMP.banner();   // visa / Emirates ID expiring   // post-dated cheques that are due
+  if(S.db && window.REM) html += REM.banner(); else if(S.db && window.EMP) html += EMP.banner();   // visa / Emirates ID expiring   // post-dated cheques that are due
   const focus = document.activeElement && document.activeElement.id; const sel = focus && document.activeElement.selectionStart;
   el.innerHTML = html + fns[S.view]();
   if(focus){ const f = document.getElementById(focus); if(f && f !== document.body){ f.focus(); try{ if(sel != null) f.setSelectionRange(sel, sel); }catch(e){} } }
@@ -830,7 +830,7 @@ function vDashboard(){
     <div class="kpi"><div class="l">Company profit</div><div class="v ${company<0?"neg":""}">${fmt(company)}</div><div class="n">After drivers & investors</div></div>
     <div class="kpi"><div class="l">Owed to drivers</div><div class="v ${drvDue<0?"neg":""}">${fmt(drvDue)}</div><div class="n">Negative = drivers owe you</div></div>
   </div>
-  ${contractAlerts()}${vehicleAlerts()}${window.RTA ? RTA.dash() : ""}${window.EMP ? EMP.dashList() : ""}
+  ${window.REM ? REM.dash() : contractAlerts() + vehicleAlerts() + (window.EMP ? EMP.dashList() : "")}${window.RTA ? RTA.dash() : ""}
   ${(()=>{ const by = {}; T.forEach(t => { const b = by[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0)+(t.tx||0); if(t.tr || t.f) b.n.add(t.tr||t.id); });
     const ks = Object.keys(by); if(ks.length < 2 && !Object.keys(S.platforms).length) return "";
     return `<div class="section"><h2>By platform</h2><div class="tbl"><table><thead><tr><th>Platform</th><th class="num">Trips</th><th class="num">Gross fares</th><th class="num">Fee + VAT</th><th class="num">Fee %</th><th>Contract commission</th></tr></thead><tbody>
@@ -1971,13 +1971,14 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=5"></script>
-<script src="books.js?v=15"></script>
+<script src="books.js?v=16"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=4"></script>
 <script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=8"></script>
 <script src="loans.js?v=3"></script>
-<script src="rta.js?v=1"></script>
+<script src="rta.js?v=2"></script>
+<script src="reminders.js?v=1"></script>
 
 </body></html>

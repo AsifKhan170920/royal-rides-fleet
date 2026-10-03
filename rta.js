@@ -166,7 +166,7 @@ function licForm(l){
     <div class="f"><label for="lc_type">Type</label><select id="lc_type" name="type">${opts(LIC_TYPES, l.type)}</select></div>${fld("number", "Licence / permit no.", "text", " required")}${fld("name", "Name / description")}
     <div class="f"><label for="lc_car">Car (vehicle permits)</label><select id="lc_car" name="vehicleId">${listOpts(S.vehicles, v => vName(v.id), l.vehicleId || "", "—")}</select></div>
     <div class="f"><label for="lc_drv">Driver (driver permits)</label><select id="lc_drv" name="driverId">${listOpts(S.drivers, d => d.name || d.id, l.driverId || "", "—")}</select></div>
-    ${fld("issue", "Issue date", "date")}${fld("expiry", "Expiry date", "date", " required")}${fld("fee", "Renewal fee (AED)", "number")}${fld("notes", "Notes")}
+    ${fld("issue", "Issue date", "date")}${fld("expiry", "Expiry date", "date", " required")}${fld("fee", "Renewal fee (AED)", "number")}${fld("remind", "Remind days before (default 30)", "number")}${fld("notes", "Notes")}
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-rtacancel="1">Cancel</button>${l.id ? `<button class="btn danger" type="button" data-rtadel="rtalic" data-id="${esc(l.id)}">Delete</button>` : ""}</div></form></div>`;
 }
 function depForm(d){
@@ -229,9 +229,9 @@ function rtaDash(){
   const lim = addDays(iso(new Date()), 30), lic = Object.values(S.rtalic).filter(l => l.expiry && l.expiry <= lim), unpaid = Object.values(S.fines).filter(f => unpaidAt(f, iso(new Date())));
   const stale = Object.values(S.vehicles).filter(v => v.active !== false && (daysSince(v.finesCheckedAt) == null || daysSince(v.finesCheckedAt) >= checkDays()));
   const parts = [];
-  if(lic.length) parts.push(`RTA licences / permits expiring: ${esc(lic.map(l => (l.name || LIC_TYPES[l.type] || "") + " " + dmyS(l.expiry)).join(", "))}.`);
+  if(lic.length && !window.REM) parts.push(`RTA licences / permits expiring: ${esc(lic.map(l => (l.name || LIC_TYPES[l.type] || "") + " " + dmyS(l.expiry)).join(", "))}.`);
   if(unpaid.length) parts.push(`${unpaid.length} unpaid fine${unpaid.length === 1 ? "" : "s"} (AED ${fmt(sum(unpaid, f => num(f.amount)))}).`);
-  if(stale.length) parts.push(`${stale.length} car${stale.length === 1 ? "" : "s"} not checked for road fines in ${checkDays()} days.`);
+  if(stale.length && !window.REM) parts.push(`${stale.length} car${stale.length === 1 ? "" : "s"} not checked for road fines in ${checkDays()} days.`);
   return parts.length ? `<div class="banner">${parts.join(" ")} <button class="btn sm" data-nav="rta">RTA</button></div>` : "";
 }
 
@@ -264,7 +264,7 @@ document.addEventListener("submit", async ev => {
   const f = ev.target; if(!["fLic", "fDep", "fFine", "fFinePay"].includes(f.id)) return; ev.preventDefault(); if(!S.db) return;
   const d = Object.fromEntries(new FormData(f).entries()), by = (S.user && (S.user.name || S.user.id)) || "";
   if(f.id === "fFinePay"){ await payFines(S.finePay.ids, d.date, d.account); return; }
-  if(f.id === "fLic"){ d.fee = num(d.fee); const id = f.dataset.id || "lc-" + uid(); if(await writeOk(S.db.doc("rtalic/" + id).set({...d, by, at: new Date().toISOString()}))){ S.rtaEdit = null; toast("Saved."); render(); } return; }
+  if(f.id === "fLic"){ d.fee = num(d.fee); d.remind = String(d.remind) === "" ? "" : num(d.remind); const id = f.dataset.id || "lc-" + uid(); if(await writeOk(S.db.doc("rtalic/" + id).set({...d, by, at: new Date().toISOString()}))){ S.rtaEdit = null; toast("Saved."); render(); } return; }
   if(f.id === "fDep"){ d.amount = num(d.amount); if(d.status === "held") d.closedOn = ""; if(d.status !== "held" && !d.closedOn){ toast("Enter the date it was refunded / forfeited."); return; }
     const id = f.dataset.id || "dp-" + uid(); if(await writeOk(S.db.doc("rtadep/" + id).set({...d, by, at: new Date().toISOString()}))){ S.rtaEdit = null; toast("Deposit saved."); render(); } return; }
   // fines
