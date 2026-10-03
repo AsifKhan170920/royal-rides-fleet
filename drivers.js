@@ -233,11 +233,48 @@ function salaryRows(M){
     L(`Difference – ${M.inHand == null ? "still to be accounted for" : Math.abs(M.diff) < 0.005 ? "fully accounted for" : M.diff > 0 ? "shortage" : "excess"}`, M.diff, "g"));
   return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6]];
 }
+/* Performance targets (per month): the general targets in Settings apply to every driver, unless the driver
+   has his own targets (driver form → "Own targets"). Trips, days and km are pro-rated to the period
+   (a full month counts as 1); completion % is not. */
+function driverTargets(id){
+  const d = S.drivers[id] || {}, own = d.ownTargets === true || d.ownTargets === "true";
+  const src = own ? {trips: d.tgTrips, days: d.tgDays, km: d.tgKm, comp: d.tgCompletion}
+    : {trips: setting("tgTrips", 300), days: setting("tgDays", 25), km: setting("tgKm", 3000), comp: setting("tgCompletion", 80)};
+  let f = 0; for(let day = S.from; day <= S.to; day = addDays(day, 1)) f += 1 / dim(day);
+  const t = v => num(v) ? num(v) * f : null;
+  return {own, f, trips: t(src.trips), days: t(src.days), km: t(src.km), comp: num(src.comp) || null};
+}
+function targetRows(id, x, completion){
+  const T = driverTargets(id), rows = [];
+  const add = (label, target, actual, unit, round) => { if(target == null) return; const tv = round ? Math.round(target) : r2(target); rows.push({label, target: tv, actual, unit, pct: tv ? Math.round(100 * actual / tv) : 0, met: actual >= tv - 0.0001}); };
+  add("Trips", T.trips, x.n || 0, "", true); add("Days worked", T.days, x.daysWorked || 0, "", true); add("Distance", T.km, r2(x.km || 0), " km", true);
+  if(T.comp != null && completion != null) add("Completion", T.comp, completion, "%", true);
+  return {T, rows};
+}
+function targetTable(id, x, completion, print){
+  const {T, rows} = targetRows(id, x, completion); if(!rows.length) return "";
+  const met = rows.filter(r => r.met).length, f = v => typeof v === "number" ? (Number.isInteger(v) ? v.toLocaleString("en-US") : fmt(v)) : v;
+  const note = `${T.own ? "Driver's own targets" : "General targets"}${Math.abs(T.f - 1) > 0.01 ? ` · pro-rated to ${r2(T.f)} month` : " · monthly"}`;
+  if(print) return `<table class="tg"><tr class="sec"><th colspan="5">Targets – ${met} of ${rows.length} met <span style="font-weight:400">(${note})</span></th></tr><tr><th>Measure</th><th>Target</th><th>Actual</th><th>Achieved</th><th>Status</th></tr>
+    ${rows.map(r => `<tr><td>${r.label}</td><td class="c">${f(r.target)}${r.unit}</td><td class="c">${f(r.actual)}${r.unit}</td><td class="c">${r.pct}%</td><td class="c ${r.met ? "ok" : "no"}">${r.met ? "Met" : "Not met"}</td></tr>`).join("")}</table>`;
+  return `<div class="tbl" style="margin-top:6px"><table><thead><tr><th>Target <span class="small muted" style="text-transform:none;letter-spacing:0">(${note})</span></th><th class="num">Target</th><th class="num">Actual</th><th class="num">Achieved</th><th>${met} of ${rows.length} met</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td>${r.label}</td><td class="num">${f(r.target)}${r.unit}</td><td class="num">${f(r.actual)}${r.unit}</td><td class="num">${r.pct}%</td><td><span class="pill ${r.met ? "good" : "bad"}">${r.met ? "Met" : "Not met"}</span></td></tr>`).join("")}</tbody></table></div>`;
+}
+// "3 of 4" for the Drivers list
+function targetSummary(id, x){
+  const acts = (S.activity || []).filter(a => a.dr === id), comp = acts.length ? Math.round(100 * acts.filter(a => a.st === "completed").length / acts.length) : null;
+  const {rows} = targetRows(id, x || {}, comp); if(!rows.length) return "";
+  const met = rows.filter(r => r.met).length;
+  return `<span class="pill ${met === rows.length ? "good" : met ? "warn" : "bad"}" title="${esc(rows.map(r => r.label + ": " + r.actual + r.unit + " / " + r.target + r.unit).join(" · "))}">${met} of ${rows.length}</span>`;
+}
+window.targetSummary = targetSummary;
 const perfCells = P => [["Trips", P.n], ["Days worked", P.days], ["Distance", fmt(P.km) + " km"], ["Net per day", fmt(P.perDay)], ["Fleet average / day", fmt(P.fleetDay)], ["Net per trip", fmt(P.perTrip)], ["Cash trips", P.cashPct + "%"],
   ...(P.completion != null ? [["Completion", P.completion + "%"], ["Cancelled", P.cancelled]] : []), ["Rank", P.rank ? P.rank + " of " + P.of : "—"]];
 function salaryHtml(M, print, locked){
   const cells = perfCells(M.perf);
-  const perf = `<h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>`;
+  const perfT = targetTable(M.id, M.x, M.perf.completion, false);
+  const perf0 = `<h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>`;
+  const perf = perf0 + perfT;
   const forms = {
     "4": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penAmt" placeholder="AED" style="width:100px" aria-label="Deduction amount (AED)"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct from salary</button></div>`,
     "5": recovTbl(M.id, locked),
@@ -259,6 +296,7 @@ const SAL_CSS = `.sp{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;paddin
 .sp tr.sec th{background:#16213a;color:#fff;text-align:left;font-size:8.5pt;font-weight:600;letter-spacing:.03em}
 .sp td.n{text-align:right;white-space:nowrap;width:26%;font-variant-numeric:tabular-nums}
 .sp tr.t td{font-weight:700;background:#f3f4f7}.sp tr.g td{font-weight:700;background:#e4e8f0;border-top:2px solid #16213a}
+.sp .tg th{background:#f3f4f7;color:#444;font-weight:600;font-size:7.5pt;text-align:center}.sp .tg tr.sec th{text-align:left}.sp .tg td.c{text-align:center}.sp .tg td.ok{color:#11703a;font-weight:700}.sp .tg td.no{color:#b3261e;font-weight:700}
 .sp .sub{color:#666;font-size:7.5pt}.sp .neg{color:#111}
 .sp .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:20px;page-break-inside:avoid}
 .sp .sigs .who{font-weight:700;color:#16213a}.sp .sigs .line{border-bottom:1px solid #333;height:40px;margin:4px 0 4px}.sp .sigs .cap{font-size:8pt;color:#555}
@@ -274,6 +312,7 @@ function salaryPrintHtml(M, d, fin){
     <tr><td class="l">Pay terms</td><td>${esc(drvTermTextFull(tm))}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Draft – not finalised"}</td></tr>
     <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
   <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
+  ${targetTable(M.id, M.x, M.perf.completion, true)}
   ${salaryRows(M).map(([n, title, rows]) => `<table><tr class="sec"><th colspan="2">${n}. ${title}</th></tr>${rows.map(r => `<tr${r.kind ? ` class="${r.kind}"` : ""}><td>${r.label}</td><td class="n">${amt(r.v)}</td></tr>`).join("")}</table>`).join("")}
   <div class="sigs"><div><div class="who">For Driver</div><div class="line"></div><div>${esc(d.name || "")}</div><div class="cap">Signature & date</div></div>
     <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
@@ -362,7 +401,8 @@ function dPerf(id){
   trips.forEach(t => { const w = W[weekEnd(t.d)] ||= {n:0, days:new Set(), f:0, net:0, km:0, c:0}; const k = t.tr || t.id; if(!seen.has(k)){ seen.add(k); w.n++; w.km += t.km || 0; } w.days.add(t.d); w.f += t.f || 0; w.net += (t.f||0) - (t.sf||0) - (t.tx||0); w.c += t.c || 0; });
   const cars = {}; (acts.length ? acts.filter(a => a.st === "completed").map(a => ({p:a.p, d:a.d})) : trips.filter(t => t.p).map(t => ({p:t.p, d:t.d}))).forEach(r => { const c = cars[r.p] ||= {n:0, other:0}; c.n++; const own = vehAt(id, r.d), v = Object.values(S.vehicles).find(v => norm(v.plate) === norm(r.p)); if(own && v && v.id !== own) c.other++; });
   const kpi = (l, v, n) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div>${n ? `<div class="n">${n}</div>` : ""}</div>`;
-  return `<div class="kpis">${kpi("Trips", x.n || 0, `${x.daysWorked || 0} days worked`)}${kpi("Net earnings", fmt(x.net), `rank ${rank || "—"} of ${all.length} drivers`)}${kpi("Net per day", fmt(perDay), `fleet average ${fmt(fleetDay)}`)}
+  const tgt = targetTable(id, x, acts.length ? Math.round(100 * done / Math.max(1, acts.length)) : null, false);
+  return `${tgt ? `<h2>Targets</h2>${tgt}` : ""}<div class="kpis" style="margin-top:12px">${kpi("Trips", x.n || 0, `${x.daysWorked || 0} days worked`)}${kpi("Net earnings", fmt(x.net), `rank ${rank || "—"} of ${all.length} drivers`)}${kpi("Net per day", fmt(perDay), `fleet average ${fmt(fleetDay)}`)}
     ${kpi("Net per trip", fmt(x.n ? x.net / x.n : 0), "")}${kpi("Distance", fmt(x.km) + " km", x.km ? `${fmt(x.fare / x.km)} fare per km` : "")}${kpi("Cash share", (x.fare ? Math.round(100 * x.cash / x.fare) : 0) + "%", `AED ${fmt(x.cash)} in cash`)}
     ${acts.length ? kpi("Completion", Math.round(100 * done / Math.max(1, acts.length)) + "%", `${canc} cancelled of ${acts.length} requests`) : ""}</div>
   <div class="grid2"><div><h2>Week by week</h2><div class="tbl"><table><thead><tr><th>Week ending</th><th class="num">Trips</th><th class="num">Days</th><th class="num">Fares</th><th class="num">Net</th><th class="num">Km</th><th class="num">Cash</th></tr></thead><tbody>

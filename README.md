@@ -116,3 +116,10 @@ Drivers → driver → Salary shows one statement in sections. The same statemen
 6. **Cash reconciliation**: total receivable, less platform payments, other bookings received by the company, machine payments, cash handed over and cash in hand counted. The difference shows a shortage or excess.
 
 The driver's **Transactions**: when a salary period is finalised, it adds "salary entitled" (credit) and, for the same period, the cash collected from riders and from direct bookings (debit) and the card payments on the company machine (credit). Payments and receipts are added as they happen.
+
+## Driver performance targets
+
+- **General targets** (Settings, per month, all drivers): trips (default 300), days worked (25), distance (3,000 km) and completion (80%).
+- **Own targets** (driver form): with "Own targets" on, the general targets don't apply to that driver. A blank box means no target for that measure.
+- Trips, days and km are pro-rated to the selected period (a full month counts as 1); completion is not.
+- Target against actual, with achieved % and met / not met, is shown on the driver's Performance tab, in section 1 of the salary statement (screen and PDF), and as "x of y" in the Drivers list.

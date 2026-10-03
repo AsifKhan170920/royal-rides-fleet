@@ -1002,9 +1002,9 @@ function vDrivers(){
   if(S.drvView && S.drivers[S.drvView] && window.driverDetail) return (e ? driverForm(e.id, d) : "") + driverDetail(S.drvView);
   return `${e ? driverForm(e.id, d) : ""}
   <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div>
-  ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th></th></tr></thead><tbody>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th>Targets met</th><th></th></tr></thead><tbody>
   ${list.map(x=>{ const c = C.D[x.id] || {}; const tl = termList(x, DRV_TERMS), cur = termAt(tl, iso(new Date())); const terms = !(cur && cur.payModel) ? `<span class="pill warn">Terms needed</span>` : esc(drvTermText(cur)) + (tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : "");
-    return `<tr><td><button class="btn sm ghost" data-drvview="${esc(x.id)}" style="padding:2px 6px"><b>${esc(x.name)}</b></button> ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${(() => { const today = iso(new Date()), vid = vehAt(x.id, today), m = machineAt(x.id, today); return (vid ? esc(vName(vid)) : '<span class="muted">—</span>') + (m ? `<div class="small muted">Machine ${esc(m.name || m.tid)}</div>` : ""); })()}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
+    return `<tr><td><button class="btn sm ghost" data-drvview="${esc(x.id)}" style="padding:2px 6px"><b>${esc(x.name)}</b></button> ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${(() => { const today = iso(new Date()), vid = vehAt(x.id, today), m = machineAt(x.id, today); return (vid ? esc(vName(vid)) : '<span class="muted">—</span>') + (m ? `<div class="small muted">Machine ${esc(m.name || m.tid)}</div>` : ""); })()}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td>${window.targetSummary ? targetSummary(x.id, C.D[x.id]) : ""}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No drivers yet</b>Add a driver, or import an Uber report and drivers are created from it.</div>`}</div>`;
 }
 function driverForm(id, d0){
@@ -1031,6 +1031,12 @@ function driverForm(id, d0){
     <div class="f"><label for="dsal">Monthly salary (AED)</label><input id="dsal" name="salary" type="number" step="0.01" value="${esc(d.salary ?? "")}"></div>
     <div class="f"><label for="dtf">Terms effective from</label><input id="dtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
     <div class="f"><label for="dtn">Reason for change (optional)</label><input id="dtn" name="termNote" placeholder="e.g. new agreement, promotion"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Performance targets (per month)</b> <span class="small muted">– with “Own targets” on, the general targets in Settings don't apply to this driver; a blank box means no target for it.</span></div>
+    <div class="f"><label for="dtgo">Targets</label><select id="dtgo" name="ownTargets">${opts({false:"General targets (Settings)", true:"Own targets"}, String(d.ownTargets === true || d.ownTargets === "true"))}</select></div>
+    <div class="f"><label for="dtgt">Trips</label><input id="dtgt" name="tgTrips" type="number" step="1" value="${esc(d.tgTrips ?? "")}"></div>
+    <div class="f"><label for="dtgd">Days worked</label><input id="dtgd" name="tgDays" type="number" step="1" value="${esc(d.tgDays ?? "")}"></div>
+    <div class="f"><label for="dtgk">Distance (km)</label><input id="dtgk" name="tgKm" type="number" step="1" value="${esc(d.tgKm ?? "")}"></div>
+    <div class="f"><label for="dtgc">Completion (%)</label><input id="dtgc" name="tgCompletion" type="number" step="1" value="${esc(d.tgCompletion ?? "")}"></div>
     <div class="f"><label for="dact">Status</label><select id="dact" name="active">${opts({true:"Active", false:"Inactive"}, String(d.active !== false))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save driver</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="drivers" data-id="${esc(id)}">Delete</button>`:""}</div>
   </form>${termHistory("drivers", id, d0, DRV_TERMS, drvTermText)}</div>`;
@@ -1638,6 +1644,11 @@ function vSettings(){
     <div class="f"><label for="ssn">Signatory name</label><input id="ssn" name="signatory" value="${esc(s.signatory)}"></div>
     <div class="f"><label for="sst">Signatory title</label><input id="sst" name="signatoryTitle" value="${esc(s.signatoryTitle)}" placeholder="e.g. Managing Director"></div>
     <div class="f"><label for="sls">Books start on (driver ledgers, bank & cash opening balances)</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
+    <div class="f wide" style="margin-top:6px"><b>Driver performance targets (per month, all drivers)</b> <span class="small muted">– a driver with his own targets uses those instead.</span></div>
+    <div class="f"><label for="stt">Trips</label><input id="stt" name="tgTrips" type="number" step="1" value="${esc(s.tgTrips ?? 300)}"></div>
+    <div class="f"><label for="std">Days worked</label><input id="std" name="tgDays" type="number" step="1" value="${esc(s.tgDays ?? 25)}"></div>
+    <div class="f"><label for="stk">Distance (km)</label><input id="stk" name="tgKm" type="number" step="1" value="${esc(s.tgKm ?? 3000)}"></div>
+    <div class="f"><label for="stc">Completion (%)</label><input id="stc" name="tgCompletion" type="number" step="1" value="${esc(s.tgCompletion ?? 80)}"></div>
     <div class="f"><label for="srd">Remind before visa / EID / document expiry (days)</label><input id="srd" name="remindDays" type="number" step="1" value="${esc(s.remindDays ?? 30)}"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
@@ -1714,7 +1725,7 @@ document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
   const numF = ["commissionPct","rentPerDay","salary","rtaPerDay","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
   numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? (f.id === "fPlatform" && k === "commissionPct" ? "" : 0) : num(fd[k]); });
-  ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
+  ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver","ownTargets"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
   if(!S.db) return;
   if(f.id === "fDriver" || f.id === "fVehicle" || f.id === "fInvestor" || f.id === "fPlatform" || f.id === "fTerminal"){
     const col = {fDriver:"drivers", fVehicle:"vehicles", fInvestor:"investors", fPlatform:"platforms", fTerminal:"terminals"}[f.id];
@@ -1850,7 +1861,7 @@ boot();
 </script>
 <script src="docs.js?v=3"></script>
 <script src="books.js?v=8"></script>
-<script src="drivers.js?v=14"></script>
+<script src="drivers.js?v=16"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=2"></script>
 
