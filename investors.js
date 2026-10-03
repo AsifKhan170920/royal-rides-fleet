@@ -117,16 +117,20 @@ async function invFinalise(id){
     cars: M.cars.map(c => ({id: c.id, n: c.n, op: c.op, mgmt: c.mgmt, share: c.share, emi: c.emi, terms: c.terms}))};
   if(await writeOk(S.db.doc("invpay/" + id + "_" + S.from).set(rec))) toast(`Finalised: net profit AED ${fmt(M.net)} credited to ${iName(id)}.`);
 }
-async function printInvPL(id){
-  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+const INV_PCSS = () => `${SAL_CSS}${VPL_CSS}.sp .vbox{border:1px solid #c5c9d2;padding:4px 6px 8px;margin-top:10px}.sp .vst{font-size:10pt}.sp .vst td{border:0}`;
+function invPrintHtml(id){
   const M = invModel(id), s = S.settings, co = s.company || "Royal Rides Limousine LLC", x = S.investors[id] || {}, addr = [s.address, s.trn ? "TRN " + s.trn : ""].filter(Boolean).join(" · "), fin = invFin(id);
   const html = `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>INVESTOR PROFIT & LOSS</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
     <table class="info"><tr><td class="l">Investor</td><td><b>${esc(x.name || "")}</b></td><td class="l">Phone</td><td>${esc(x.phone || "—")}</td></tr><tr><td class="l">Cars</td><td>${esc(M.cars.map(c => c.name).join(", ") || "—")}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Not finalised"}</td></tr></table>
     <table class="perf"><tr><th>Car</th><th>Trips</th><th>Net revenue</th><th>Driver cost</th><th>Car expenses</th><th>Operating profit</th><th>Mgmt fee</th><th>Share</th></tr>${M.cars.map(c => `<tr><td>${esc(c.name)}</td><td>${c.n}</td><td>${fmt(c.rev)}</td><td>${fmt(-c.drv)}</td><td>${fmt(-c.exp)}</td><td>${fmt(c.op)}</td><td>${fmt(c.mgmt)}</td><td><b>${fmt(c.share)}</b></td></tr>`).join("")}</table>
     <div class="vbox">${stmtTable(invStmt(M))}</div>
     <div class="sigs"><div><div class="who">Investor</div><div class="line"></div><div>${esc(x.name || "")}</div><div class="cap">Signature & date</div></div><div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div></div>`;
-  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
-  box.innerHTML = `<style>${SAL_CSS}${VPL_CSS}.sp .vbox{border:1px solid #c5c9d2;padding:4px 6px 8px;margin-top:10px}.sp .vst{font-size:10pt}.sp .vst td{border:0}</style>${html}`; document.body.appendChild(box);
+  return html;
+}
+async function printInvPL(id){
+  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+  const x = S.investors[id] || {}, box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
+  box.innerHTML = `<style>${INV_PCSS()}</style>${invPrintHtml(id)}`; document.body.appendChild(box);
   const name = `Investor_profit_${norm(x.name || id)}_${S.from}_${S.to}.pdf`;
   try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".sp")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
@@ -186,4 +190,80 @@ document.addEventListener("click", async ev => {
   if(t.dataset.payinv || t.dataset.recvinv){ const k = t.dataset.payinv ? "payment" : "receipt", id = t.dataset.payinv || t.dataset.recvinv; S.view = k === "payment" ? "payments" : "receipts"; S.invView = ""; if(window.BOOKS) BOOKS.newInvestorDoc(k, id, num(t.dataset.amt)); render(); window.scrollTo(0,0); return; }
 });
 document.addEventListener("change", ev => { if(ev.target.id === "igrp"){ S.invGroup = ev.target.value; render(); } });
+/* ---------- bulk: finalise every investor's profit for the period; download the finalised statements ---------- */
+S.invBulk = S.invBulk || null;
+function invBulkRows(){
+  return Object.values(S.investors).map(x => { const M = invModel(x.id), fin = invFin(x.id), over = !fin && invOverlap(x.id);
+    return {id: x.id, name: x.name || x.id, cars: M.cars.map(c => c.name).join(", "), share: M.share, emi: M.emi, net: M.net, fin: fin || over,
+      status: fin ? "done" : over ? "overlap" : !M.cars.length ? "empty" : "ready"}; }).sort((a, b) => a.name.localeCompare(b.name));
+}
+const IB_STATUS = {ready: ["warn", "Ready"], done: ["good", "Finalised"], overlap: ["good", "Part finalised"], empty: ["", "No cars"]};
+const invBulkRecs = () => { const b = S.invBulk || {}; return Object.values(S.invpay).filter(p => p.at && p.at.slice(0,10) >= b.from && p.at.slice(0,10) <= b.to).sort((a, c) => iName(a.investorId).localeCompare(iName(c.investorId)) || a.from.localeCompare(c.from)); };
+function invBulkPanel(){
+  const b = S.invBulk; if(!b) return "";
+  const off = new Set(b.off || []);
+  if(b.mode === "fin"){
+    const rows = invBulkRows(), ready = rows.filter(r => r.status === "ready"), on = ready.filter(r => !off.has(r.id));
+    return `<div class="section"><div class="head"><div><h2>Bulk profit finalisation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">Change the period at the top to finalise another period. Each investor's net profit is credited to his Transactions, as from his own page.</p></div><button class="btn ghost" data-ibclose="1">Close</button></div>
+    <div class="tbl"><table><thead><tr><th><input type="checkbox" data-iball="1" ${on.length && on.length === ready.length ? "checked" : ""} aria-label="All ready"></th><th>Investor</th><th>Cars</th><th class="num">Share of profit</th><th class="num">Bank instalments</th><th class="num">Net profit</th><th>Status</th></tr></thead><tbody>
+    ${rows.map(r => { const [cls, lbl] = IB_STATUS[r.status]; return `<tr><td>${r.status === "ready" ? `<input type="checkbox" data-ibone="${esc(r.id)}" ${off.has(r.id) ? "" : "checked"} aria-label="Finalise">` : ""}</td><td><button class="btn sm ghost" data-invview="${esc(r.id)}" style="padding:2px 6px">${esc(r.name)}</button></td><td class="small" style="white-space:normal">${esc(r.cars || "—")}</td><td class="num">${fmt(r.share)}</td><td class="num">${r.emi ? fmt(-r.emi) : ""}</td><td class="num"><b>${aed(r.net)}</b></td><td><span class="pill ${cls}">${lbl}</span>${r.fin ? ` <span class="small muted">${esc(dmyS(r.fin.from))}–${esc(dmyS(r.fin.to))}</span>` : ""}</td></tr>`; }).join("") || `<tr><td colspan="7" class="muted">No investors yet.</td></tr>`}
+    </tbody><tfoot><tr><td></td><td colspan="4">${on.length} of ${ready.length} ready investors selected</td><td class="num"><b>${fmt(sum(on, r => r.net))}</b></td><td></td></tr></tfoot></table></div>
+    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-ibgo="1" ${on.length && S.canWrite ? "" : "disabled"}>Finalise ${on.length} investor${on.length === 1 ? "" : "s"} for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</button>${dlBtn("invbulkfin")}</div>
+    <p class="small muted" style="margin-top:6px">A finalised profit can be reopened from the investor's page (Profit & share or Transactions).</p></div>`;
+  }
+  const recs = invBulkRecs(), on = recs.filter(p => !off.has(p.id));
+  return `<div class="section"><div class="head"><div><h2>Bulk profit & loss statements</h2><p class="sub">Profits finalised between the dates below – one PDF with each investor's statement on its own page, ready to print and sign.</p></div><button class="btn ghost" data-ibclose="1">Close</button></div>
+  <div class="form" style="grid-template-columns:repeat(auto-fit,minmax(160px,220px))"><div class="f"><label for="ibF">Finalised from</label><input id="ibF" type="date" value="${esc(b.from)}"></div><div class="f"><label for="ibT">Finalised to</label><input id="ibT" type="date" value="${esc(b.to)}"></div></div>
+  ${recs.length ? `<div class="tbl" style="margin-top:10px"><table><thead><tr><th><input type="checkbox" data-iball="1" ${on.length === recs.length ? "checked" : ""} aria-label="All"></th><th>Investor</th><th>Period</th><th class="num">Share of profit</th><th class="num">Bank instalments</th><th class="num">Net profit</th><th>Finalised</th></tr></thead><tbody>
+    ${recs.map(p => `<tr><td><input type="checkbox" data-ibone="${esc(p.id)}" ${off.has(p.id) ? "" : "checked"} aria-label="Include"></td><td>${esc(iName(p.investorId))}</td><td>${esc(dmyS(p.from))} – ${esc(dmyS(p.to))}</td><td class="num">${fmt(num(p.share))}</td><td class="num">${num(p.emi) ? fmt(-num(p.emi)) : ""}</td><td class="num"><b>${aed(num(p.net))}</b></td><td class="small muted">${esc(dmyS(p.at.slice(0,10)))}${p.by ? " · " + esc(p.by) : ""}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td></td><td colspan="4">${on.length} of ${recs.length} selected</td><td class="num">${fmt(sum(on, p => num(p.net)))}</td><td></td></tr></tfoot></table></div>
+    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-ibpdf="1" ${on.length ? "" : "disabled"}>Download statements PDF (${on.length})</button>${dlBtn("invbulkpl")}</div>`
+  : `<p class="sub" style="margin-top:10px">No investor profit was finalised between these dates.</p>`}</div>`;
+}
+DL.invbulkfin = () => [`investor_profits_${S.from}_${S.to}.csv`, [["Investor","Cars","Share of profit","Bank instalments","Net profit","Status"], ...invBulkRows().map(r => [r.name, r.cars, r.share, -r.emi, r.net, IB_STATUS[r.status][1]])]];
+DL.invbulkpl = () => { const off = new Set((S.invBulk || {}).off || []);
+  return [`investor_profits_finalised_${S.invBulk.from}_${S.invBulk.to}.csv`, [["Investor","Period from","Period to","Share of profit","Bank instalments","Net profit","Finalised on","Finalised by"],
+    ...invBulkRecs().filter(p => !off.has(p.id)).map(p => [iName(p.investorId), p.from, p.to, r2(num(p.share)), -r2(num(p.emi)), r2(num(p.net)), p.at.slice(0,10), p.by || ""])]]; };
+async function invBulkFinalise(){
+  const off = new Set(S.invBulk.off || []), list = invBulkRows().filter(r => r.status === "ready" && !off.has(r.id)); let n = 0;
+  for(const r of list){ toast(`Finalising ${++n} of ${list.length} – ${r.name}…`); await invFinalise(r.id); }
+  toast(`${n} investor profit${n === 1 ? "" : "s"} finalised for ${dmyS(S.from)} – ${dmyS(S.to)}.`); render();
+}
+async function invBulkPdf(){
+  const off = new Set(S.invBulk.off || []), recs = invBulkRecs().filter(p => !off.has(p.id)); if(!recs.length) return;
+  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+  try{ if(!window.jspdf) await loadJs("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"); }catch(e){ toast("The PDF tool could not load – check the internet connection."); return; }
+  const keep = {from: S.from, to: S.to, preset: $("#preset").value}, doc = new window.jspdf.jsPDF({unit: "mm", format: "a4", compress: true}); let pages = 0;
+  const groups = {}; recs.forEach(p => (groups[p.from + "|" + p.to] ||= []).push(p));
+  try{
+    for(const [key, list] of Object.entries(groups)){
+      const [a, b] = key.split("|"); S.from = a; S.to = b; await loadPeriod();   // each statement for its own period
+      for(const p of list){
+        toast(`Making statement ${pages + 1} of ${recs.length} – ${iName(p.investorId)}…`);
+        const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
+        box.innerHTML = `<style>${INV_PCSS()}</style>${invPrintHtml(p.investorId)}`; document.body.appendChild(box);
+        const canvas = await html2pdf().set({html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}}).from(box.querySelector(".sp")).toCanvas().get("canvas");
+        box.remove();
+        const h = Math.min(297, 210 * canvas.height / canvas.width), w = h < 297 ? 210 : 297 * canvas.width / canvas.height;
+        if(pages) doc.addPage(); doc.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (210 - w) / 2, 0, w, h); pages++;
+      }
+    }
+    doc.save(`Investor_PL_statements_finalised_${S.invBulk.from}_${S.invBulk.to}.pdf`); toast(`Downloaded ${pages} investor statements.`);
+  }catch(e){ console.warn(e); toast("Could not make the PDF. Try again."); }
+  S.from = keep.from; S.to = keep.to; $("#pFrom").value = keep.from; $("#pTo").value = keep.to; $("#preset").value = keep.preset; await loadPeriod(); render();
+}
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest("button"); if(!t) return;
+  if(t.dataset.ibopen){ const today = iso(new Date()); S.invBulk = t.dataset.ibopen === "fin" ? {mode: "fin", off: []} : {mode: "pdf", from: today.slice(0,8) + "01", to: today, off: []}; S.invView = ""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.ibclose){ S.invBulk = null; render(); return; }
+  if(t.dataset.ibgo){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to finalise"; return; } t.disabled = true; t.textContent = "Finalising…"; await invBulkFinalise(); return; }
+  if(t.dataset.ibpdf){ t.disabled = true; t.textContent = "Making the PDF…"; await invBulkPdf(); return; }
+});
+document.addEventListener("change", ev => {
+  const t = ev.target, b = S.invBulk; if(!b) return;
+  if(t.id === "ibF" || t.id === "ibT"){ b[t.id === "ibF" ? "from" : "to"] = t.value; b.off = []; render(); return; }
+  if(t.dataset && t.dataset.ibone){ const off = new Set(b.off || []); t.checked ? off.delete(t.dataset.ibone) : off.add(t.dataset.ibone); b.off = [...off]; render(); return; }
+  if(t.dataset && t.dataset.iball){ b.off = t.checked ? [] : b.mode === "fin" ? invBulkRows().filter(r => r.status === "ready").map(r => r.id) : invBulkRecs().map(p => p.id); render(); }
+});
+window.invBulkPanel = invBulkPanel;
 window.investorDetail = investorDetail; window.vehTripsTab = vehTripsTab; window.tripRows = tripRows;

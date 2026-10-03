@@ -1219,8 +1219,8 @@ function vInvestors(){
   const list = Object.values(S.investors).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const e = S.edit && S.edit.kind === "investor" ? S.edit : null; const x = e ? (S.investors[e.id]||{}) : null;
   if(S.invView && S.investors[S.invView] && window.investorDetail && !(e && !e.id)){ const form = e ? vInvestorForm(e, x) : ""; return form + investorDetail(S.invView); }
-  return `${e ? vInvestorForm(e, x) : ""}
-  <div class="section"><div class="head"><div><h2>Investors</h2><p class="sub">Terms are set per car on the Vehicles page, so one investor can hold cars on different terms.</p></div><button class="btn primary" data-edit="investor" data-id="">Add investor</button></div>
+  return `${e ? vInvestorForm(e, x) : ""}${window.invBulkPanel ? invBulkPanel() : ""}
+  <div class="section"><div class="head"><div><h2>Investors</h2><p class="sub">Terms are set per car on the Vehicles page, so one investor can hold cars on different terms.</p></div><div class="row"><button class="btn" data-ibopen="fin">Bulk profit finalisation</button><button class="btn" data-ibopen="pdf">Bulk P&L statements</button><button class="btn primary" data-edit="investor" data-id="">Add investor</button></div></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td><button class="btn sm ghost" data-invview="${esc(i.id)}" style="padding:2px 6px"><b>${esc(i.name)}</b></button></td><td style="white-space:normal">${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate) + (window.FIN && FIN.of(v) ? ` <span class="small muted">(${esc(FIN.text(v))})</span>` : "")).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
 }
 
@@ -1970,7 +1970,7 @@ boot();
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
-<script src="investors.js?v=2"></script>
+<script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=7"></script>
 
 </body></html>
