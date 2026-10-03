@@ -17,7 +17,7 @@ function driverDetail(id){
   S.ledgerDriver = id;
   const body = tab === "trips" ? dTrips(id) : tab === "tx" ? dTx(id) : tab === "salary" ? dSalary(id) : tab === "perf" ? dPerf(id) : dAccts(id);
   return `<div class="section"><div class="head"><div><h2>${esc(d.name)}${d.code ? ` <span class="mono small muted">${esc(d.code)}</span>` : ""}</h2>
-    <p class="sub">${esc(drvTermText(tm))} · Car ${car ? esc(vName(car)) : "—"} · Machine ${m ? esc(m.name || m.tid) : "—"}${d.phone ? " · " + esc(d.phone) : ""}</p></div>
+    <p class="sub">${esc(drvTermTextFull(tm))} · Car ${car ? esc(vName(car)) : "—"} · Machine ${m ? esc(m.name || m.tid) : "—"}${d.phone ? " · " + esc(d.phone) : ""}</p></div>
     <div class="row"><button class="btn ghost" data-drvview="">← All drivers</button><button class="btn" data-edit="driver" data-id="${esc(id)}">Edit driver</button><button class="btn" data-offerfor="${esc(id)}">Offer letter</button></div></div>
   ${tabBtns("data-drvtab", tab, DRV_TABS)}${body}</div>`;
 }
@@ -131,20 +131,62 @@ function dSalary(id){
   // late trips: settled by this period unless it is already finalised (then they were settled by it, or wait for the next)
   const late = same ? [] : (lateTrips(id) || []), lateEff = r2(sum(late, tripEffect)), sal = r2(salaryOf(x) + lateEff);
   const payable = T ? r2(T.before + sal + (x.balance - salaryOf(x))) : null;
+  /* The computation, laid out as a driver ledger: income by platform, the company's charges, the driver's
+     salary + commission, tips, deductions, the cash he collected, and what is due. Below it: fare receipts. */
   const ln = (label, v, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><td style="white-space:normal">${label}</td><td class="num">${v == null ? "" : aed(v)}</td></tr>`;
+  const head = t => `<tr><td colspan="2" style="background:var(--bg)"><b>${t}</b></td></tr>`;
+  const mine = S.trips.filter(t => t.dr === id), byPl = {};
+  mine.forEach(t => { const b = byPl[plOf(t)] ||= {f:0, fee:0, tp:0, rf:0, c:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0) + (t.tx||0); b.tp += t.tp||0; b.rf += t.rf||0; b.c += t.c||0; if(t.tr || t.f) b.n.add(t.tr || t.id); });
+  const income = r2(x.net + num(x.other)), tm = termAt(termList(S.drivers[id] || {}, DRV_TERMS), S.to) || {};
+  const rentAmt = num(x.rentAmt), rta = num(x.rta), coShare = r2(income - x.ent - rta - rentAmt);
+  const recov = S.entries.filter(e => e.driverId === id && e.type === "expense" && e.recover), byCat = {};
+  recov.forEach(e => byCat[e.category || "5310"] = (byCat[e.category || "5310"] || 0) + num(e.amount) + num(e.vat));
+  const items = Object.values(S.ditems).filter(it => it.driverId === id).map(it => ({it, amt: sum(itemPlan(it).inst.filter(q => q.date >= S.from && q.date <= S.to), q => q.amt) + sum((it.repayments || []).filter(r => r.paidTo === "2100" && r.date >= S.from && r.date <= S.to), r => num(r.amount))})).filter(o => o.amt);
+  // cash the driver took for direct bookings belongs in the cash settlement; costs he paid from his cash are a credit
+  const viaInc = sum(S.entries.filter(e => e.driverId === id && e.type === "income" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat)), viaExp = r2(x.viaDriver + viaInc);
+  const earned = r2(x.ent + x.tipsDue - x.deduct - x.adv - x.inst + viaExp);
   const rows = [
-    ln(`Trips: ${x.n} · days worked: ${x.daysWorked || 0}`, null),
-    ln("Fares", x.fare), ln("Platform fee", -x.fee), ln("VAT on platform fee", -x.tax), ln("<b>Net earnings</b>", x.net),
-    ln(`<b>Driver's share</b> – ${esc(x.termsText || "no terms")}${x.rentDays ? ` (rent for ${x.rentDays} days)` : ""}`, x.ent),
-    x.tipsDue ? ln("Tips", x.tipsDue) : "", ln("Cash collected from riders", -x.cash), x.card ? ln("Card payments on the company machine", x.card) : "",
-    x.deduct ? ln("Fines / tolls charged to the driver", -x.deduct) : "", x.adv ? ln("Advances (deducted in full)", -x.adv) : "",
-    x.inst ? ln("Loan / advance / visa instalments", -x.inst) : "", x.viaDriver ? ln(x.viaDriver > 0 ? "Company costs paid from the driver's cash" : "Company money collected by the driver", x.viaDriver) : "",
+    head(`Income <span class="small muted">(net of platform fee & VAT) · ${x.n} trips · ${x.daysWorked || 0} days</span>`),
+    ...Object.entries(byPl).sort((p, q) => q[1].f - p[1].f).map(([k, b]) => ln(`${esc(pName(k))} <span class="small muted">${b.n.size} trips · fares ${fmt(b.f)} − fee & VAT ${fmt(b.fee)}</span>`, b.f - b.fee)),
+    num(x.other) ? ln("Other bookings (direct)", x.other) : "",
+    ln("<b>Total income</b>", income, "tot"),
+    head("Company charges"),
+    rentAmt ? ln(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -rentAmt) : "",
+    rta ? ln(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -rta) : "",
+    Math.abs(coShare) > 0.004 ? ln(tm.payModel === "salary" ? "Company share (driver on fixed salary)" : `Company share (${r2(100 - num(tm.commissionPct))}%)`, -coShare) : "",
+    ln(`<b>Driver salary + commission</b> – ${esc(x.termsText || "no terms")}`, x.ent, "tot"),
+    x.tipsDue ? ln("Tips from platforms", x.tipsDue) : "",
+    (recov.length || items.length || x.adv || viaExp) ? head("Deductions") : "",
+    ...Object.entries(byCat).map(([c, v]) => ln(esc(EXP_CATS[c] || "Expense") + " (charged to the driver)", -v)),
+    ...items.map(o => ln(`${esc(ITEM_KINDS[o.it.kind] || "Recovery")}${o.it.desc ? " – " + esc(o.it.desc) : ""} instalment`, -o.amt)),
+    x.adv ? ln("Advances (deducted in full)", -x.adv) : "",
+    viaExp ? ln("Company costs paid from the driver's cash", viaExp) : "",
+    ln("<b>Net salary earned</b>", earned, "tot"),
+    head("Cash settlement"),
+    ln("Cash collected from riders (with the driver)", -x.cash),
+    viaInc ? ln("Cash from direct bookings (with the driver)", -viaInc) : "",
+    x.card ? ln("Card payments on the company machine", x.card) : "",
     late.length ? ln(`Unsettled trips from earlier periods (${late.length}) – see below`, lateEff) : "",
-    ln("<b>Salary for the period</b> (before payments)", sal, "tot"),
+    ln("<b>Salary due for the period</b>", sal, "tot"),
     (x.books || x.paid || x.recv) ? ln("Paid to / received from the driver in the period", r2(x.balance - salaryOf(x))) : "",
-    ln("<b>Balance for the period</b>", r2(x.balance + lateEff), "tot"),
     T ? ln("Balance brought forward (finalised salaries less payments)", T.before) : "",
     T ? ln(`<b>${payable >= 0 ? "Payable to the driver" : "Driver owes the company"} at ${esc(dmyS(S.to))}</b>`, payable, "tot") : ""].join("");
+  // fare receipts: everything riders paid for his trips, and where that money is now
+  const inc = sum(S.entries.filter(e => e.driverId === id && e.type === "income" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat));
+  const handed = x.recv + sum(S.entries.filter(e => e.driverId === id && e.type === "expense" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat));
+  const otherGross = sum(S.entries.filter(e => e.driverId === id && e.type === "income"), e => num(e.amount) + num(e.vat));
+  const receivable = r2(x.fare + x.tip + x.ref + otherGross), app = r2(x.fare + x.tip + x.ref - x.cash), otherNonCash = r2(otherGross - inc);
+  const withDriver = r2(x.cash + inc - x.card), diff = r2(withDriver - handed);
+  const recon = `<h2 style="margin-top:16px">Fare receipts reconciliation</h2><p class="sub">What riders paid for this driver's trips (and his direct bookings), and where the money is.</p>
+    <div class="tbl"><table><tbody>
+    ${ln("<b>Total receivable</b> – fares, tips & tolls of his trips + other bookings", receivable, "tot")}
+    ${ln("Received through platform payouts (paid in the app)", -app)}
+    ${otherNonCash > 0.004 ? ln("Other bookings received by the company (bank / card)", -otherNonCash) : ""}
+    ${ln("Machine payments (card on the company machine)", -x.card)}
+    ${ln("<b>Cash with the driver</b>", withDriver, "tot")}
+    ${ln("Handed over / spent for the company", -handed)}
+    ${ln(`<b>Difference</b> – ${diff > 0.004 ? "cash still with the driver" : diff < -0.004 ? "more handed over / card than cash collected" : "fully accounted for"}`, diff, "tot")}
+    </tbody></table></div><p class="small muted" style="margin-top:6px">Platform payouts come to the company as one transfer for all drivers – see Collections & cash for what each platform has paid. The cash with the driver is deducted in the salary above; what he hands over is credited to his account.</p>`;
   const lateTbl = late.length ? `<h2 style="margin-top:16px">Unsettled trips from earlier periods</h2><p class="sub">These trips are dated in a period that was already finalised, but they were not part of it (they arrived in a later report). They are added to this salary and settled when you finalise.</p>
     <div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Trip</th><th class="num">Fare</th><th class="num">Net</th><th class="num">Tips</th><th class="num">Cash</th><th class="num">Effect on salary</th></tr></thead><tbody>
     ${late.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td><td class="mono small">${esc(String(t.tr || t.id).slice(0,13))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.f||0) - (t.sf||0) - (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.c)}</td><td class="num">${aed(tripEffect(t))}</td></tr>`).join("")}
@@ -172,7 +214,7 @@ function dSalary(id){
   }
   const pay = T && same && payable > 0.005 ? `<button class="btn" data-paysalary="${esc(id)}" data-amt="${r2(payable)}">Pay AED ${fmt(payable)} to the driver</button>` : "";
   return `<div class="grid2"><div><h2>Salary computation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2>
-    <div class="tbl"><table><tbody>${rows}</tbody></table></div>${!T ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}${recovTbl(id, !!same)}</div>
+    <div class="tbl"><table><tbody>${rows}</tbody></table></div>${recon}${!T ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}${recovTbl(id, !!same)}</div>
     <div><h2>Finalise</h2>${fin}<div class="row" style="margin-top:10px">${pay}</div>
     <h2 style="margin-top:16px">Finalised periods</h2>${runs.length ? `<div class="tbl"><table><thead><tr><th>Period</th><th class="num">Trips</th><th class="num">Driver's share</th><th class="num">Salary</th><th class="num">Closing balance</th><th>Finalised</th><th></th></tr></thead><tbody>
     ${runs.map(p => `<tr><td>${esc(dmyS(p.from))} – ${esc(dmyS(p.to))}${p.late && p.late.length ? `<div class="small muted">+ ${p.late.length} earlier trip(s)</div>` : ""}</td><td class="num">${p.n}</td><td class="num">${fmt(p.ent)}</td><td class="num">${aed(p.salary != null ? p.salary : salaryOf(p))}</td><td class="num">${p.closing == null ? "—" : aed(p.closing)}</td><td class="small muted">${esc(p.by || "")}${p.at ? " · " + esc(new Date(p.at).toLocaleDateString("en-GB")) : ""}</td>

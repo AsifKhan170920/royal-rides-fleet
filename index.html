@@ -440,7 +440,7 @@ function vehicleForTrip(t){
 /* Terms change over time. Each driver and car keeps a dated history in rec.terms
    ([{from:"YYYY-MM-DD", ...terms, note, by, at}]); a term applies from its date until the next one.
    Records without a history use their top-level fields as terms that always applied. */
-const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary"];
+const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary","rtaPerDay"];
 const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct"];
 const BEGIN = "2000-01-01";
 function termList(rec, keys, field = "terms"){
@@ -454,6 +454,8 @@ function drvTermText(t){
   if(!t || !t.payModel) return "No terms";
   return t.payModel==="commission" ? num(t.commissionPct)+"% commission" : t.payModel==="rent" ? "Rent "+fmt(num(t.rentPerDay))+"/day"+(t.rentBasis==="calendar"?" (every day)":"")
     : t.payModel==="salary" ? "Salary "+fmt(num(t.salary))+"/mo" : "Salary "+fmt(num(t.salary))+" + "+num(t.commissionPct)+"%";
+}
+function drvTermTextFull(t){ return drvTermText(t) + (t && num(t.rtaPerDay) ? " · RTA fee " + fmt(num(t.rtaPerDay)) + "/day" : "");
 }
 function vehTermText(t){
   if(!t) return "—";
@@ -471,7 +473,7 @@ function compute(){
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
   const tips2drv = setting("tipsToDriver", true);
   const D = {}, V = {}, DT = {};
-  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0, byDay:{}, card:0};
+  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0, byDay:{}, card:0, rentAmt:0, rta:0, rtaDays:0, other:0, otherShare:0};
   const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set(), seg:{}};
   const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0};
   const dTerms = id => DT[id] ||= termList(S.drivers[id] || {}, DRV_TERMS);
@@ -492,14 +494,22 @@ function compute(){
   }
   // card payments on company terminals: credited to the driver holding the terminal that day
   for(const x of S.cardtx || []){ const dr = cardDriver(x); if(!dr) continue; const d = dget(dr); d.card += x.amt; const b = d.byDay[x.d] ||= {share:0, tip:0, cash:0, n:0}; b.card = (b.card || 0) + x.amt; }
+  for(const e of S.entries){
+    if(e.type !== "income" || !e.driverId) continue;
+    const d = dget(e.driverId), tm = termAt(dTerms(e.driverId), e.date) || {}, model = tm.payModel || "commission", a = num(e.amount);
+    const share = (model === "commission" || model === "salary_comm") ? a * num(tm.commissionPct) / 100 : model === "rent" ? a : 0;
+    d.other += a; d.otherShare += share; d.entTrip += share; if(e.date) d.days.add(e.date);
+  }
   Object.keys(S.drivers).forEach(id => dget(id));
   // day-based pay (rent, salary) under the terms of each day; booked to the cars the driver used that day
   for(const d of Object.values(D)){
     const m = S.drivers[d.id] || {}, list = dTerms(d.id); let dayPart = 0;
     for(let day = from; day <= to; day = addDays(day,1)){
       const tm = termAt(list, day) || {}; const model = tm.payModel || "commission"; let x = 0;
-      if(model === "rent"){ if(d.days.has(day) || tm.rentBasis === "calendar"){ x = -num(tm.rentPerDay); d.rentDays++; } }
+      if(model === "rent"){ if(d.days.has(day) || tm.rentBasis === "calendar"){ x = -num(tm.rentPerDay); d.rentDays++; d.rentAmt += num(tm.rentPerDay); } }
       else if(model === "salary" || model === "salary_comm") x = num(tm.salary) / dim(day);
+      // RTA / permit fee for each day worked, in any pay model
+      if(num(tm.rtaPerDay) && d.days.has(day)){ x -= num(tm.rtaPerDay); d.rta += num(tm.rtaPerDay); d.rtaDays++; }
       if(!x) continue;
       dayPart += x; (d.byDay[day] ||= {share:0, tip:0, cash:0, n:0}).share += x;
       const use = d.dayNet[day], tot = use ? Object.values(use).reduce((a,b)=>a+b,0) : 0;
@@ -1004,6 +1014,7 @@ function driverForm(id, d0){
     <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
     <div class="f"><label for="drent">Rent per day (AED)</label><input id="drent" name="rentPerDay" type="number" step="0.01" value="${esc(d.rentPerDay ?? "")}"></div>
     <div class="f"><label for="drb">Rent charged for</label><select id="drb" name="rentBasis">${opts({worked:"Days with trips", calendar:"Every calendar day"}, d.rentBasis||"worked")}</select></div>
+    <div class="f"><label for="drta">RTA / permit fee per day worked (AED)</label><input id="drta" name="rtaPerDay" type="number" step="0.01" value="${esc(d.rtaPerDay ?? "")}"></div>
     <div class="f"><label for="dsal">Monthly salary (AED)</label><input id="dsal" name="salary" type="number" step="0.01" value="${esc(d.salary ?? "")}"></div>
     <div class="f"><label for="dtf">Terms effective from</label><input id="dtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
     <div class="f"><label for="dtn">Reason for change (optional)</label><input id="dtn" name="termNote" placeholder="e.g. new agreement, promotion"></div>
@@ -1688,7 +1699,7 @@ async function saveCsv(name, rows){
 }
 document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
-  const numF = ["commissionPct","rentPerDay","salary","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
+  const numF = ["commissionPct","rentPerDay","salary","rtaPerDay","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
   numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? (f.id === "fPlatform" && k === "commissionPct" ? "" : 0) : num(fd[k]); });
   ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
   if(!S.db) return;
@@ -1826,7 +1837,7 @@ boot();
 </script>
 <script src="docs.js?v=3"></script>
 <script src="books.js?v=7"></script>
-<script src="drivers.js?v=5"></script>
+<script src="drivers.js?v=6"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=2"></script>
 
