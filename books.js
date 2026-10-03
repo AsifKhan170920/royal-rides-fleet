@@ -23,9 +23,12 @@ const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e", "22
 function plGroup(code){
   const n = +code; if(String(code)[0] === "4") return "income";
   if(n === 5900) return "investor";
+  if(n >= 5950 && n < 5970) return "finance";   // interest / profit on bank loans and vehicle finance
   return n >= 5000 && n < 5290 ? "cos" : "admin";
 }
-const PL_GROUPS = {cos:"Cost of sales", admin:"Administrative & general expenses", investor:"Investors' profit share"};
+const PL_GROUPS = {cos:"Cost of sales", admin:"Administrative & general expenses", finance:"Finance costs", investor:"Investors' profit share"};
+// balance sheet: these are non-current; every other asset and liability is current
+const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210"]);
 const VAT_OPTS = {"":"No VAT", "5":"5% VAT"};
 const isInv = k => k === "sale_invoice" || k === "purchase_invoice";
 const lineNet = (k, l) => r2(isInv(k) ? num(l.qty === "" || l.qty == null ? 1 : l.qty) * num(l.price) : num(l.amount));
@@ -409,9 +412,9 @@ function statementsView(){
   // profit & loss for the period at the top
   const L = journal(compute()), mv = {}; L.forEach(l => { mv[l.acct] = (mv[l.acct] || 0) + l.dr - l.cr; });
   const codes = g => Object.keys(mv).filter(c => TYPE_OF(c) !== "Asset" && TYPE_OF(c) !== "Liability" && TYPE_OF(c) !== "Equity" && plGroup(c) === g && r2(mv[c])).sort();
-  const inc = codes("income"), cos = codes("cos"), adm = codes("admin"), invs = codes("investor");
-  const tInc = sum(inc, c => -mv[c]), tCos = sum(cos, c => mv[c]), tAdm = sum(adm, c => mv[c]), tInv = sum(invs, c => mv[c]);
-  const gp = tInc - tCos, op = gp - tAdm, np = op - tInv;
+  const inc = codes("income"), cos = codes("cos"), adm = codes("admin"), fins = codes("finance"), invs = codes("investor");
+  const tInc = sum(inc, c => -mv[c]), tCos = sum(cos, c => mv[c]), tAdm = sum(adm, c => mv[c]), tInv = sum(invs, c => mv[c]), tFin = sum(fins, c => mv[c]);
+  const gp = tInc - tCos, op = gp - tAdm, np = op - tFin - tInv;
   const line = (c, v) => `<tr><td class="mono small">${esc(c)}</td><td>${esc(acctName(c))}</td><td class="num">${aed(v)}</td></tr>`;
   const head = t => `<tr><td colspan="3"><b>${t}</b></td></tr>`, tot = (t, v) => `<tr class="tot"><td></td><td><b>${t}</b></td><td class="num"><b>${aed(v)}</b></td></tr>`;
   const pl = `<div class="section"><h2>Profit & loss · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
@@ -420,6 +423,7 @@ function statementsView(){
     ${tot("Gross profit", gp)}
     ${head(PL_GROUPS.admin + " <span class=\"small muted\">(office, operations & workshop staff, overheads)</span>")}${adm.map(c => line(c, mv[c])).join("")}${tot("Total administrative & general expenses", tAdm)}
     ${tot("Operating profit", op)}
+    ${fins.length ? head(PL_GROUPS.finance + " <span class=\"small muted\">(interest / profit on bank loans and vehicle finance)</span>") + fins.map(c => line(c, mv[c])).join("") + tot("Total finance costs", tFin) : ""}
     ${invs.length ? head(PL_GROUPS.investor) + invs.map(c => line(c, mv[c])).join("") : ""}
     ${tot(np >= 0 ? "Net profit" : "Net loss", np)}</tbody></table></div>
     <p class="small muted" style="margin-top:6px">Drivers are direct staff: their earnings share or salary (5100) and their visas & permits (5280) are cost of sales. Employees' salaries post to administrative expenses by department (6000–6002) with their visa & EID (6010). A driver's own share of a loan or visa is not an expense – it sits in 1170 until recovered.</p></div>`;
@@ -431,9 +435,11 @@ function statementsView(){
   const profit = -sum(B.filter(r => r.type === "Income" || r.type === "Expense"), r => r.bal);
   const tA = sum(grp("Asset"), val), tL = sum(grp("Liability"), val), tE = sum(grp("Equity"), val) + profit, diff = r2(tA - tL - tE), gap = Math.abs(diff) > 0.01;
   const bl = r => `<tr><td class="mono small">${esc(r.code)}</td><td>${esc(r.name)}</td><td class="num">${aed(val(r))}</td></tr>`;
+  // current and non-current, each with its subtotal
+  const split = (ty, nc, title) => { const rs = grp(ty).filter(r => NON_CURRENT.has(r.code) === nc); return rs.length ? `<tr><td></td><td><i>${title}</i></td><td></td></tr>${rs.map(bl).join("")}<tr><td></td><td><i>Total ${title.toLowerCase()}</i></td><td class="num"><i>${aed(sum(rs, val))}</i></td></tr>` : ""; };
   const bs = `<div class="section"><h2>Balance sheet at ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
-    <tr><td colspan="3"><b>Assets</b></td></tr>${grp("Asset").map(bl).join("")}<tr class="tot"><td></td><td><b>Total assets</b></td><td class="num"><b>${aed(tA)}</b></td></tr>
-    <tr><td colspan="3"><b>Liabilities</b></td></tr>${grp("Liability").map(bl).join("")}<tr class="tot"><td></td><td><b>Total liabilities</b></td><td class="num"><b>${aed(tL)}</b></td></tr>
+    <tr><td colspan="3"><b>Assets</b></td></tr>${split("Asset", true, "Non-current assets")}${split("Asset", false, "Current assets")}<tr class="tot"><td></td><td><b>Total assets</b></td><td class="num"><b>${aed(tA)}</b></td></tr>
+    <tr><td colspan="3"><b>Liabilities</b></td></tr>${split("Liability", false, "Current liabilities")}${split("Liability", true, "Non-current liabilities")}<tr class="tot"><td></td><td><b>Total liabilities</b></td><td class="num"><b>${aed(tL)}</b></td></tr>
     <tr><td colspan="3"><b>Equity</b></td></tr>${grp("Equity").map(bl).join("")}<tr><td></td><td>Profit since ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}</td><td class="num">${aed(profit)}</td></tr>
     ${gap ? `<tr><td></td><td>Opening balances not yet entered (difference)</td><td class="num">${aed(diff)}</td></tr>` : ""}
     <tr class="tot"><td></td><td><b>Total liabilities & equity</b></td><td class="num"><b>${aed(tL + tE + (gap ? diff : 0))}</b></td></tr></tbody></table></div>

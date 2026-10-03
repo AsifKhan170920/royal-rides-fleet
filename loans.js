@@ -9,8 +9,9 @@
    Accounting: disbursement Dr bank / Cr loan account (2410 short-term, 2420 long-term, 2430 overdraft & facilities,
    2400 auto loans); processing fee Dr 5300 bank charges / Cr bank; each instalment Dr loan (principal) + Dr 5950
    finance cost / Cr bank. Loans taken before the books start come in with their outstanding balance. */
-Object.assign(ACCT, {"2410":"Short-term bank loans", "2420":"Long-term bank loans", "2430":"Bank overdraft & facilities"});
-if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"2410":"Short-term bank loans", "2420":"Long-term bank loans", "2430":"Bank overdraft & facilities"});
+const LOAN_ACCTS = {"2410":"Short-term bank loans", "2420":"Long-term bank loans – non-current", "2425":"Long-term bank loans – current portion", "2430":"Bank overdraft & facilities",
+  "2400":"Vehicle finance loans – non-current", "2405":"Vehicle finance loans – current portion", "2440":"Accrued interest / profit on bank loans", "5955":"Interest on business loans"};
+Object.assign(ACCT, LOAN_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, LOAN_ACCTS);
 S.loans = S.loans || {}; S.loanView = S.loanView || ""; S.loanEdit = S.loanEdit || null;
 // business loans only – auto loans are the cars bought on bank finance (Vehicles → car → Purchase & finance)
 const LOAN_TYPES = {short: "Short-term business loan", long: "Long-term business loan", facility: "Overdraft / revolving facility"};
@@ -53,12 +54,53 @@ function postLoans(add){
     if(l.date >= S.from && l.date <= S.to){ add(acct, num(l.amount), 0, name + " – disbursed", l.date); add(loanAcct(l), 0, num(l.amount), name + " – disbursed", l.date);
       if(num(l.fee)){ add("5300", num(l.fee), 0, name + " – processing fee", l.date); add(acct, 0, num(l.fee), name + " – processing fee", l.date); } }
     for(const x of loanSchedule(l)){ if(x.date < S.from || x.date > S.to) continue; const m = `${name} – instalment ${x.no}`;
-      add(loanAcct(l), x.principal, 0, m, x.date); add("5950", x.profit, 0, m, x.date); add(acct, 0, x.emi, m, x.date); }
+      add(loanAcct(l), x.principal, 0, m, x.date); add("5955", x.profit, 0, m, x.date); add(acct, 0, x.emi, m, x.date); }
   }
+  postClassification(add);
+}
+/* ---------- current / non-current split and accrued interest (IAS 1, accruals) ----------
+   At the period end:
+   - the principal falling due within 12 months is moved from the non-current loan account to its current portion
+     (2420 → 2425 business loans, 2400 → 2405 vehicle finance); short-term loans and overdrafts are current already;
+   - the interest / profit earned by the bank since the last instalment and not yet paid is accrued
+     (Dr 5955 / 5950, Cr 2440); the journal carries the change over the period, so the balance is always the accrual
+     at the period end. Cars of investors: their finance cost is borne by the investor – not accrued. */
+function loanBook(){
+  const out = [];
+  Object.values(S.loans).forEach(l => out.push({start: l.date, sch: loanSchedule(l), nc: LOAN_ACCT[l.type] === "2420" ? "2420" : null, cur: "2425", cost: "5955", accrue: true, name: `${l.bank || "Bank"}${l.facility ? " " + l.facility : ""}`}));
+  if(window.FIN) Object.values(S.vehicles).forEach(v => { const f = FIN.of(v); if(!f || f.funding !== "bank") return;
+    out.push({start: f.purchaseDate, sch: FIN.schedule(v), nc: "2400", cur: "2405", cost: "5950", accrue: FIN.owner(v) === "company", name: `${f.bank || "Bank"}${f.facility ? " " + f.facility : ""} – ${vName(v.id)}`}); });
+  return out.filter(b => b.start);
+}
+const dueIn12 = (b, day) => b.start > day ? 0 : r2(sum(b.sch.filter(x => x.date > day && x.date <= addMonths(day, 12)), x => x.principal));
+function accruedAt(b, day){
+  if(!b.accrue || b.start > day) return 0;
+  const i = b.sch.findIndex(x => x.date > day); if(i < 0) return 0;
+  const prev = i ? b.sch[i - 1].date : b.start, x = b.sch[i], span = (parseD(x.date) - parseD(prev)) / 86400000, done = (parseD(day) - parseD(prev)) / 86400000;
+  return span > 0 && done > 0 ? r2(x.profit * Math.min(1, done / span)) : 0;
+}
+function postClassification(add){
+  const before = addDays(S.from, -1);
+  for(const b of loanBook()){
+    const c = b.nc ? dueIn12(b, S.to) : 0;
+    if(c){ add(b.nc, c, 0, `${b.name} – principal due within 12 months (current portion)`, S.to); add(b.cur, 0, c, `${b.name} – principal due within 12 months (current portion)`, S.to); }
+    const d = r2(accruedAt(b, S.to) - accruedAt(b, before));
+    if(d > 0){ add(b.cost, d, 0, `${b.name} – interest / profit accrued to ${dmyS(S.to)}`, S.to); add("2440", 0, d, `${b.name} – interest / profit accrued`, S.to); }
+    else if(d < 0){ add("2440", -d, 0, `${b.name} – accrued interest / profit released`, S.to); add(b.cost, 0, -d, `${b.name} – accrued interest / profit released`, S.to); }
+  }
+}
+// the split shown on the Bank finance page
+function loanSplit(day){
+  const B = loanBook(); let cur = 0, nc = 0, acc = 0;
+  Object.values(S.loans).forEach(l => { const out = loanOut(l, day); if(LOAN_ACCT[l.type] === "2420"){ const c = Math.min(out, dueIn12({start: l.date, sch: loanSchedule(l)}, day)); cur += c; nc += out - c; } else cur += out; });
+  if(window.FIN) Object.values(S.vehicles).forEach(v => { const f = FIN.of(v); if(!f || f.funding !== "bank" || !f.purchaseDate) return; const out = FIN.outstanding(v, day), c = Math.min(out, dueIn12({start: f.purchaseDate, sch: FIN.schedule(v)}, day)); cur += c; nc += out - c; });
+  B.forEach(b => acc += accruedAt(b, day));
+  return {cur: r2(cur), nc: r2(nc), acc: r2(acc)};
 }
 function loansOpening(code){
   const start = setting("ledgerStart", "2026-09-01"); let o = 0;
   for(const l of Object.values(S.loans)){ if(!l.date || l.date >= start || loanAcct(l) !== code) continue; o -= loanOut(l, addDays(start, -1)); }
+  if(code === "2440") o -= sum(loanBook(), b => accruedAt(b, addDays(start, -1)));   // interest accrued at the books start
   return r2(o);
 }
 
@@ -83,7 +125,7 @@ function vBankFinance(){
   const row = r => `<tr><td>${r.car ? `<button class="btn sm ghost" data-vehview="${esc(r.car)}" data-vehtab="fin" style="padding:2px 6px">${esc(r.type)}</button>` : `<button class="btn sm ghost" data-loanview="${esc(r.id)}" style="padding:2px 6px">${esc(r.type)}</button>`}</td><td>${esc(r.bank || "")}</td><td class="mono small">${esc(r.facility || "")}</td><td class="small">${esc(r.owner || "")}</td><td>${r.date ? esc(dmyS(r.date)) : ""}</td><td class="num">${fmt(r.amount)}</td><td class="small">${esc(r.rate)} · ${r.months} mo</td><td class="num">${fmt(r.emi)}</td><td class="num"><b>${fmt(r.out)}</b></td><td>${r.next ? `${esc(dmyS(r.next.date))} · ${fmt(r.next.emi)}${r.next.date <= lim ? ' <span class="pill warn">30 days</span>' : ""}` : r.out ? "" : '<span class="pill good">Repaid</span>'}</td></tr>`;
   const head = `<thead><tr><th>Loan</th><th>Bank</th><th>Facility no.</th><th>For</th><th>Start</th><th class="num">Amount</th><th>Terms</th><th class="num">Instalment</th><th class="num">Outstanding today</th><th>Next instalment</th></tr></thead>`;
   return `<div class="section"><div class="head"><div><h2>Bank finance</h2><p class="sub">Auto loans are the cars bought on bank finance (entered on the car: Purchase & finance). Business loans and facilities are added here with their contract terms, and the instalment schedule is worked out from them.</p></div><div class="row">${dlBtn("loans")}<button class="btn primary" data-loanedit="new">Add business loan / facility</button></div></div>
-    <div class="kpis"><div class="kpi"><div class="l">Facilities</div><div class="v">${all.length}</div></div><div class="kpi"><div class="l">Outstanding today</div><div class="v">${fmt(sum(all, r => r.out))}</div></div><div class="kpi"><div class="l">Due in the next 30 days</div><div class="v">${fmt(sum(due30, r => r.next.emi))}</div><div class="n">${due30.length} instalment${due30.length === 1 ? "" : "s"}</div></div></div>
+    <div class="kpis"><div class="kpi"><div class="l">Facilities</div><div class="v">${all.length}</div></div><div class="kpi"><div class="l">Outstanding today</div><div class="v">${fmt(sum(all, r => r.out))}</div></div>${(() => { const sp = loanSplit(S.to); return `<div class="kpi"><div class="l">Current portion · ${esc(dmyS(S.to))}</div><div class="v">${fmt(sp.cur)}</div><div class="n">due within 12 months</div></div><div class="kpi"><div class="l">Non-current portion</div><div class="v">${fmt(sp.nc)}</div><div class="n">due after 12 months</div></div><div class="kpi"><div class="l">Accrued interest / profit</div><div class="v">${fmt(sp.acc)}</div><div class="n">earned by the banks, not yet paid</div></div>`; })()}<div class="kpi"><div class="l">Due in the next 30 days</div><div class="v">${fmt(sum(due30, r => r.next.emi))}</div><div class="n">${due30.length} instalment${due30.length === 1 ? "" : "s"}</div></div></div>
     <h3 style="margin:14px 0 6px">Business loans & facilities</h3>
     ${L.length ? `<div class="tbl"><table>${head}<tbody>${L.map(row).join("")}</tbody><tfoot><tr><td colspan="5">Total</td><td class="num">${fmt(sum(L, r => r.amount))}</td><td></td><td></td><td class="num">${fmt(sum(L, r => r.out))}</td><td></td></tr></tfoot></table></div>` : `<div class="empty"><b>No loans yet</b>Add a short-term or long-term business loan, or an overdraft facility, with its contract terms.</div>`}
     <div class="row" style="justify-content:space-between;margin:14px 0 6px"><h3 style="margin:0">Auto loans (vehicle finance)</h3><select id="autoLoanCar" aria-label="Add auto loan" style="max-width:260px">${opts(Object.fromEntries(Object.values(S.vehicles).filter(v => !(window.FIN && FIN.of(v) && FIN.of(v).funding === "bank")).sort((a, b) => vName(a.id).localeCompare(vName(b.id))).map(v => [v.id, vName(v.id)])), "", "+ Add auto loan – choose the car…")}</select></div>
@@ -123,7 +165,7 @@ function loanDetail(id){
   <div class="tbl"><table><thead><tr><th class="num">#</th><th>Due date</th><th class="num">Instalment</th><th class="num">Principal</th><th class="num">Profit / interest</th><th class="num">Balance</th><th>Status</th></tr></thead><tbody>
   ${sch.map(x => `<tr><td class="num">${x.no}</td><td>${esc(dmyS(x.date))}</td><td class="num">${fmt(x.emi)}</td><td class="num">${fmt(x.principal)}</td><td class="num">${fmt(x.profit)}</td><td class="num">${fmt(x.balance)}</td><td>${x.date <= today ? '<span class="pill good">Paid</span>' : x === next ? '<span class="pill warn">Next</span>' : `<span class="muted small">${x.grace ? "Grace – profit only" : "Upcoming"}</span>`}</td></tr>`).join("")}
   </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${fmt(tot.emi)}</td><td class="num">${fmt(tot.p)}</td><td class="num">${fmt(tot.i)}</td><td colspan="2"></td></tr></tfoot></table></div>
-  <p class="small muted" style="margin-top:6px">Instalments are booked on their due dates from ${esc(acctName(l.account || "1100"))}: principal reduces the loan, profit / interest is a finance cost.</p></div>`;
+  <p class="small muted" style="margin-top:6px">Instalments are booked on their due dates from ${esc(acctName(l.account || "1100"))}: principal reduces the loan, profit / interest is a finance cost (5955). At each period end the principal due within 12 months is shown as the current portion (2425) and the interest earned since the last instalment is accrued (2440).</p></div>`;
 }
 DL.loansch = id => { const l = S.loans[id]; return [`loan_schedule_${norm(l.bank || "")}_${norm(l.facility || id)}.csv`, [["Instalment","Due date","Instalment amount","Principal","Profit / interest","Balance"], ...loanSchedule(l).map(x => [x.no, x.date, x.emi, x.principal, x.profit, x.balance])]]; };
 
@@ -144,5 +186,5 @@ document.addEventListener("submit", async ev => {
   if(await writeOk(S.db.doc("loans/" + id).set(d))){ S.loanEdit = null; S.loanView = id; toast("Loan saved – the schedule is worked out from its terms."); render(); }
 });
 document.addEventListener("change", ev => { if(ev.target.id !== "autoLoanCar" || !ev.target.value) return; const id = ev.target.value; S.navStack.push(JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])))); S.view = "vehicles"; S.vehView = id; S.vehTab = "fin"; S.finEdit = id; render(); window.scrollTo(0,0); });
-window.LOANS = {post: postLoans, opening: loansOpening, schedule: loanSchedule};
+window.LOANS = {post: postLoans, opening: loansOpening, schedule: loanSchedule, split: loanSplit};
 Object.assign(window.BOOK_VIEWS = window.BOOK_VIEWS || {}, {bankfin: vBankFinance});

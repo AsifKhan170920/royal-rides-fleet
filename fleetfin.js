@@ -13,8 +13,8 @@
    - Investor car, full payment: paid by the investor – recorded on the car only.
    Instalments are taken as paid on their due dates (standing order) from the chosen bank account. */
 Object.assign(ACCT, {"2210":"Investor funding of vehicles"}); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"2210":"Investor funding of vehicles"});
-Object.assign(ACCT, {"1500":"Motor vehicles", "1190":"Investor vehicle finance (recoverable)", "2400":"Vehicle finance loans (banks)", "5950":"Vehicle finance cost (profit / interest)"});
-if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"1500":"Motor vehicles", "1190":"Investor vehicle finance (recoverable)", "2400":"Vehicle finance loans (banks)", "5950":"Vehicle finance cost (profit / interest)"});
+Object.assign(ACCT, {"1500":"Motor vehicles", "1190":"Investor vehicle finance (recoverable)", "2400":"Vehicle finance loans – non-current", "5950":"Vehicle finance cost (profit / interest)"});
+if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"1500":"Motor vehicles", "1190":"Investor vehicle finance (recoverable)", "2400":"Vehicle finance loans – non-current", "5950":"Vehicle finance cost (profit / interest)"});
 
 const finOf = v => v && v.fin && num(v.fin.price) ? v.fin : null;
 /* An investor's car can be carried in the company's books (default: registered in its name, bought on its facility,
