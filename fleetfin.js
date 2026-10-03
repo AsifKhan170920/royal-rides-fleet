@@ -182,39 +182,30 @@ function vehPLModel(id){
 /* The statement, in the usual P&L form: items in the first amount column, totals in the second,
    brackets for deductions. Rows: h heading · i item · s subtotal · g final total. */
 function vehStmt(M){
+  // the car's own profit: no profit-sharing lines (the investor's share and settlement are on Investor P&L)
   const v = M.v, R = [], H = label => R.push({k: "h", label}), I = (label, a) => R.push({k: "i", label, a: r2(a)}), T = (label, b, k = "s") => R.push({k, label, b: r2(b)});
+  const pls = Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f), fees = r2(sum(pls, ([, b]) => b.fee)), DIRECT = ["5200", "5210"];
   H("Revenue");
-  Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f).forEach(([k, b]) => { I(`${pName(k)} – fares (${b.n} trips)`, b.f); });
-  if(M.fareStd && v.fareRev) I("Less: output VAT on fares", -r2(sum(Object.values(M.byPl), b => b.f) - v.fareRev));
+  pls.forEach(([k, b]) => I(`${pName(k)} – fares (${b.n} trips)`, b.f));
+  if(M.fareStd && v.fareRev) I("Less: output VAT on fares", -r2(sum(pls, ([, b]) => b.f) - v.fareRev));
   if(r2(v.ref)) I("Tolls & fees recovered", v.ref);
-  T("Total revenue", r2(M.netRev + sum(Object.values(M.byPl), b => b.fee)));
+  T("Total revenue", M.netRev + fees);
   H("Direct costs");
-  Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f).forEach(([k, b]) => { if(r2(b.fee)) I(`${pName(k)} service fee & VAT`, -b.fee); });
+  pls.forEach(([k, b]) => { if(r2(b.fee)) I(`${pName(k)} service fee & VAT`, -b.fee); });
   I("Driver cost (earnings share / salary)", -v.drvCost);
-  Object.entries(M.byCat).forEach(([c, val]) => I(EXP_CATS[c] || "Other expenses", -val));
-  T("Total direct costs", -r2(v.drvCost + v.exp + sum(Object.values(M.byPl), b => b.fee)));
-  if(M.owner === "investor"){
-    T("Operating profit", v.op);
-    H("Profit sharing");
-    const terms = vehTermText(M.terms).replace(/^[^:]*: /, "");
-    if(v.rmInv){ I(`Investor's share (${terms})`, v.invShare + v.rmInv); I("Less: repairs & maintenance borne by the investor", -v.rmInv); }
-    (v.rmInv ? T : I)(v.rmInv ? "Investor's share" : `Investor's share (${terms})`, v.invShare);
-    I(`Company's share${v.mgmt ? ` (incl. management fee ${fmt(v.mgmt)})` : ""}`, v.company);
-    if(M.emi){
-      H("Investor settlement");
-      I("Investor's share", v.invShare);
-      I(`Less: bank instalment${M.sch.length > 1 ? "s" : ""} – ${(M.f || {}).bank || "bank"}${(M.f || {}).facility ? " " + M.f.facility : ""}`, -M.emi);
-      T("Net payable to the investor", M.invNet, "g");
-    }
-  } else {
-    const below = M.depr || M.profit;
-    T(below ? "Operating profit" : "Net profit for the period", v.op, below ? "s" : "g");
-    if(below){
-      if(M.depr) I("Less: depreciation", -M.depr);
-      if(M.profit) I("Less: finance cost (bank profit / interest)", -M.profit);
-      T("Net profit for the period", M.coNet, "g");
-    }
-  }
+  let direct = fees + v.drvCost;
+  DIRECT.forEach(c => { if(M.byCat[c]){ I(EXP_CATS[c], -M.byCat[c]); direct += M.byCat[c]; } });
+  T("Total direct costs", -direct);
+  const gross = r2(M.netRev + fees - direct); T("Gross profit", gross);
+  H("Expenses");
+  let ex = 0; const X = (label, val) => { if(r2(val)){ I(label, -val); ex += val; } };
+  Object.entries(M.byCat).filter(([c]) => !DIRECT.includes(c)).forEach(([c, val]) => X(EXP_CATS[c] || "Other expenses", val));
+  if(M.owner === "investor" || v.investorId) X("Management fee – company", v.mgmt);
+  X("Finance cost (bank profit / interest)", M.profit);
+  if(M.owner === "company") X("Depreciation", M.depr);
+  if(!r2(ex)) I("No other expenses assigned to this car", 0);
+  T("Total expenses", -ex);
+  T("Net profit for the period", gross - ex, "g");
   return R;
 }
 // memo: the car and its finance at the period end (not part of the profit)
@@ -227,7 +218,7 @@ function vehMemo(M){
   if(f.funding === "credit" && f.supplierId) out.push([`Owed to ${dealerName(f)} (supplier balance)`, (() => { try{ return r2(num((S.suppliers[f.supplierId] || {}).opening) + sum(BOOKS.partyMoves(histEntries(), "s:" + f.supplierId, "2000"), x => x.cr - x.dr)); }catch(e){ return ""; } })()]);
   return out;
 }
-const vehPerf = M => { const rev = r2(M.netRev + sum(Object.values(M.byPl), b => b.fee)); return [["Trips", M.trips], ["Days in service", M.days], ["Distance", fmt(M.km) + " km"], ["Drivers", M.drivers], ["Revenue / day", fmt(M.days ? rev / M.days : 0)], ["Revenue / km", fmt(M.km ? rev / M.km : 0)], ["Operating margin", (rev ? Math.round(100 * M.v.op / rev) : 0) + "%"]]; };
+const vehPerf = M => { const rev = r2(M.netRev + sum(Object.values(M.byPl), b => b.fee)), net = vehStmt(M).slice(-1)[0].b; return [["Trips", M.trips], ["Days in service", M.days], ["Distance", fmt(M.km) + " km"], ["Drivers", M.drivers], ["Revenue / day", fmt(M.days ? rev / M.days : 0)], ["Revenue / km", fmt(M.km ? rev / M.km : 0)], ["Net margin", (rev ? Math.round(100 * net / rev) : 0) + "%"]]; };
 const br = x => x == null || x === "" ? "" : typeof x === "string" ? x : x < 0 ? `(${fmt(-x)})` : fmt(x);
 const VPL_CSS = `.vst{width:100%;border-collapse:collapse}.vst td{padding:4px 8px;vertical-align:top}.vst td.n{text-align:right;white-space:nowrap;width:120px;font-variant-numeric:tabular-nums}
 .vst tr.h td{font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:.85em;padding-top:12px}.vst tr.i td:first-child{padding-left:22px}
