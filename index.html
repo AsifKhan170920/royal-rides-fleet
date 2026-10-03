@@ -350,6 +350,16 @@ function parseTripDate(v){
 
 /* ============ period ============ */
 function uberWeek(offset){ const d = new Date(); const day = (d.getDay()+6)%7; d.setDate(d.getDate() - day + offset*7); const a = iso(d); return [a, addDays(a,6)]; }
+/* The chosen period is remembered in this browser: a preset ("This month"…) is worked out again on each
+   visit, custom dates stay as they were. */
+function savePeriod(){ try{ localStorage.setItem("rrPeriod", JSON.stringify({preset: $("#preset").value, from: S.from, to: S.to})); }catch(e){} }
+function restorePeriod(){
+  let p = null; try{ p = JSON.parse(localStorage.getItem("rrPeriod") || "null"); }catch(e){}
+  const ok = s => /^\d{4}-\d{2}-\d{2}$/.test(s || "");
+  if(p && p.preset && p.preset !== "custom" && [...$("#preset").options].some(o => o.value === p.preset)){ $("#preset").value = p.preset; setPreset(p.preset); return; }
+  if(p && ok(p.from) && ok(p.to) && p.from <= p.to){ $("#preset").value = "custom"; S.from = p.from; S.to = p.to; $("#pFrom").value = p.from; $("#pTo").value = p.to; return; }
+  setPreset("thismonth");
+}
 function setPreset(p){
   const t = new Date(); let a, b;
   if(p === "thisweek") [a,b] = uberWeek(0);
@@ -363,7 +373,7 @@ function setPreset(p){
 
 /* ============ data layer ============ */
 async function boot(){
-  renderNav(); setPreset("thismonth"); render();
+  renderNav(); restorePeriod(); render();
   if(!window.FT){ S.ready = true; showLogin("Could not reach the Fair Tax portal. Check the internet connection and reload."); return; }
   try{
     await FT.init();
@@ -389,6 +399,7 @@ document.addEventListener("focusout", () => { if(S.pending){ setTimeout(() => { 
 function applyBrand(){ const n = S.settings.company || "Royal Rides"; $("#brandName").innerHTML = `${esc(n)}<small>Fleet ledger</small>`; }
 const months = (a,b) => { const out = []; let d = parseD(a); d.setDate(1); const end = parseD(b); while(d <= end){ out.push(iso(d).slice(0,7)); d.setMonth(d.getMonth()+1); } return out; };
 async function loadPeriod(){
+  savePeriod();
   if(!S.db) return;
   S.ledger = null;   // the driver ledger reloads its history on the next visit
   try{
