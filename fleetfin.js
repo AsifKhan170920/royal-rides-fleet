@@ -30,7 +30,18 @@ function finSchedule(v){
   }
   return out;
 }
-const finText = v => { const f = finOf(v); if(!f) return ""; return f.funding === "bank" ? `${f.bank || "Bank"} finance${f.facility ? " · " + f.facility : ""}` : "Full payment"; };
+const dealerName = f => f && f.supplierId && S.suppliers[f.supplierId] ? S.suppliers[f.supplierId].name : (f && f.dealer) || "";
+const finText = v => { const f = finOf(v); if(!f) return ""; return f.funding === "bank" ? `${f.bank || "Bank"} finance${f.facility ? " · " + f.facility : ""}` : f.funding === "credit" ? "Supplier credit – " + (dealerName(f) || "supplier") : "Full payment"; };
+// a car bought on credit is owed to its supplier: it shows on the supplier's statement and balance
+function supplierMoves(p){
+  const out = [];
+  for(const v of Object.values(S.vehicles)){
+    const f = finOf(v); if(!f || f.funding !== "credit" || !f.supplierId || "s:" + f.supplierId !== p || !f.purchaseDate || f.purchaseDate > S.to) continue;
+    if(f.purchaseDate < setting("ledgerStart", "2026-09-01")) continue;   // before the books start: in the supplier's opening balance
+    out.push({date: f.purchaseDate, desc: "Purchase of " + vName(v.id) + " on credit", dr: 0, cr: r2(num(f.price) - num(f.downPayment))});
+  }
+  return out;
+}
 function finOutstanding(v, day){ return r2(num((finOf(v) || {}).loan) - sum(finSchedule(v).filter(x => x.date <= day), x => x.principal)); }
 
 /* journal: purchases and instalments in the period */
@@ -39,11 +50,16 @@ function postFin(add){
     const f = finOf(v); if(!f) continue;
     const owner = finOwner(v), name = vName(v.id), acct = f.payFrom || "1100", price = num(f.price), loan = num(f.loan), dp = num(f.downPayment);
     if(f.purchaseDate && f.purchaseDate >= S.from && f.purchaseDate <= S.to){
-      const m = `Purchase of ${name}${f.dealer ? " – " + f.dealer : ""}`;
+      const m = `Purchase of ${name}${dealerName(f) ? " – " + dealerName(f) : ""}`, cred = r2(price - dp);
       if(owner === "company"){
         add("1500", price, 0, m, f.purchaseDate);
         if(f.funding === "bank"){ add("2400", 0, loan, m + " – " + (f.bank || "bank") + " finance", f.purchaseDate); if(r2(price - loan)) add(acct, 0, price - loan, m + " – down payment", f.purchaseDate); }
+        else if(f.funding === "credit"){ add("2000", 0, cred, m + " – on credit", f.purchaseDate); if(dp) add(acct, 0, dp, m + " – down payment", f.purchaseDate); }
         else add(acct, 0, price, m, f.purchaseDate);
+      } else if(f.funding === "credit"){
+        // the company owes the supplier for the investor's car – recoverable from the investor
+        add("1190", cred, 0, m + " – on credit for " + iName(v.investorId), f.purchaseDate); add("2000", 0, cred, m + " – on credit", f.purchaseDate);
+        if(f.downBy === "company" && dp){ add("1190", dp, 0, m + " – down payment for " + iName(v.investorId), f.purchaseDate); add(acct, 0, dp, m + " – down payment", f.purchaseDate); }
       } else if(f.funding === "bank"){
         add("1190", loan, 0, m + " – finance for " + iName(v.investorId), f.purchaseDate); add("2400", 0, loan, m + " – " + (f.bank || "bank") + " finance", f.purchaseDate);
         // a down payment the company made for the investor is recoverable from him as well
@@ -82,10 +98,11 @@ function vehFinTab(id){
   const fld = (n, l, type = "text", extra = "") => `<div class="f"><label for="vf_${n}">${l}</label><input id="vf_${n}" name="${n}" type="${type}" ${type === "number" ? 'step="0.01"' : ""} value="${esc(f[n] ?? "")}"${extra}></div>`;
   if(edit) return `<form class="form" id="fVehFin" data-id="${esc(id)}">
     <div class="f"><label for="vf_owner">Owned by</label><select id="vf_owner" name="owner">${opts({company: "Company", investor: "Investor" + ((termAt(termList(v, VEH_TERMS), today) || {}).investorId ? " – " + iName((termAt(termList(v, VEH_TERMS), today) || {}).investorId) : "")}, f.owner || owner)}</select></div>
-    ${fld("purchaseDate", "Purchase date", "date")}${fld("price", "Purchase price (AED)", "number", " required")}${fld("dealer", "Dealer / seller")}
-    <div class="f"><label for="vf_funding">Paid by</label><select id="vf_funding" name="funding">${opts({cash: "Full payment", bank: "Bank finance"}, f.funding || "cash")}</select></div>
+    ${fld("purchaseDate", "Purchase date", "date")}${fld("price", "Purchase price (AED)", "number", " required")}
+    <div class="f"><label for="vf_supplierId">Supplier (dealer / seller)</label><select id="vf_supplierId" name="supplierId">${opts(Object.fromEntries(Object.values(S.suppliers).sort((a,b) => (a.name || "").localeCompare(b.name || "")).map(x => [x.id, x.name])), f.supplierId || "", f.dealer && !f.supplierId ? "— (was: " + f.dealer + ")" : "—")}</select><span class="small muted">New dealer? Add him under Accounts → Suppliers.</span></div>
+    <div class="f"><label for="vf_funding">Paid by</label><select id="vf_funding" name="funding">${opts({cash: "Full payment", bank: "Bank finance", credit: "Supplier credit – pay the supplier later"}, f.funding || "cash")}</select></div>
     <div class="f"><label for="vf_payFrom">Paid from / instalments from</label><select id="vf_payFrom" name="payFrom">${opts(acctOpts(["bank","cash"]), f.payFrom || "1100")}</select></div>
-    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Bank finance</b> <span class="small muted">– leave empty for a full payment. Instalment blank = worked out from the flat rate.</span></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Bank finance / down payment</b> <span class="small muted">– bank fields only for a bank finance. On supplier credit the price less the down payment is owed to the supplier (pay him from Payments → account 2000). Instalment blank = worked out from the flat rate.</span></div>
     ${fld("bank", "Bank")}${fld("facility", "Facility ID / number")}${fld("loan", "Loan amount", "number")}${fld("downPayment", "Down payment", "number")}
     <div class="f"><label for="vf_downBy">Down payment paid by</label><select id="vf_downBy" name="downBy">${opts({company: "Company", investor: "Investor"}, f.downBy || (owner === "investor" ? "investor" : "company"))}</select></div>
     ${fld("rate", "Flat rate % per year", "number")}${fld("months", "Tenure (months)", "number")}${fld("emi", "Monthly instalment (EMI)", "number")}${fld("firstDue", "First instalment date", "date")}
@@ -94,8 +111,8 @@ function vehFinTab(id){
     <div class="f wide"><label for="vf_notes">Notes</label><input id="vf_notes" name="notes" value="${esc(f.notes)}"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button>${finOf(v) ? `<button class="btn ghost" type="button" data-finedit="">Cancel</button>` : ""}</div></form>`;
   const tot = {emi: sum(sch, x => x.emi), p: sum(sch, x => x.principal), i: sum(sch, x => x.profit)}, paid = sch.filter(x => x.date <= today), next = sch.find(x => x.date > today);
-  const info = [["Owned by", owner === "company" ? "Company" : "Investor – " + iName(v.investorId)], ["Purchased", (f.purchaseDate ? dmyS(f.purchaseDate) : "—") + (f.dealer ? " · " + f.dealer : "")], ["Price", fmt(num(f.price))],
-    ["Paid by", f.funding === "bank" ? "Bank finance" : "Full payment"], ...(f.funding === "bank" ? [["Bank", f.bank], ["Facility no.", f.facility], ["Loan", fmt(num(f.loan))], ["Down payment", fmt(num(f.downPayment)) + " (" + (f.downBy === "investor" ? "investor" : "company") + ")"],
+  const info = [["Owned by", owner === "company" ? "Company" : "Investor – " + iName(v.investorId)], ["Purchased", (f.purchaseDate ? dmyS(f.purchaseDate) : "—")], ["Supplier", dealerName(f)], ["Price", fmt(num(f.price))],
+    ["Paid by", f.funding === "bank" ? "Bank finance" : f.funding === "credit" ? `Supplier credit – ${fmt(num(f.price) - num(f.downPayment))} owed to the supplier${num(f.downPayment) ? ", down payment " + fmt(num(f.downPayment)) : ""}` : "Full payment"], ...(f.funding === "bank" ? [["Bank", f.bank], ["Facility no.", f.facility], ["Loan", fmt(num(f.loan))], ["Down payment", fmt(num(f.downPayment)) + " (" + (f.downBy === "investor" ? "investor" : "company") + ")"],
     ["Flat rate / tenure", `${num(f.rate)}% · ${num(f.months)} months`], ["Instalment", fmt(sch[0] ? sch[0].emi : 0) + " from " + (sch[0] ? dmyS(sch[0].date) : "—")], ["Outstanding today", fmt(finOutstanding(v, today))], ["Next instalment", next ? dmyS(next.date) + " · " + fmt(next.emi) : "—"]] : []),
     ["Paid from", acctName(f.payFrom || "1100")], ...(owner === "company" ? [["Depreciation", `${num(f.lifeYears) || 5} years, residual ${String(f.residualPct ?? "") === "" ? 20 : num(f.residualPct)}% · accumulated ${fmt(deprFor(v, "1900-01-01", today))} · book value ${fmt(num(f.price) - deprFor(v, "1900-01-01", today))}`]] : [["Depreciation", "None – the car is the investor's asset"]])];
   return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${owner === "investor" && f.funding === "bank" ? "Instalments are recovered from the investor's earnings (Investor P&L)." : owner === "company" && f.funding === "bank" ? "Instalments: principal reduces the loan, the profit is a finance cost." : ""}</span><div class="row">${sch.length ? dlBtn("finsch", id) : ""}<button class="btn sm" data-finedit="${esc(id)}">Edit</button></div></div>
@@ -114,12 +131,15 @@ document.addEventListener("submit", async ev => {
   const f = ev.target; if(f.id !== "fVehFin") return; ev.preventDefault(); if(!S.db) return;
   const fd = Object.fromEntries(new FormData(f).entries()), v = S.vehicles[f.dataset.id]; if(!v) return;
   ["price","loan","downPayment","rate","months","emi","lifeYears","residualPct"].forEach(k => fd[k] = String(fd[k] ?? "") === "" ? "" : num(fd[k]));
+  if(fd.funding === "credit" && !fd.supplierId){ toast("Choose the supplier the car is bought from on credit."); return; }
+  if(fd.supplierId) delete fd.dealer;
   if(fd.funding === "bank"){
     if(!num(fd.loan)) fd.loan = r2(num(fd.price) - num(fd.downPayment));
     if(!num(fd.downPayment)) fd.downPayment = r2(num(fd.price) - num(fd.loan));
     if(!num(fd.months) || !fd.firstDue){ toast("Enter the tenure (months) and the first instalment date."); return; }
   }
   const {id:_, ...body} = v;
+  if(!fd.supplierId && (v.fin || {}).dealer) fd.dealer = v.fin.dealer;
   if(await writeOk(S.db.doc("vehicles/" + f.dataset.id).set({...body, fin: fd}))){ S.finEdit = null; toast("Purchase & finance saved."); render(); }
 });
 /* ---------- depreciation (company-owned cars only) ---------- */
@@ -159,65 +179,96 @@ function vehPLModel(id){
   return {id, rec, v, f, owner, terms, trips: seen.size, km: r2(v.km), drivers: drivers.size, days: days.size, byPl, byCat, netRev, fareStd, sch, emi, profit, depr,
     invNet: r2(v.invShare - (owner === "investor" ? emi : 0)), coNet: r2(v.company - (owner === "company" ? profit + depr : 0))};
 }
-function vehPLRows(M){
-  const v = M.v, L = (label, val, kind = "") => ({label, v: val, kind});
-  const S2 = Object.entries(M.byPl).sort((a,b) => b[1].f - a[1].f).map(([k, b]) => L(`${esc(pName(k))} <span class="sub">${b.n} trips · fares ${fmt(b.f)} − fee & VAT ${fmt(b.fee)}</span>`, r2(b.f - b.fee)));
-  if(M.fareStd && v.fareRev) S2.push(L("Less output VAT on fares", -r2(sum(Object.values(M.byPl), b => b.f) - v.fareRev)));
-  if(r2(v.ref)) S2.push(L("Tolls & fees recovered", v.ref));
-  S2.push(L("Net revenue", M.netRev, "t"));
-  const S3 = [L("Driver cost (earnings share / salary)", -v.drvCost), ...Object.entries(M.byCat).map(([c, val]) => L(esc(EXP_CATS[c] || "Expense"), -val)), L("Total direct costs", -r2(v.drvCost + v.exp), "t"), L("Operating profit", v.op, "g")];
-  const S4 = [];
-  if(M.owner === "investor" || v.investorId){
-    if(v.mgmt) S4.push(L("Management fee (company)", -v.mgmt));
-    if(v.rmInv) S4.push(L("Investor's share before repairs", r2(v.invShare + v.rmInv)), L("Less repairs & maintenance (investor 100%)", -v.rmInv));
-    S4.push(L(`Investor's share – ${esc(vehTermText(M.terms).replace(/^[^:]*: /, ""))}`, v.invShare, "t"), L("Company's share", v.company, "t"));
-  } else S4.push(L("Company's share (company-owned car)", v.company, "t"));
-  const S5 = [];
+/* The statement, in the usual P&L form: items in the first amount column, totals in the second,
+   brackets for deductions. Rows: h heading · i item · s subtotal · g final total. */
+function vehStmt(M){
+  const v = M.v, R = [], H = label => R.push({k: "h", label}), I = (label, a) => R.push({k: "i", label, a: r2(a)}), T = (label, b, k = "s") => R.push({k, label, b: r2(b)});
+  H("Revenue");
+  Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f).forEach(([k, b]) => { I(`${pName(k)} – fares (${b.n} trips)`, b.f); if(r2(b.fee)) I(`Less: ${pName(k)} service fee & VAT`, -b.fee); });
+  if(M.fareStd && v.fareRev) I("Less: output VAT on fares", -r2(sum(Object.values(M.byPl), b => b.f) - v.fareRev));
+  if(r2(v.ref)) I("Tolls & fees recovered", v.ref);
+  T("Net revenue", M.netRev);
+  H("Direct costs");
+  I("Driver cost (earnings share / salary)", -v.drvCost);
+  Object.entries(M.byCat).forEach(([c, val]) => I(EXP_CATS[c] || "Other expenses", -val));
+  T("Total direct costs", -r2(v.drvCost + v.exp));
   if(M.owner === "investor"){
-    S5.push(L("Investor's share", v.invShare));
-    if(M.emi) S5.push(L(`Less finance instalments (${esc((M.f || {}).bank || "bank")} ${esc((M.f || {}).facility || "")}, ${M.sch.length})`, -M.emi));
-    S5.push(L("Net due to the investor for this car", M.invNet, "g"));
+    T("Operating profit", v.op);
+    H("Profit sharing");
+    const terms = vehTermText(M.terms).replace(/^[^:]*: /, "");
+    if(v.rmInv){ I(`Investor's share (${terms})`, v.invShare + v.rmInv); I("Less: repairs & maintenance borne by the investor", -v.rmInv); }
+    T(v.rmInv ? "Investor's share" : `Investor's share (${terms})`, v.invShare);
+    T(`Company's share${v.mgmt ? ` (incl. management fee ${fmt(v.mgmt)})` : ""}`, v.company);
+    if(M.emi){
+      H("Investor settlement");
+      I("Investor's share", v.invShare);
+      I(`Less: bank instalment${M.sch.length > 1 ? "s" : ""} – ${(M.f || {}).bank || "bank"}${(M.f || {}).facility ? " " + M.f.facility : ""}`, -M.emi);
+      T("Net payable to the investor", M.invNet, "g");
+    }
   } else {
-    S5.push(L("Company's share", v.company));
-    if(M.profit) S5.push(L("Less finance cost (profit / interest)", -M.profit));
-    if(M.depr) S5.push(L("Less depreciation", -M.depr));
-    S5.push(L("Net profit to the company from this car", M.coNet, "g"));
+    const below = M.depr || M.profit;
+    T(below ? "Operating profit" : "Net profit for the period", v.op, below ? "s" : "g");
+    if(below){
+      if(M.depr) I("Less: depreciation", -M.depr);
+      if(M.profit) I("Less: finance cost (bank profit / interest)", -M.profit);
+      T("Net profit for the period", M.coNet, "g");
+    }
   }
-  const f = M.f, S6 = [];
-  if(f){
-    S6.push(L(`Bought ${f.purchaseDate ? dmyS(f.purchaseDate) : ""} – ${f.funding === "bank" ? "bank finance" : "full payment"}${M.owner === "investor" ? " (investor's car)" : ""}`, num(f.price)));
-    if(M.owner === "company"){ const acc = accDepr(M.rec, S.to); S6.push(L("Accumulated depreciation", -acc), L("Book value", r2(num(f.price) - acc), "t")); }
-    if(f.funding === "bank") S6.push(L(`Loan outstanding – ${esc(f.bank || "")} ${esc(f.facility || "")}`, finOutstanding(M.rec, S.to)));
-  }
-  return [["2", "Revenue", S2], ["3", "Direct costs", S3], ["4", "Profit split", S4], ["5", M.owner === "investor" ? "Investor settlement" : "Company result", S5], ...(S6.length ? [["6", "Asset & finance", S6]] : [])];
+  return R;
+}
+// memo: the car and its finance at the period end (not part of the profit)
+function vehMemo(M){
+  const f = M.f, out = []; if(!f) return out;
+  out.push([`Purchase price${f.purchaseDate ? " – " + dmyS(f.purchaseDate) : ""}${dealerName(f) ? " – " + dealerName(f) : ""}`, num(f.price)]);
+  if(M.owner === "company"){ const acc = accDepr(M.rec, S.to); out.push(["Accumulated depreciation", -acc], ["Book value", r2(num(f.price) - acc)]); }
+  else out.push(["Owner", "Investor – no depreciation in the company's books"]);
+  if(f.funding === "bank") out.push([`Bank loan outstanding – ${f.bank || ""} ${f.facility || ""}`.trim(), finOutstanding(M.rec, S.to)]);
+  if(f.funding === "credit" && f.supplierId) out.push([`Owed to ${dealerName(f)} (supplier balance)`, (() => { try{ return r2(num((S.suppliers[f.supplierId] || {}).opening) + sum(BOOKS.partyMoves(histEntries(), "s:" + f.supplierId, "2000"), x => x.cr - x.dr)); }catch(e){ return ""; } })()]);
+  return out;
 }
 const vehPerf = M => [["Trips", M.trips], ["Days in service", M.days], ["Distance", fmt(M.km) + " km"], ["Drivers", M.drivers], ["Net revenue / day", fmt(M.days ? M.netRev / M.days : 0)], ["Net revenue / km", fmt(M.km ? M.netRev / M.km : 0)], ["Operating margin", (M.netRev ? Math.round(100 * M.v.op / M.netRev) : 0) + "%"]];
+const br = x => x == null || x === "" ? "" : typeof x === "string" ? x : x < 0 ? `(${fmt(-x)})` : fmt(x);
+const VPL_CSS = `.vst{width:100%;border-collapse:collapse}.vst td{padding:4px 8px;vertical-align:top}.vst td.n{text-align:right;white-space:nowrap;width:120px;font-variant-numeric:tabular-nums}
+.vst tr.h td{font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:.85em;padding-top:12px}.vst tr.i td:first-child{padding-left:22px}
+.vst tr.s td{font-weight:700}.vst tr.s td.n.b{border-top:1px solid currentColor}.vst tr.g td{font-weight:700}.vst tr.g td.n.b{border-top:1px solid currentColor;border-bottom:3px double currentColor}
+.vst tr.memo td{font-size:.92em}`;
+const stmtTable = R => `<table class="vst"><tr><td></td><td class="n"><b>AED</b></td><td class="n"><b>AED</b></td></tr>${R.map(r => `<tr class="${r.k}"><td>${esc(r.label)}</td><td class="n">${r.k === "i" ? br(r.a) : ""}</td><td class="n${r.k === "s" || r.k === "g" ? " b" : ""}">${r.k === "s" || r.k === "g" ? br(r.b) : ""}</td></tr>`).join("")}</table>`;
+const memoTable = rows => rows.length ? `<table class="vst"><tr class="h"><td>Vehicle & finance – ${esc(dmyS(S.to))}</td><td class="n"></td></tr>${rows.map(([l, x]) => `<tr class="memo"><td>${esc(l)}</td><td class="n">${br(x)}</td></tr>`).join("")}</table>` : "";
 function vehPLTab(id){
   const M = vehPLModel(id), cells = vehPerf(M);
-  return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · ${esc(M.owner === "investor" ? "Investor's car – " + iName(M.v.investorId || M.terms.investorId) : "Company-owned car")}</span>
+  return `<style>${VPL_CSS}</style><div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(M.owner === "investor" ? "Investor's car – " + iName(M.v.investorId || M.terms.investorId) : "Company-owned car")}</span>
     <div class="row">${dlBtn("vpl", id)}<button class="btn sm" data-vplprint="${esc(id)}">Print / PDF</button></div></div>
-  <h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>
-  ${vehPLRows(M).map(([n, title, rows]) => `<h3 style="margin:16px 0 6px">${n}. ${title}</h3><div class="tbl"><table><tbody>${rows.map(r => `<tr${r.kind ? ' class="tot"' : ""}><td style="white-space:normal">${r.kind ? "<b>" + r.label + "</b>" : r.label}</td><td class="num">${r.v == null ? "" : r.kind ? "<b>" + aed(r.v) + "</b>" : aed(r.v)}</td></tr>`).join("")}</tbody></table></div>`).join("")}`;
+  <div class="tbl" style="margin-bottom:12px"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>
+  <div class="tbl" style="max-width:760px;padding:6px 4px"><div style="text-align:center;margin:6px 0 2px"><b>${esc(vName(id))} – Profit & loss statement</b><div class="small muted">For the period ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</div></div>${stmtTable(vehStmt(M))}</div>
+  ${M.f ? `<div class="tbl" style="max-width:760px;padding:6px 4px;margin-top:12px">${memoTable(vehMemo(M))}</div>` : ""}`;
 }
 async function printVehPL(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   const M = vehPLModel(id), s = S.settings, co = s.company || "Royal Rides Limousine LLC", cells = vehPerf(M), inv = M.owner === "investor" ? iName(M.v.investorId || M.terms.investorId) : "";
-  const amt = x => x == null ? "" : (x < 0 ? "-" : "") + fmt(Math.abs(x)), addr = [s.address, s.trn ? "TRN " + s.trn : ""].filter(Boolean).join(" · ");
-  const html = `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>VEHICLE PROFIT & LOSS</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
+  const addr = [s.address, s.trn ? "TRN " + s.trn : ""].filter(Boolean).join(" · ");
+  const html = `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>PROFIT & LOSS STATEMENT</b><span>${esc(vName(id))} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</span></div></div>
     <table class="info"><tr><td class="l">Vehicle</td><td><b>${esc(vName(id))}</b>${M.rec.model ? " · " + esc(M.rec.model) : ""}</td><td class="l">Owner</td><td>${esc(inv || "Company")}</td></tr>
     <tr><td class="l">Terms</td><td>${esc(vehTermText(M.terms))}</td><td class="l">Bought with</td><td>${esc(M.f ? finText(M.rec) : "—")}</td></tr></table>
-    <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
-    ${vehPLRows(M).map(([n, title, rows]) => `<table><tr class="sec"><th colspan="2">${n}. ${title}</th></tr>${rows.map(r => `<tr${r.kind ? ` class="${r.kind}"` : ""}><td>${r.label}</td><td class="n">${amt(r.v)}</td></tr>`).join("")}</table>`).join("")}
+    <table class="perf"><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
+    <div class="vbox">${stmtTable(vehStmt(M))}</div>${M.f ? `<div class="vbox">${memoTable(vehMemo(M))}</div>` : ""}
     <div class="sigs"><div><div class="who">${inv ? "For Investor" : "Prepared by"}</div><div class="line"></div><div>${esc(inv)}</div><div class="cap">Signature & date</div></div><div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div></div>`;
-  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${SAL_CSS}</style>${html}`; document.body.appendChild(box);
+  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
+  box.innerHTML = `<style>${SAL_CSS}${VPL_CSS}.sp .vbox{border:1px solid #c5c9d2;padding:4px 6px 8px;margin-top:10px}.sp .vst{font-size:10pt}.sp .vst td{border:0}</style>${html}`; document.body.appendChild(box);
   const name = `Vehicle_PL_${norm(vName(id))}_${S.from}_${S.to}.pdf`;
   try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".sp")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
-DL.vpl = id => { const M = vehPLModel(id), strip = h => String(h).replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-  return [`vehicle_pl_${norm(vName(id))}_${S.from}_${S.to}.csv`, [["Section","Line","AED"], ...vehPerf(M).map(c => ["1. Performance", c[0], c[1]]), ...vehPLRows(M).flatMap(([n, t, rows]) => rows.map(r => [n + ". " + t, strip(r.label), r.v == null ? "" : r2(r.v)]))]]; };
+// downloads: the PDF is the statement itself; Excel / CSV carry the same statement rows
+DL.vpl = id => {
+  if(window.__fmt === "pdf"){ printVehPL(id); return null; }
+  const M = vehPLModel(id), memo = vehMemo(M);
+  return [`vehicle_pl_${norm(vName(id))}_${S.from}_${S.to}.csv`, [[`${vName(id)} – Profit & loss statement, ${dmyS(S.from)} to ${dmyS(S.to)}`, "AED", "AED"],
+    ...vehStmt(M).map(r => r.k === "h" ? [r.label.toUpperCase(), "", ""] : r.k === "i" ? ["   " + r.label, r.a, ""] : [r.label, "", r.b]),
+    ...(memo.length ? [["", "", ""], ["VEHICLE & FINANCE – " + dmyS(S.to), "", ""], ...memo.map(([l, x]) => ["   " + l, x, ""])] : []),
+    ["", "", ""], ["KEY FIGURES", "", ""], ...vehPerf(M).map(c => ["   " + c[0], String(c[1]), ""])]];
+};
 document.addEventListener("click", ev => { const t = ev.target.closest("button"); if(t && t.dataset.vplprint) printVehPL(t.dataset.vplprint); });
 
-window.FIN = {post: (...a) => postFin(...a), investorEmi, opening: (...a) => finOpening(...a), text: finText, of: finOf, owner: finOwner, outstanding: finOutstanding, depr: deprFor};
+window.FIN = {post: (...a) => postFin(...a), supplierMoves, investorEmi, opening: (...a) => finOpening(...a), text: finText, of: finOf, owner: finOwner, outstanding: finOutstanding, depr: deprFor};
 window.vehFinTab = vehFinTab; window.vehPLTab = vehPLTab;

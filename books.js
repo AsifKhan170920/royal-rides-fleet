@@ -65,6 +65,7 @@ function partyMoves(entries, p, acct){
       out.push({date:e.date, desc:memo + (l.desc ? " – " + l.desc : ""), dr: e.type === "journal" ? num(l.dr) : e.type === "payment" ? a : 0, cr: e.type === "journal" ? num(l.cr) : e.type === "receipt" ? a : 0, e, inv:l.invoiceId});
     });
   }
+  if(acct === "2000" && window.FIN) out.push(...FIN.supplierMoves(p));   // cars bought on credit
   return out.sort((a,b) => a.date.localeCompare(b.date));
 }
 const driverLines = (entries, drId) => partyMoves(entries, "d:" + drId, "2100").map(x => ({date:x.date, desc:x.desc, ...(x.dr ? {dr:x.dr} : {}), ...(x.cr ? {cr:x.cr} : {}), ...(x.e ? {ref:{kind:"doc", id:x.e.id, date:x.e.date, type:x.e.type}} : {})}));
