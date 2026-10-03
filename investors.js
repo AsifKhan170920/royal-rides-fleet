@@ -21,36 +21,74 @@ function invModel(id){
 const invFin = id => Object.values(S.invpay).find(p => p.investorId === id && p.from === S.from && p.to === S.to);
 const invOverlap = id => Object.values(S.invpay).find(p => p.investorId === id && p.from <= S.to && p.to >= S.from);
 
-/* ---------- Trips summary (like the car ledger, for all his cars) ---------- */
-function invTrips(id){
-  const M = invModel(id), fareStd = setting("fareVat", "exempt") === "standard", feeVatRec = setting("feeVatRecoverable", false), grp = S.invGroup;
+/* ---------- Trip summary: trips grouped by day / week / month, per car (car page and investor page) ---------- */
+function tripRows(carIds, grp){
+  const C = compute(), fareStd = setting("fareVat", "exempt") === "standard", feeVatRec = setting("feeVatRecoverable", false);
   const gk = day => { const k = grp === "day" ? day : grp === "month" ? monthEnd(day.slice(0,7)) : weekEnd(day); return k > S.to ? S.to : k; };
   const rows = {};
-  M.cars.forEach(c => {
-    const v = M.C.V[c.id], n = {}, seen = new Set(); S.trips.forEach(t => { const k = t.tr || t.id; if((t.tr || t.f) && vehicleForTrip(t) === c.id && !seen.has(k)){ seen.add(k); n[t.d] = (n[t.d] || 0) + 1; } });
-    Object.entries(v.seg).forEach(([day, b]) => { const k = gk(day) + "|" + c.id, g = rows[k] ||= {key: gk(day), car: c.id, a: day, z: day, n: 0, fare: 0, fee: 0, ref: 0, drv: 0, exp: 0};
+  carIds.forEach(cid => {
+    const v = C.V[cid]; if(!v) return;
+    const n = {}, seen = new Set(); S.trips.forEach(t => { const k = t.tr || t.id; if((t.tr || t.f) && vehicleForTrip(t) === cid && !seen.has(k)){ seen.add(k); n[t.d] = (n[t.d] || 0) + 1; } });
+    Object.entries(v.seg).forEach(([day, b]) => { const k = gk(day) + "|" + cid, g = rows[k] ||= {key: gk(day), car: cid, a: day, z: day, n: 0, fare: 0, fee: 0, ref: 0, drv: 0, exp: 0};
       g.fare += fareStd ? b.fare / 1.05 : b.fare; g.fee += b.fee + (feeVatRec ? 0 : b.tax); g.ref += b.ref; g.drv += b.drv; g.exp += b.exp; g.n += n[day] || 0; if(day < g.a) g.a = day; if(day > g.z) g.z = day; });
   });
   return Object.values(rows).map(g => ({...g, op: r2(g.fare - g.fee + g.ref - g.drv - g.exp)})).sort((a, b) => a.key.localeCompare(b.key) || vName(a.car).localeCompare(vName(b.car)));
 }
-function invTripsTab(id){
-  const R = invTrips(id), per = g => g.a === g.z ? dmyS(g.a) : dmyS(g.a) + " – " + dmyS(g.z), T = k => fmt(sum(R, g => g[k]));
-  return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · his cars' trips, grouped · newest first</span><div class="row">${dlBtn("invtrips", id)}<select id="igrp" aria-label="Group trips">${opts({day: "By day", week: "By week", month: "By month"}, S.invGroup)}</select></div></div>
-  <div class="tbl"><table><thead><tr><th>Period</th><th>Car</th><th class="num">Trips</th><th class="num">Fares</th><th class="num">Platform fee & VAT</th><th class="num">Tolls recovered</th><th class="num">Driver cost</th><th class="num">Car expenses</th><th class="num">Operating profit</th></tr></thead><tbody>
-  ${(R.pg = paged("invtrips-" + id, R.slice().reverse())).rows.map(g => `<tr><td>${esc(per(g))}</td><td>${esc(vName(g.car))}</td><td class="num">${g.n}</td><td class="num">${fmt(g.fare)}</td><td class="num">${fmt(-g.fee)}</td><td class="num">${fmt(g.ref)}</td><td class="num">${fmt(-g.drv)}</td><td class="num">${fmt(-g.exp)}</td><td class="num">${aed(g.op)}</td></tr>`).join("") || `<tr><td colspan="9" class="muted">No trips on his cars in this period.</td></tr>`}
-  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(R, g => g.n)}</td><td class="num">${T("fare")}</td><td class="num">${fmt(-sum(R, g => g.fee))}</td><td class="num">${T("ref")}</td><td class="num">${fmt(-sum(R, g => g.drv))}</td><td class="num">${fmt(-sum(R, g => g.exp))}</td><td class="num"><b>${T("op")}</b></td></tr></tfoot></table></div>${R.pg.bar}`;
+function tripTable(R, pgKey, head, many){
+  const per = g => g.a === g.z ? dmyS(g.a) : dmyS(g.a) + " – " + dmyS(g.z), T = k => fmt(sum(R, g => g[k])), cols = many ? 9 : 8;
+  return `${head}<div class="tbl"><table><thead><tr><th>Period</th>${many ? "<th>Car</th>" : ""}<th class="num">Trips</th><th class="num">Fares</th><th class="num">Platform fee & VAT</th><th class="num">Tolls recovered</th><th class="num">Driver cost</th><th class="num">Car expenses</th><th class="num">Operating profit</th></tr></thead><tbody>
+  ${(R.pg = paged(pgKey, R.slice().reverse())).rows.map(g => `<tr><td>${esc(per(g))}</td>${many ? `<td>${esc(vName(g.car))}</td>` : ""}<td class="num">${g.n}</td><td class="num">${fmt(g.fare)}</td><td class="num">${fmt(-g.fee)}</td><td class="num">${fmt(g.ref)}</td><td class="num">${fmt(-g.drv)}</td><td class="num">${fmt(-g.exp)}</td><td class="num">${aed(g.op)}</td></tr>`).join("") || `<tr><td colspan="${cols}" class="muted">No trips in this period.</td></tr>`}
+  </tbody><tfoot><tr><td colspan="${many ? 2 : 1}">Total</td><td class="num">${sum(R, g => g.n)}</td><td class="num">${T("fare")}</td><td class="num">${fmt(-sum(R, g => g.fee))}</td><td class="num">${T("ref")}</td><td class="num">${fmt(-sum(R, g => g.drv))}</td><td class="num">${fmt(-sum(R, g => g.exp))}</td><td class="num"><b>${T("op")}</b></td></tr></tfoot></table></div>${R.pg.bar}`;
 }
-DL.invtrips = id => [`investor_trips_${norm(iName(id))}_${S.from}_${S.to}.csv`, [["From","To","Car","Trips","Fares","Platform fee & VAT","Tolls recovered","Driver cost","Car expenses","Operating profit"],
-  ...invTrips(id).map(g => [g.a, g.z, vName(g.car), g.n, r2(g.fare), -r2(g.fee), r2(g.ref), -r2(g.drv), -r2(g.exp), g.op])]];
+const tripCsv = (R, many) => [["From","To", ...(many ? ["Car"] : []), "Trips","Fares","Platform fee & VAT","Tolls recovered","Driver cost","Car expenses","Operating profit"],
+  ...R.map(g => [g.a, g.z, ...(many ? [vName(g.car)] : []), g.n, r2(g.fare), -r2(g.fee), r2(g.ref), -r2(g.drv), -r2(g.exp), g.op]),
+  ["Total", "", ...(many ? [""] : []), sum(R, g => g.n), r2(sum(R, g => g.fare)), -r2(sum(R, g => g.fee)), r2(sum(R, g => g.ref)), -r2(sum(R, g => g.drv)), -r2(sum(R, g => g.exp)), r2(sum(R, g => g.op))]];
+const grpSel = (id, val) => `<select id="${id}" aria-label="Group trips">${opts({day: "By day", week: "By week", month: "By month"}, val || "week")}</select>`;
+// the car page
+function vehTripsTab(id){
+  return tripTable(tripRows([id], S.vehGroup || "week"), "vtrips-" + id, `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · newest first</span><div class="row">${dlBtn("vled", id)}${grpSel("vgrp", S.vehGroup)}</div></div>`, false);
+}
+DL.vled = id => [`trip_summary_${norm(vName(id))}_${S.from}_${S.to}.csv`, tripCsv(tripRows([id], S.vehGroup || "week"), false)];
+// the investor page
+const invTrips = id => tripRows(invModel(id).cars.map(c => c.id), S.invGroup);
+function invTripsTab(id){
+  return tripTable(invTrips(id), "invtrips-" + id, `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · his cars' trips · newest first</span><div class="row">${dlBtn("invtrips", id)}${grpSel("igrp", S.invGroup)}</div></div>`, true);
+}
+DL.invtrips = id => [`investor_trips_${norm(iName(id))}_${S.from}_${S.to}.csv`, tripCsv(invTrips(id), true)];
 
 /* ---------- Profit & share, and its finalisation ---------- */
+/* The same statement as the car P&L, for all his cars together: Revenue → Direct costs → Gross profit → Expenses
+   (incl. the company's management fee) → Net profit. On "management fee only" terms all of it is his; on a % share
+   the company's part is taken off. Then the bank instalments recovered from him → net payable. */
 function invStmt(M){
   const R = [], H = label => R.push({k: "h", label}), I = (label, a) => R.push({k: "i", label, a: r2(a)}), T = (label, b, k = "s") => R.push({k, label, b: r2(b)});
-  H("Share of profit");
-  M.cars.forEach(c => I(`${c.name} – ${c.terms.replace(/^[^:]*: /, "") || "share"}`, c.share));
-  T("Total share of profit", M.share);
-  if(M.emi){ H("Less: bank instalments recovered"); M.cars.filter(c => c.emi).forEach(c => I(`${c.name} – ${(c.f || {}).bank || "bank"}${(c.f || {}).facility ? " " + c.f.facility : ""} (${c.emiN})`, -c.emi)); T("Total instalments", -M.emi); }
-  T("Net profit for the period", M.net, "g");
+  const pl = {}, cat = {}; let ref = 0, drv = 0, mgmt = 0, outVat = 0;
+  M.cars.forEach(c => { const P = vehPLModel(c.id);
+    Object.entries(P.byPl).forEach(([k, b]) => { const x = pl[k] ||= {f: 0, fee: 0, n: 0}; x.f += b.f; x.fee += b.fee; x.n += b.n; });
+    Object.entries(P.byCat).forEach(([k, val]) => cat[k] = (cat[k] || 0) + val);
+    ref += P.v.ref; drv += P.v.drvCost; mgmt += P.v.mgmt; if(P.fareStd && P.v.fareRev) outVat += sum(Object.values(P.byPl), b => b.f) - P.v.fareRev; });
+  const pls = Object.entries(pl).sort((x, y) => y[1].f - x[1].f), fees = sum(pls, ([, b]) => b.fee), DIRECT = ["5200", "5210"];
+  H("Revenue");
+  pls.forEach(([k, b]) => I(`${pName(k)} – fares (${b.n} trips)`, b.f));
+  if(r2(outVat)) I("Less: output VAT on fares", -outVat);
+  if(r2(ref)) I("Tolls & fees recovered", ref);
+  const rev = r2(sum(pls, ([, b]) => b.f) - outVat + ref); T("Total revenue", rev);
+  H("Direct costs");
+  pls.forEach(([k, b]) => { if(r2(b.fee)) I(`${pName(k)} service fee & VAT`, -b.fee); });
+  I("Driver cost (earnings share / salary)", -drv);
+  let direct = fees + drv; DIRECT.forEach(c => { if(cat[c]){ I(EXP_CATS[c], -cat[c]); direct += cat[c]; } });
+  T("Total direct costs", -direct);
+  const gross = r2(rev - direct); T("Gross profit", gross);
+  H("Expenses");
+  let ex = 0; Object.entries(cat).filter(([c]) => !DIRECT.includes(c)).forEach(([c, val]) => { I(EXP_CATS[c] || "Other expenses", -val); ex += val; });
+  if(r2(mgmt)){ I("Management fee – company", -mgmt); ex += mgmt; }
+  if(!r2(ex)) I("No expenses in this period", 0);
+  T("Total expenses", -ex);
+  const net = r2(gross - ex);
+  if(Math.abs(net - M.share) > 0.01){ T("Net profit of the cars", net); I("Less: company's share of the profit (per the terms)", -(net - M.share)); T("Investor's share", M.share); }
+  else T("Net profit – investor's", net);
+  if(M.emi){ H("Less: bank instalments recovered"); M.cars.filter(c => c.emi).forEach(c => I(`${c.name} – ${(c.f || {}).bank || "bank"}${(c.f || {}).facility ? " " + c.f.facility : ""} (${c.emiN})`, -c.emi)); }
+  T("Net payable to the investor", M.net, "g");
   return R;
 }
 function invPLTab(id){
@@ -62,12 +100,16 @@ function invPLTab(id){
     : over ? `<div class="banner">Part of this period is already finalised (${esc(dmyS(over.from))} – ${esc(dmyS(over.to))}). Choose the same dates at the top to see it.</div>` : "";
   return `${status}<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · share after the management fee and any repairs he bears</span>
     <div class="row">${dlBtn("invpl", id)}<button class="btn sm" data-invprint="${esc(id)}">Print / PDF</button>${fin ? `<button class="btn sm danger" data-invreopen="${esc(fin.id)}">Reopen</button>` : over ? "" : `<button class="btn sm primary" data-invfin="${esc(id)}" ${S.canWrite && M.cars.length ? "" : "disabled"}>Finalise ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</button>`}</div></div>
-  ${tbl}<style>${VPL_CSS}</style><div class="tbl" style="max-width:760px;padding:6px 4px;margin-top:12px"><div style="text-align:center;margin:6px 0 2px"><b>${esc(iName(id))} – Profit & share</b><div class="small muted">For the period ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</div></div>${stmtTable(invStmt(M))}</div>
+  <style>${VPL_CSS}</style><div class="tbl" style="max-width:760px;padding:6px 4px"><div style="text-align:center;margin:6px 0 2px"><b>${esc(iName(id))} – Profit & loss statement</b><div class="small muted">For the period ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</div></div>${stmtTable(invStmt(M))}</div>
+  <h3 style="margin:16px 0 6px">By car</h3>${tbl}
   <p class="small muted" style="margin-top:6px">Finalising credits the net profit to his Transactions. A finalised period can be reopened (here or from Transactions) and finalised again.</p>`;
 }
 DL.invpl = id => { const M = invModel(id);
-  return [`investor_profit_${norm(iName(id))}_${S.from}_${S.to}.csv`, [["Car","Terms","Trips","Net revenue","Driver cost","Car expenses","Operating profit","Mgmt fee","Investor's share","Bank instalment"],
-    ...M.cars.map(c => [c.name, c.terms, c.n, c.rev, -c.drv, -c.exp, c.op, c.mgmt, c.share, -c.emi]), ["Total", "", sum(M.cars, c => c.n), "", "", "", "", "", M.share, -M.emi], ["Net profit for the period", "", "", "", "", "", "", "", M.net, ""]]]; };
+  if(window.__fmt === "pdf"){ printInvPL(id); return null; }
+  return [`investor_profit_${norm(iName(id))}_${S.from}_${S.to}.csv`, [[`${iName(id)} – Profit & loss statement, ${dmyS(S.from)} to ${dmyS(S.to)}`, "AED"],
+    ...invStmt(M).map(r => r.k === "h" ? [r.label.toUpperCase(), ""] : r.k === "i" ? ["   " + r.label, r.a] : [r.label, r.b]), ["", ""], ["BY CAR", ""],
+    ...M.cars.map(c => ["   " + c.name + " – " + c.terms + " – " + c.n + " trips – operating profit " + fmt(c.op) + " – management fee " + fmt(c.mgmt), c.share])]];
+};
 async function invFinalise(id){
   if(invOverlap(id)){ toast("Part of this period is already finalised."); return; }
   const M = invModel(id), by = (S.user && (S.user.name || S.user.id)) || "";
@@ -78,7 +120,7 @@ async function invFinalise(id){
 async function printInvPL(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   const M = invModel(id), s = S.settings, co = s.company || "Royal Rides Limousine LLC", x = S.investors[id] || {}, addr = [s.address, s.trn ? "TRN " + s.trn : ""].filter(Boolean).join(" · "), fin = invFin(id);
-  const html = `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>INVESTOR PROFIT STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
+  const html = `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>INVESTOR PROFIT & LOSS</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
     <table class="info"><tr><td class="l">Investor</td><td><b>${esc(x.name || "")}</b></td><td class="l">Phone</td><td>${esc(x.phone || "—")}</td></tr><tr><td class="l">Cars</td><td>${esc(M.cars.map(c => c.name).join(", ") || "—")}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Not finalised"}</td></tr></table>
     <table class="perf"><tr><th>Car</th><th>Trips</th><th>Net revenue</th><th>Driver cost</th><th>Car expenses</th><th>Operating profit</th><th>Mgmt fee</th><th>Share</th></tr>${M.cars.map(c => `<tr><td>${esc(c.name)}</td><td>${c.n}</td><td>${fmt(c.rev)}</td><td>${fmt(-c.drv)}</td><td>${fmt(-c.exp)}</td><td>${fmt(c.op)}</td><td>${fmt(c.mgmt)}</td><td><b>${fmt(c.share)}</b></td></tr>`).join("")}</table>
     <div class="vbox">${stmtTable(invStmt(M))}</div>
@@ -144,4 +186,4 @@ document.addEventListener("click", async ev => {
   if(t.dataset.payinv || t.dataset.recvinv){ const k = t.dataset.payinv ? "payment" : "receipt", id = t.dataset.payinv || t.dataset.recvinv; S.view = k === "payment" ? "payments" : "receipts"; S.invView = ""; if(window.BOOKS) BOOKS.newInvestorDoc(k, id, num(t.dataset.amt)); render(); window.scrollTo(0,0); return; }
 });
 document.addEventListener("change", ev => { if(ev.target.id === "igrp"){ S.invGroup = ev.target.value; render(); } });
-window.investorDetail = investorDetail;
+window.investorDetail = investorDetail; window.vehTripsTab = vehTripsTab; window.tripRows = tripRows;

@@ -196,7 +196,7 @@ const ENTRY_TYPES = {
   investor_payout:"Payout to investor", investor_receipt:"Received from investor", card_settlement:"Card machine settlement to bank", transfer:"Inter-account transfer"
 };
 const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
-const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
+const INV_MODELS = {profit_share:"% share of profit", mgmt_only:"Management fee only – the rest of the profit to the investor", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
 /* Platforms and other parties the company has a contract with. Trips carry pl (platform id);
    trips saved before platforms existed have none and count as Uber. Each platform has its own
    clearing (receivable) account, so what each one owes is tracked separately. */
@@ -467,7 +467,7 @@ function drvTermTextFull(t){ return drvTermText(t) + (t && num(t.rtaPerDay) ? " 
 }
 function vehTermText(t){
   if(!t) return "—";
-  const inv = !t.investorId ? "Company-owned" : (S.investors[t.investorId] ? S.investors[t.investorId].name : "Investor") + ": " + ((t.invModel||"profit_share")==="fixed" ? "fixed "+fmt(num(t.invFixed))+"/mo" : num(t.invPct)+"% of profit");
+  const inv = !t.investorId ? "Company-owned" : (S.investors[t.investorId] ? S.investors[t.investorId].name : "Investor") + ": " + ((t.invModel||"profit_share")==="fixed" ? "fixed "+fmt(num(t.invFixed))+"/mo" : t.invModel==="mgmt_only" ? "net profit after the management fee" : num(t.invPct)+"% of profit");
   return inv + (num(t.mgmtFixed) ? " · fee "+fmt(num(t.mgmtFixed))+"/mo" : "") + (num(t.mgmtPct) ? " · "+num(t.mgmtPct)+"% of revenue" : "") + (t.investorId && t.rmBy && t.rmBy !== "shared" ? " · repairs: " + (t.rmBy === "investor" ? "investor 100%" : "company 100%") : "");
 }
 // the terms in force during [from,to], e.g. "35% commission → 40% commission from 15/09/2026"
@@ -568,8 +568,8 @@ function compute(){
       g.mgmt = g.mgmtFix + fareRev * num(t.mgmtPct)/100;
       const model = t.investorId ? (t.invModel || "profit_share") : "none";
       // repairs & maintenance: shared before the split (default), or carried 100% by the investor or by the company
-      const rmBy = model === "none" ? "shared" : (t.rmBy || "shared"), back = rmBy === "shared" ? 0 : g.rm, onInv = rmBy === "investor" ? g.rm : 0;
-      g.inv = model === "profit_share" ? (g.op + back - g.mgmt) * num(t.invPct)/100 - onInv : model === "fixed" ? g.invFix - onInv : 0;
+      const rmBy = model === "none" || model === "mgmt_only" ? "shared" : (t.rmBy || "shared"), back = rmBy === "shared" ? 0 : g.rm, onInv = rmBy === "investor" ? g.rm : 0;
+      g.inv = model === "mgmt_only" ? g.op - g.mgmt : model === "profit_share" ? (g.op + back - g.mgmt) * num(t.invPct)/100 - onInv : model === "fixed" ? g.invFix - onInv : 0;
       g.rmBy = rmBy; v.rm += g.rm; v.rmInv += onInv;
       v.fareRev += fareRev; v.op += g.op; v.mgmt += g.mgmt; v.invShare += g.inv; v.drvCost += g.drv; v.exp += g.exp;
       if(t.investorId) v.byInv[t.investorId] = (v.byInv[t.investorId] || 0) + g.inv;
@@ -1122,6 +1122,7 @@ function vehicleDetail(id){
   let body;
   if(tab === "fin") body = window.vehFinTab ? vehFinTab(id) : "";
   else if(tab === "pl") body = window.vehPLTab ? vehPLTab(id) : "";
+  else if(tab === "ledger" && window.vehTripsTab) body = vehTripsTab(id);
   else if(tab === "assign"){
     body = `<form class="form" id="fVehAssign" data-id="${esc(id)}">
       <div class="f"><label for="va_d">Driver</label><select id="va_d" name="driverId">${listOpts(S.drivers, d => d.name || d.id, cur, "No driver")}</select></div>
@@ -1140,7 +1141,7 @@ function vehicleDetail(id){
   }
   return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p><p class="sub">Mulkiya ${v.mulkiyaNo ? esc(v.mulkiyaNo) + " " : ""}expires ${expiryCell(v.mulkiyaExpiry)} · Insurance${v.insurer ? " (" + esc(v.insurer) + (v.policyNo ? " " + esc(v.policyNo) : "") + ")" : ""} expires ${expiryCell(v.insuranceExpiry)}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
-  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", pl:"Profit & loss", ledger:"Ledger", fin:"Purchase & finance"})}${body}</div>`;
+  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", pl:"Profit & loss", ledger:"Trip summary", fin:"Purchase & finance"})}${body}</div>`;
 }
 DL.vled = id => { const R = vehLedger(id); return [`car_ledger_${norm(vName(id))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit","Credit","Balance"], ...R.L.map(l => [l.date, l.desc, l.dr ? r2(l.dr) : "", l.cr ? r2(l.cr) : "", r2(l.bal)])]]; };
 DL.vasg = id => [`car_assignments_${norm(vName(id))}.csv`, [["From","Driver","Note","Changed by"], ...vehDrv(S.vehicles[id]).map(a => [a.from === BEGIN ? "start" : a.from, a.driverId ? dName(a.driverId) : "Not assigned", a.note || "", a.by || ""])]];
@@ -1807,7 +1808,9 @@ async function savePdf(name, rows){
     if(!window.jspdf) await loadJs("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
     if(!window.jspdf.jsPDF.API.autoTable) await loadJs("https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js");
   }catch(e){ toast("The PDF tool could not load – check the internet connection, or use Excel."); return; }
-  const head = (rows[0] || []).map(h => String(h ?? "")), body = rows.slice(1).map(r => head.map((_, j) => r[j] == null ? "" : String(r[j]))), wide = head.length > 7;
+  // amounts with thousands separators and 2 decimals (a column of whole numbers, e.g. trips, stays as it is); ISO dates as dd/mm/yyyy
+  const dec = (rows[0] || []).map((_, j) => rows.slice(1).some(r => typeof r[j] === "number" && !Number.isInteger(r[j])));
+  const head = (rows[0] || []).map(h => String(h ?? "")), body = rows.slice(1).map(r => head.map((_, j) => { const c = r[j]; return c == null ? "" : typeof c === "number" ? (dec[j] ? fmt(c) : String(c)) : /^\d{4}-\d{2}-\d{2}$/.test(c) ? dmyS(c) : String(c); })), wide = head.length > 7;
   const isNum = v => /^-?[\d,]+(\.\d+)?$/.test(v);
   const colStyles = {}; head.forEach((_, j) => { const vals = body.map(r => r[j]).filter(v => v !== ""); if(vals.length && vals.filter(isNum).length / vals.length > 0.8) colStyles[j] = {halign: "right"}; });
   const co = S.settings.company || "Royal Rides Limousine LLC", title = reportTitle(name), per = dmyS(S.from) + " – " + dmyS(S.to);
@@ -1962,12 +1965,12 @@ document.addEventListener("click", async ev => {
 
 boot();
 </script>
-<script src="docs.js?v=4"></script>
+<script src="docs.js?v=5"></script>
 <script src="books.js?v=12"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
-<script src="investors.js?v=1"></script>
+<script src="investors.js?v=2"></script>
 <script src="fleetfin.js?v=7"></script>
 
 </body></html>

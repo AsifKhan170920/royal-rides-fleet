@@ -114,7 +114,7 @@ function empOfferBody(x) {
   ].join("");
 }
 function agreementBody(x) {
-  const ret = x.invModel === "fixed" ? `a fixed amount of <b>${aedT(x.invFixed)} per month</b> for each month of the term, pro-rated for part months`
+  const ret = x.invModel === "mgmt_only" ? `the <b>whole Operating Profit</b> of the Vehicle(s) remaining after the Management Fee (the Company keeps only the Management Fee)` : x.invModel === "fixed" ? `a fixed amount of <b>${aedT(x.invFixed)} per month</b> for each month of the term, pro-rated for part months`
     : `<b>${num(x.invPct)}%</b> of the Operating Profit of the Vehicle(s) remaining after the Management Fee`;
   const fee = [num(x.mgmtFixed) ? `${aedT(x.mgmtFixed)} per vehicle per month` : "", num(x.mgmtPct) ? `${num(x.mgmtPct)}% of the fare revenue` : ""].filter(Boolean).join(" plus ") || "nil";
   const contrib = x.contribution === "funds" ? `the sum of <b>${aedT(x.amount)}</b> for the purchase of the Vehicle(s) listed below`
@@ -244,7 +244,7 @@ function docEditor(e) {
   ] : [
     fld("name", "Investor name", x), fld("nationality", "Nationality", x), fld("idNo", "Emirates ID / passport", x), fld("phone", "Mobile", x),
     fld("email", "Email", x), fld("address", "Address", x), sel("contribution", "Investor provides", x, { vehicle: "Vehicle(s)", funds: "Funds to buy vehicle(s)", both: "Vehicle(s) and funds" }), fld("amount", "Amount (AED, if funds)", x, "number"),
-    sel("invModel", "Investor return", x, { profit_share: "% share of profit", fixed: "Fixed monthly amount" }), fld("invPct", "Profit share %", x, "number"), fld("invFixed", "Fixed amount / month", x, "number"), fld("payDay", "Paid by day of month", x, "number"),
+    sel("invModel", "Investor return", x, { profit_share: "% share of profit", mgmt_only: "Management fee only – rest to the investor", fixed: "Fixed monthly amount" }), fld("invPct", "Profit share %", x, "number"), fld("invFixed", "Fixed amount / month", x, "number"), fld("payDay", "Paid by day of month", x, "number"),
     fld("mgmtFixed", "Management fee / vehicle / month", x, "number"), fld("mgmtPct", "Management fee % of fare revenue", x, "number"), fld("start", "Start date", x, "date"), fld("termMonths", "Term (months)", x, "number"),
     fld("noticeDays", "Notice to end (days)", x, "number"), sel("insurance", "Insurance and registration paid by", x, { company: "Company (as vehicle expense)", investor: "Investor" }),
     area("cars", "Vehicles (one per line)", x), fld("bank", "Investor bank / IBAN", x), area("other", "Other terms (optional)", x),
