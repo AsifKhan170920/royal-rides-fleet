@@ -142,6 +142,7 @@ function empStatement(id, entries){
    employee's payslip to a month (e.g. a joiner, a final settlement or a bonus). The employee's advance / loan
    balance and salary payable balance are shown on his row while entering. */
 const lineId = () => "l" + uid();
+const upAmt = l => l.unpaidAmt != null ? num(l.unpaidAmt) : r2(num(l.gross) / 30 * num(l.unpaidDays));
 function calcLine(e, d){
   const basic = num(e.basic), housing = num(e.housing), transport = num(e.transport), other = num(e.otherAllow), g = r2(basic + housing + transport + other);
   const unpaidAmt = r2(g / 30 * num(d.unpaidDays)), addAmt = num(d.addAmt), otherDed = num(d.otherDed), earned = r2(g - unpaidAmt + addAmt - otherDed);
@@ -152,8 +153,14 @@ const payEmps = month => Object.values(S.employees).filter(e => e.active !== fal
 const runDate = (month, run) => (run && run.date) || (S.payDraft && S.payDraft.month === month && S.payDraft.date) || monthEnd(month);
 // balances to show while entering: advances & loans outstanding, salary payable
 function empBal(id){ if(!historyReady()) return null; const st = empStatement(id, histEntries2()); return {adv: st.adv, pay: st.bal}; }
+function payDefaultMonth(){
+  // the earliest open month, else the first month after the last posted one (from this month)
+  const open = Object.values(S.emppay).filter(r => !r.posted).map(r => r.month).sort()[0]; if(open) return open;
+  let m = iso(new Date()).slice(0,7); while(S.emppay[m] && S.emppay[m].posted) m = addMonths(m + "-01", 1).slice(0,7); return m;
+}
 function vEmpPayroll(){
-  const month = S.payMonth || S.to.slice(0,7), run = S.emppay[month], posted = run && run.posted;
+  if(!S.payMonth) S.payMonth = payDefaultMonth();
+  const month = S.payMonth, run = S.emppay[month], posted = run && run.posted;
   if(S.slipEdit) return slipForm();
   if(S.slipShow) return slipShow();
   const emps = payEmps(month);
@@ -164,30 +171,30 @@ function vEmpPayroll(){
   const num_ = (l, k, w = 70) => `<input type="number" step="0.01" data-payl="${esc(l.empId)}" data-payk="${k}" value="${esc(l[k] || "")}" style="width:${w}px;text-align:right" ${posted ? "disabled" : ""}>`;
   const txt = (l, k, ph) => `<input data-payl="${esc(l.empId)}" data-payk="${k}" value="${esc(l[k] || "")}" placeholder="${ph}" style="width:120px;margin-top:3px;font-size:12px" ${posted ? "disabled" : ""}>`;
   const balCell = l => { const b = empBal(l.empId); return b ? `<div class="small">Adv./loan <b>${fmt(b.adv)}</b></div><div class="small muted">Payable ${fmt(b.pay)}</div>` : '<span class="small muted">…</span>'; };
-  const table = lines.length ? `<div class="tbl"><table><thead><tr><th>Employee</th><th class="num">Gross</th><th class="num">Unpaid days</th><th class="num">Additions</th><th class="num">Other deductions</th><th class="num">Earned</th><th>Balances</th><th class="num">Advance / loan recovered</th><th class="num">Net pay</th></tr></thead><tbody>
+  const table = posted ? `<div class="banner info">Payroll <b>${esc(month)}</b> is posted – it is in the register below. Click <b>Edit</b> there to bring it back here, change it and post it again.</div>` : lines.length ? `<div class="tbl"><table><thead><tr><th>Employee</th><th class="num">Gross</th><th class="num">Unpaid days</th><th class="num">Additions</th><th class="num">Other deductions</th><th class="num">Earned</th><th>Balances</th><th class="num">Advance / loan recovered</th><th class="num">Net pay</th></tr></thead><tbody>
     ${lines.map(l => `<tr><td><b>${esc(l.name)}</b><div class="small muted">${esc(DEPTS[l.dept] || "")}${l.designation ? " · " + esc(l.designation) : ""}</div></td><td class="num">${fmt(l.gross)}<div class="small muted">basic ${fmt(l.basic)}</div></td>
-      <td class="num">${num_(l, "unpaidDays", 55)}${l.unpaidAmt ? `<div class="small neg">−${fmt(l.unpaidAmt)}</div>` : ""}</td>
+      <td class="num">${num_(l, "unpaidDays", 55)}${upAmt(l) ? `<div class="small neg">−${fmt(upAmt(l))}</div>` : ""}</td>
       <td class="num">${num_(l, "addAmt")}${posted ? (l.addNote ? `<div class="small muted">${esc(l.addNote)}</div>` : "") : `<div>${txt(l, "addNote", "e.g. overtime, bonus")}</div>`}</td>
       <td class="num">${num_(l, "otherDed")}${posted ? (l.dedNote ? `<div class="small muted">${esc(l.dedNote)}</div>` : "") : `<div>${txt(l, "dedNote", "describe the deduction")}</div>`}</td>
       <td class="num">${fmt(l.earned)}</td><td>${balCell(l)}</td><td class="num">${num_(l, "recover")}</td><td class="num"><b>${fmt(l.net)}</b></td>
     </tr>`).join("")}
-    </tbody><tfoot><tr><td>${lines.length} employee(s)</td><td class="num">${fmt(sum(lines, l => l.gross))}</td><td class="num">${fmt(-sum(lines, l => num(l.unpaidAmt)))}</td><td class="num">${fmt(sum(lines, l => num(l.addAmt)))}</td><td class="num">${fmt(-sum(lines, l => num(l.otherDed)))}</td><td class="num">${fmt(sum(lines, l => l.earned))}</td><td></td><td class="num">${fmt(sum(lines, l => l.recover))}</td><td class="num"><b>${fmt(sum(lines, l => l.net))}</b></td></tr></tfoot></table></div>
-    <p class="small muted" style="margin-top:6px">Unpaid days are deducted at gross ÷ 30 per day. Advance / loan recovered moves the amount from 1180 Staff advances & loans to salary payable.${posted ? ` <b>Posted</b> ${esc(new Date(run.at).toLocaleString("en-GB"))}${run.by ? " by " + esc(run.by) : ""} – the payslips are in the register below (View, Edit, Delete, Pay); Reopen to change the amounts here.` : ""}</p>`
+    </tbody><tfoot><tr><td>${lines.length} employee(s)</td><td class="num">${fmt(sum(lines, l => l.gross))}</td><td class="num">${fmt(-sum(lines, l => upAmt(l)))}</td><td class="num">${fmt(sum(lines, l => num(l.addAmt)))}</td><td class="num">${fmt(-sum(lines, l => num(l.otherDed)))}</td><td class="num">${fmt(sum(lines, l => l.earned))}</td><td></td><td class="num">${fmt(sum(lines, l => l.recover))}</td><td class="num"><b>${fmt(sum(lines, l => l.net))}</b></td></tr></tfoot></table></div>
+    <p class="small muted" style="margin-top:6px">Unpaid days are deducted at gross ÷ 30 per day. Advance / loan recovered moves the amount from 1180 Staff advances & loans to salary payable. Post to book the salaries and move the month to the register.</p>`
     : `<div class="empty"><b>No active employees for this month</b>Add employees on the Employees page.</div>`;
-  const runs = Object.values(S.emppay).sort((a, b) => b.month.localeCompare(a.month));
-  const act = (r, l) => `<div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-slipshow="${esc(r.month)}" data-lid="${esc(l.lid || "")}">View</button><button class="btn sm" data-slipedit="${esc(r.month)}" data-lid="${esc(l.lid || "")}">Edit</button><button class="btn sm danger" data-slipdel="${esc(r.month)}" data-lid="${esc(l.lid || "")}">Delete</button>${l.net > 0 ? `<button class="btn sm primary" data-emppay="${esc(l.empId)}" data-amt="${l.net}">Pay</button>` : ""}</div>`;
-  const register = `<div class="section"><div class="head"><div><h2>Payroll register</h2><p class="sub">Every posted payslip, by month: View (print / PDF for signature and stamp), Edit, Delete, Pay. Open a month above to enter its amounts and post it.</p></div>${dlBtn("payreg")}</div>
+  const runs = Object.values(S.emppay).filter(r => r.posted).sort((a, b) => b.month.localeCompare(a.month));
+  const act = (r, l) => `<div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-slipshow="${esc(r.month)}" data-lid="${esc(l.lid || "")}">View</button><button class="btn sm" data-payedit="${esc(r.month)}">Edit</button><button class="btn sm danger" data-slipdel="${esc(r.month)}" data-lid="${esc(l.lid || "")}">Delete</button>${l.net > 0 ? `<button class="btn sm primary" data-emppay="${esc(l.empId)}" data-amt="${l.net}">Pay</button>` : ""}</div>`;
+  const register = `<div class="section"><div class="head"><div><h2>Payroll register</h2><p class="sub">Every posted payslip, by month: View (print / PDF for signature and stamp), Delete, Pay. Edit brings the month back up to change it; posting it again returns it here.</p></div>${dlBtn("payreg")}</div>
     ${runs.length ? `<div class="tbl"><table><thead><tr><th>Month / employee</th><th>Payroll date</th><th class="num">Gross</th><th class="num">Deductions</th><th class="num">Additions</th><th class="num">Advance recovered</th><th class="num">Net pay</th><th></th></tr></thead><tbody>
     ${runs.map(r => { const L = (r.lines || []).slice().sort((x, y) => (x.name || "").localeCompare(y.name || ""));
-      return `<tr style="background:var(--bg)"><td><b>${esc(r.month)}</b> ${r.posted ? '<span class="pill good">Posted</span>' : '<span class="pill warn">Draft</span>'} <span class="small muted">${L.length} payslip${L.length === 1 ? "" : "s"}</span></td><td>${esc(dmyS(r.date || monthEnd(r.month)))}</td><td class="num"><b>${fmt(sum(L, l => l.gross))}</b></td><td class="num"><b>${fmt(sum(L, l => num(l.unpaidAmt) + num(l.otherDed)))}</b></td><td class="num"><b>${fmt(sum(L, l => num(l.addAmt)))}</b></td><td class="num"><b>${fmt(sum(L, l => num(l.recover)))}</b></td><td class="num"><b>${fmt(sum(L, l => l.net))}</b></td><td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-paymonth="${esc(r.month)}">Open</button>${r.posted ? `<button class="btn sm" data-slipprintall="${esc(r.month)}">All payslips PDF</button>` : ""}</div></td></tr>
-      ${r.posted ? L.map(l => `<tr><td style="padding-left:22px">${esc(l.name)}<div class="small muted">${esc(DEPTS[l.dept] || "")}${num(l.unpaidDays) ? ` · ${num(l.unpaidDays)} unpaid day${num(l.unpaidDays) === 1 ? "" : "s"}` : ""}</div></td><td></td><td class="num">${fmt(l.gross)}</td><td class="num">${fmt(num(l.unpaidAmt) + num(l.otherDed))}</td><td class="num">${fmt(num(l.addAmt))}</td><td class="num">${fmt(num(l.recover))}</td><td class="num"><b>${fmt(l.net)}</b></td><td>${act(r, l)}</td></tr>`).join("") : ""}`; }).join("")}
+      return `<tr style="background:var(--bg)"><td><b>${esc(r.month)}</b> ${r.posted ? '<span class="pill good">Posted</span>' : '<span class="pill warn">Draft</span>'} <span class="small muted">${L.length} payslip${L.length === 1 ? "" : "s"}</span></td><td>${esc(dmyS(r.date || monthEnd(r.month)))}</td><td class="num"><b>${fmt(sum(L, l => l.gross))}</b></td><td class="num"><b>${fmt(sum(L, l => upAmt(l) + num(l.otherDed)))}</b></td><td class="num"><b>${fmt(sum(L, l => num(l.addAmt)))}</b></td><td class="num"><b>${fmt(sum(L, l => num(l.recover)))}</b></td><td class="num"><b>${fmt(sum(L, l => l.net))}</b></td><td><div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-payedit="${esc(r.month)}">Edit</button><button class="btn sm" data-slipprintall="${esc(r.month)}">All payslips PDF</button></div></td></tr>
+      ${r.posted ? L.map(l => `<tr><td style="padding-left:22px">${esc(l.name)}<div class="small muted">${esc(DEPTS[l.dept] || "")}${num(l.unpaidDays) ? ` · ${num(l.unpaidDays)} unpaid day${num(l.unpaidDays) === 1 ? "" : "s"}` : ""}</div></td><td></td><td class="num">${fmt(l.gross)}</td><td class="num">${fmt(upAmt(l) + num(l.otherDed))}</td><td class="num">${fmt(num(l.addAmt))}</td><td class="num">${fmt(num(l.recover))}</td><td class="num"><b>${fmt(l.net)}</b></td><td>${act(r, l)}</td></tr>`).join("") : ""}`; }).join("")}
     </tbody></table></div>` : `<p class="sub">No payroll posted yet.</p>`}</div>`;
   return `<div class="section"><div class="head"><div><h2>Employee payroll · ${esc(month)}</h2><p class="sub">Monthly salaries of employees (not drivers). Posting books Dr salaries (administrative expenses, by department) / Cr 2110 Staff salaries payable on the payroll date, and adds the payslips to the register.</p></div>
-    <div class="row"><select id="payM" aria-label="Month">${opts(Object.fromEntries(months.map(m => [m, m])), month)}</select><label class="small">Payroll date <input id="payD" type="date" value="${esc(runDate(month, run))}"></label>${posted ? `<span class="pill good">Posted</span>${fmtGroup('data-legacy="payCsv"')}<button class="btn danger" id="payReopen">Reopen</button>` : `<button class="btn primary" id="payPost" ${S.canWrite && S.db && lines.length ? "" : "disabled"}>Post payroll</button>`}<button class="btn" data-slipnew="${esc(month)}">New payslip</button></div></div>
+    <div class="row"><select id="payM" aria-label="Month">${opts(Object.fromEntries(months.map(m => [m, m])), month)}</select><label class="small">Payroll date <input id="payD" type="date" value="${esc(runDate(month, run))}"></label>${posted ? `<span class="pill good">Posted</span>` : `<button class="btn primary" id="payPost" ${S.canWrite && S.db && lines.length ? "" : "disabled"}>Post payroll</button>`}<button class="btn" data-slipnew="${esc(month)}">New payslip</button></div></div>
   ${table}</div>${register}`;
 }
 DL.payreg = () => [`payroll_register.csv`, [["Month","Payroll date","Employee","Department","Gross","Unpaid days","Unpaid amount","Additions","Additions note","Other deductions","Deduction note","Earned","Advance / loan recovered","Net pay","Status"],
-  ...Object.values(S.emppay).sort((a, b) => a.month.localeCompare(b.month)).flatMap(r => (r.lines || []).map(l => [r.month, r.date || monthEnd(r.month), l.name, DEPTS[l.dept] || "", l.gross, num(l.unpaidDays), num(l.unpaidAmt), num(l.addAmt), l.addNote || "", num(l.otherDed), l.dedNote || "", l.earned, num(l.recover), l.net, r.posted ? "Posted" : "Draft"]))]];
+  ...Object.values(S.emppay).sort((a, b) => a.month.localeCompare(b.month)).flatMap(r => (r.lines || []).map(l => [r.month, r.date || monthEnd(r.month), l.name, DEPTS[l.dept] || "", l.gross, num(l.unpaidDays), upAmt(l), num(l.addAmt), l.addNote || "", num(l.otherDed), l.dedNote || "", l.earned, num(l.recover), l.net, r.posted ? "Posted" : "Draft"]))]];
 
 /* a single payslip: new or edit */
 function slipForm(){
@@ -213,7 +220,7 @@ function payslipHtml(run, l){
   const earn = [["Basic salary", l.basic], ["Housing allowance", l.housing], ["Transport allowance", l.transport], ["Other allowance", l.otherAllow]].filter(([, v]) => v != null && num(v));
   if(l.housing == null && num(l.allow)) earn.push(["Allowances", l.allow]);
   if(num(l.addAmt)) earn.push([`Additions${l.addNote ? " – " + esc(l.addNote) : ""}`, l.addAmt]);
-  const ded = []; if(num(l.unpaidAmt) || num(l.unpaidDays)) ded.push([`Unpaid leave – ${num(l.unpaidDays)} day${num(l.unpaidDays) === 1 ? "" : "s"}`, num(l.unpaidAmt) || r2(l.gross / 30 * num(l.unpaidDays))]);
+  const ded = []; if(upAmt(l) || num(l.unpaidDays)) ded.push([`Unpaid leave – ${num(l.unpaidDays)} day${num(l.unpaidDays) === 1 ? "" : "s"}`, upAmt(l) || r2(l.gross / 30 * num(l.unpaidDays))]);
   if(num(l.otherDed)) ded.push([`Other deductions${l.dedNote ? " – " + esc(l.dedNote) : ""}`, l.otherDed]); if(num(l.recover)) ded.push(["Advance / loan recovered", l.recover]);
   const tEarn = sum(earn, x => num(x[1])), tDed = sum(ded, x => num(x[1]));
   return `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>PAYSLIP</b><span>${esc(monthTxt)} · paid on ${esc(dmyS(run.date || monthEnd(run.month)))}</span></div></div>
@@ -286,8 +293,13 @@ document.addEventListener("click", async ev => {
     // every active employee, plus payslips already added to the month for anyone else
     const lines = [...emps.map(e => calcLine(e, d.lines[e.id] || {})), ...((run && run.lines) || []).filter(l => !emps.some(e => e.id === l.empId))];
     t.disabled = true;
-    if(await writeOk(S.db.doc("emppay/" + month).set({month, date: d.date || monthEnd(month), lines, posted: true, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}))){ S.payDraft = null; toast(`Payroll ${month} posted on ${dmyS(d.date || monthEnd(month))} – ${lines.length} payslips in the register.`); render(); }
+    if(await writeOk(S.db.doc("emppay/" + month).set({month, date: d.date || monthEnd(month), lines, posted: true, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}))){ S.payDraft = null; S.payMonth = ""; toast(`Payroll ${month} posted on ${dmyS(d.date || monthEnd(month))} – ${lines.length} payslips moved to the register.`); render(); }
     return;
+  }
+  if(t.dataset.payedit){
+    const month = t.dataset.payedit, r = S.emppay[month]; if(!r) return;
+    if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again – unposts it"; return; }
+    if(await saveRun(month, {...r, posted: false})){ S.payMonth = month; S.payDraft = null; S.slipShow = null; S.slipEdit = null; toast(`Payroll ${month} is open for editing – its salaries are not booked until you post it again.`); render(); window.scrollTo(0,0); } return;
   }
   if(t.dataset.paymonth){ S.slipShow = null; S.payMonth = t.dataset.paymonth; S.payDraft = null; S.slipEdit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.slipnew){ S.slipEdit = {month: t.dataset.slipnew, lid: "", empId: ""}; render(); window.scrollTo(0,0); return; }
@@ -310,7 +322,7 @@ document.addEventListener("click", async ev => {
     if(await writeOk(S.db.doc("emppay/" + month).set({...b, posted: false}))){ S.payDraft = null; toast("Payroll reopened."); render(); } return;
   }
   if(t.id === "payCsv" || t.dataset.legacy === "payCsv"){ const month = S.payMonth || S.to.slice(0,7), r = S.emppay[month]; if(!r) return;
-    saveCsv(`payroll_${month}.csv`, [["Employee","Department","IBAN","Basic","Allowances","Gross","Unpaid days","Unpaid amount","Additions","Additions note","Other deductions","Deduction note","Earned","Advance recovered","Net pay"], ...r.lines.map(l => [l.name, DEPTS[l.dept] || "", (S.employees[l.empId] || {}).iban || "", l.basic, l.allow, l.gross, l.unpaidDays, num(l.unpaidAmt), num(l.addAmt), l.addNote || "", l.otherDed, l.dedNote || "", l.earned, l.recover, l.net])]); return; }
+    saveCsv(`payroll_${month}.csv`, [["Employee","Department","IBAN","Basic","Allowances","Gross","Unpaid days","Unpaid amount","Additions","Additions note","Other deductions","Deduction note","Earned","Advance recovered","Net pay"], ...r.lines.map(l => [l.name, DEPTS[l.dept] || "", (S.employees[l.empId] || {}).iban || "", l.basic, l.allow, l.gross, l.unpaidDays, upAmt(l), num(l.addAmt), l.addNote || "", l.otherDed, l.dedNote || "", l.earned, l.recover, l.net])]); return; }
 });
 document.addEventListener("input", ev => {
   const t = ev.target; if(!t.dataset || !t.dataset.payl || !S.payDraft) return;
