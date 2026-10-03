@@ -163,7 +163,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -173,7 +173,7 @@ const VIEWS = [
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
-  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
+  ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["bankfin","Bank finance"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["empoffers","Employee offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
@@ -391,7 +391,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -657,6 +657,7 @@ function journal(C){
   }
   if(window.EMP) EMP.post(add);   // employee payroll runs
   if(window.FIN) FIN.post(add);   // vehicle purchases and finance instalments
+  if(window.LOANS) LOANS.post(add);   // other bank loans and facilities
   // deductions from drivers' salaries for violations
   Object.values(S.drvAdj || {}).forEach(a => { if(a.kind !== "penalty" || a.date < S.from || a.date > S.to) return; const m = `Violation deduction – ${dName(a.driverId)}${a.reason ? " – " + a.reason : ""}`; add("2100", num(a.amount), 0, m, a.date); add("4210", 0, num(a.amount), m, a.date); });
   return L;
@@ -766,8 +767,8 @@ document.addEventListener("click", ev => {
   if(t.dataset.dl && DL[t.dataset.dl]){ const out = DL[t.dataset.dl](t.dataset.id); if(out) saveCsv(out[0], out[1]); }
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
-const NAV_KEYS = ["view","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_KEYS = ["view","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
@@ -779,7 +780,7 @@ document.addEventListener("click", ev => {
   ev.stopImmediatePropagation();
   const prev = S.navStack.pop();
   if(prev) Object.assign(S, JSON.parse(prev));
-  else { S.invView = ""; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
+  else { S.invView = ""; S.loanView = ""; S.loanEdit = null; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
   S.edit = null; S.bk = null; S.pe = null; S.tripEdit = null; S.docEdit = null; S.empEdit = null; S.pdcEdit = null; S.ce = null;
   render(); window.scrollTo(0, 0);
 }, true);
@@ -1729,7 +1730,7 @@ function vSettings(){
 /* ============ events ============ */
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t) return;
-  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.coaView = ""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.loanView = ""; S.loanEdit = null; S.coaView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
   if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
   if(t.dataset.del){
@@ -1966,11 +1967,12 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=5"></script>
-<script src="books.js?v=12"></script>
+<script src="books.js?v=13"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
 <script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=7"></script>
+<script src="loans.js?v=1"></script>
 
 </body></html>
