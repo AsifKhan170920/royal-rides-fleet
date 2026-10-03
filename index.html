@@ -423,6 +423,7 @@ async function loadPeriod(){
     const cards = []; cs.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([id,r]) => cards.push({id, ...r}))); S.cardtx = cards;
     const ms = months(S.from, S.to); const ents = []; S.entryDocs = {};
     for(const m of ms){ const d = await S.db.doc("entries/"+m).get(); const rows = d.exists ? (d.data().rows||[]) : []; S.entryDocs[m] = rows; rows.forEach(r => { if(r.date >= S.from && r.date <= S.to) ents.push(r); }); }
+    if(window.PUR) ents.push(...PUR.expand(ents));   // imported fuel / Salik / EV invoice lines, per car and driver
     ents.sort((a,b)=> a.date.localeCompare(b.date)); S.entries = ents;
   }catch(e){ console.warn(e); toast("Couldn't load this period. Check your connection and change the dates to retry."); }
 }
@@ -625,6 +626,8 @@ function journal(C){
   if(inv >= 0){ add("5900", inv, 0, "Investor share"); add("2200", 0, inv, "Investor share"); } else { add("2200", -inv, 0, "Investor share (loss)"); add("5900", 0, -inv, "Investor share (loss)"); }
   for(const e of S.entries){
     day = e.date;
+    // a line of an imported supplier invoice: the invoice itself is posted by the books; only a recovery from the driver here
+    if(e.virtual){ if(e.recover){ const rv = (num(e.amount) + num(e.vat)) * recoverShare(e); add("2100", rv, 0, "Recovered from driver – " + (e.note || "")); add(e.category || "5310", 0, rv, "Recovered from driver – " + (e.note || "")); } continue; }
     const a = num(e.amount), vat = num(e.vat), src = srcAcct(e.paidFrom), who = e.driverId ? dName(e.driverId) : e.investorId ? iName(e.investorId) : "";
     const memo = e.type === "transfer" ? `Transfer ${acctName(e.paidFrom || "1100")} → ${acctName(e.toAccount || "1100")}${e.note ? " – " + e.note : ""}`
       : `${e.type === "expense" ? (EXP_CATS[e.category] || "Expense") : (ENTRY_TYPES[e.type] || e.type)}${who ? " – " + who : ""}${e.note ? " – " + e.note : ""}`;
@@ -1352,6 +1355,7 @@ async function loadLedger(){
     }
     const cards = [];
     if(start <= to){ const cs = await S.db.collection("cardtx").where("date",">=",start).where("date","<=",to).get(); cs.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([id,r]) => cards.push({id, ...r}))); }
+    if(window.PUR) ents.push(...PUR.expand(ents));
     if(S.ledger && S.ledger.key === key) S.ledger = {key, trips, entries: ents, cards};
   }catch(e){ console.warn(e); S.ledger = {key, error:true}; }
   render();
@@ -1629,7 +1633,7 @@ function vEntries(){
   if(window.PUR && !PUR.busy) return PUR.view();   // shown inside Purchases & expenses (tab All entries)
   const e = S.edit && S.edit.kind === "entry" ? S.edit : {kind:"entry", id:"", data:{date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type:"expense", category:"5200", paidFrom:"1100"}};
   const x = e.data;
-  const list = [...S.entries].filter(r => !(window.BOOKS && BOOKS.TYPES.includes(r.type))).reverse();
+  const list = [...S.entries].filter(r => !r.virtual && !(window.BOOKS && BOOKS.TYPES.includes(r.type))).reverse();
   return `<div class="section"><h2>${e.id ? "Edit entry" : "Record an expense or payment"}</h2><p class="sub">Link fuel, Salik, fines and repairs to a car so they land in its P&L. Tick "recover from driver" for fines or tolls the driver must pay; they are deducted in the driver's settlement.</p>
   <form class="form" id="fEntry" data-id="${esc(e.id)}">
     <div class="f"><label for="ed">Date</label><input id="ed" name="date" type="date" required value="${esc(x.date)}"></div>
@@ -1983,7 +1987,7 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=5"></script>
-<script src="books.js?v=16"></script>
+<script src="books.js?v=17"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=4"></script>
@@ -1992,6 +1996,6 @@ boot();
 <script src="loans.js?v=3"></script>
 <script src="rta.js?v=2"></script>
 <script src="reminders.js?v=1"></script>
-<script src="purchases.js?v=1"></script>
+<script src="purchases.js?v=2"></script>
 
 </body></html>

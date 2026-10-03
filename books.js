@@ -452,8 +452,11 @@ function statementsView(){
 // a payment to an employee: salary (2110) or an advance / loan (1180)
 // payment to / receipt from an investor: account 2200 Investor payables
 function newInvestorDoc(k, id, amt){ newDoc(k); S.bk.data.party = "i:" + id; S.bk.lines = [{...blankLine(k), account: "2200", desc: k === "payment" ? "Profit payment to investor" : "Received from investor", amount: amt > 0 ? String(r2(amt)) : ""}]; }
+// a payment / receipt with a party on one account (e.g. a top-up of a prepaid supplier account: Dr 2000 supplier / Cr bank)
+function newPartyDoc(k, party, acct, amt, desc){ newDoc(k); S.bk.data.party = party; S.bk.lines = [{...blankLine(k), account: acct, desc, amount: amt > 0 ? String(r2(amt)) : ""}]; }
+const partyBal = (p, acct) => { const [t, id] = [p[0], p.slice(2)], rec = (t === "s" ? S.suppliers : S.customers)[id] || {}; return r2(num(rec.opening) + sum(partyMoves(histEntries(), p, acct), x => t === "s" ? x.cr - x.dr : x.dr - x.cr)); };
 function newEmpPayment(id, acct, amt, desc){ newDoc("payment"); S.bk.data.party = "e:" + id; S.bk.lines = [{...blankLine("payment"), account: acct, desc, amount: amt > 0 ? String(r2(amt)) : ""}]; }
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, newInvestorDoc, partyName, partyOpts, partyMoves, invStatus, histEntries, openDoc: openDocRow};
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, newInvestorDoc, newPartyDoc, partyBal, partyName, partyOpts, partyMoves, invStatus, histEntries, openDoc: openDocRow};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),

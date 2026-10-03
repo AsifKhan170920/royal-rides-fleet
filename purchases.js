@@ -6,7 +6,26 @@
    who had the car that day; rows already imported (same transaction no.) are skipped. Salik can be grouped per car
    and day. Each row becomes an expense (5200 fuel & EV, 5210 Salik) with its car and driver – so it lands in the
    car's P&L and, when "recover from driver" is chosen, is deducted in the driver's salary.
+   Prepaid accounts: Fuel, Salik and EV charging are topped up in advance – a top-up is a Payment to the supplier
+   (Dr 2000 supplier / Cr bank, an advance). The statement uploaded from the portal is the consumption: it is saved
+   as a Purchase invoice from that supplier (one per month; Dr fuel / Salik expense, Cr 2000 supplier), which uses up
+   the advance. Each invoice line keeps its car, driver and "recover from driver", so the car's P&L and the driver's
+   salary see it like any other expense (PUR.expand turns the lines into expense rows when the period loads).
+   Without a supplier the rows are booked as paid directly from the chosen account.
    Receipts: a photo or PDF can be attached to any expense (stored compressed with the data, up to ~900 KB). */
+// imported invoice lines as expense rows (car P&L, driver recovery, the tabs); the invoice is posted by the books
+function expandInv(ents){
+  const out = [];
+  ents.filter(e => e.type === "purchase_invoice" && (e.lines || []).some(l => l.sub || l.vehicleId)).forEach(e => (e.lines || []).forEach((l, i) => {
+    if(!l.sub && !l.vehicleId) return;
+    const net = r2(num(l.qty === "" || l.qty == null ? 1 : l.qty) * num(l.price)), vat = l.vat === "5" ? r2(net * 0.05) : 0;   // as the books post it
+    out.push({id: e.id + ":" + i, virtual: true, docId: e.id, type: "expense", date: l.date || e.date, category: l.account || "5310", sub: l.sub || "", amount: net, vat, vehicleId: l.vehicleId || "", driverId: l.driverId || "", recover: !!l.recover, qty: num(l.units), srcRef: l.srcRef || "", note: l.desc || "", paidFrom: "inv", party: e.party});
+  }));
+  return out;
+}
+const supKey = src => "purSup_" + src;
+const supOf = src => { const id = setting(supKey(src), ""); return id && S.suppliers[id] ? id : ""; };
+const SUP_NAME = {fuel: "ENOC (fuel)", salik: "Salik", ev: "EV charging"};
 S.purTab = S.purTab || "all"; S.purImp = S.purImp || null; S.rcpt = S.rcpt || {};
 const PUR_TABS = {all: "All entries", purchase: "Purchases", fuel: "Fuel", salik: "Salik", ev: "EV charging", receipts: "Receipts"};
 const PUR_SRC = {fuel: {cat: "5200", sub: "fuel", label: "Fuel", unit: "Litres", hint: "ENOC / ADNOC / Emarat fleet card portal – transactions report"},
@@ -59,7 +78,7 @@ const toIsoD = s => { s = String(s || "").trim(); let m = s.match(/^(\d{4})-(\d{
   m = s.match(/^(\d{1,2})[ -]([A-Za-z]{3})[a-z]*[ -](\d{2,4})/); if(m){ const mo = "janfebmaraprmayjunjulaugsepoctnovdec".indexOf(m[2].toLowerCase()) / 3 + 1; if(mo > 0) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${String(mo).padStart(2, "0")}-${m[1].padStart(2, "0")}`; } const d = new Date(s); return isNaN(d) ? "" : iso(d); };
 const plateMap = () => { const m = {}; Object.values(S.vehicles).forEach(v => { const p = norm(v.plate); m[p] = v.id; m[p.replace(/^[a-z]+/, "")] = v.id; m[p.replace(/\D/g, "")] = m[p.replace(/\D/g, "")] || v.id; }); return m; };
 function impRows(){
-  const I = S.purImp, M = I.map, pm = plateMap(), seen = new Set((((S.ledger && S.ledger.entries) || S.entries)).filter(e => e.srcRef).map(e => e.srcRef));
+  const I = S.purImp, M = I.map, pm = plateMap(), seen = new Set(); (((S.ledger && S.ledger.entries) || S.entries)).forEach(e => { if(e.srcRef) seen.add(e.srcRef); (e.srcRefs || []).forEach(x => seen.add(x)); (e.lines || []).forEach(l => { if(l.srcRef) seen.add(l.srcRef); (l.srcRefs || []).forEach(x => seen.add(x)); }); });
   const out = I.rows.map((r, i) => {
     const date = toIsoD(r[M.date]), p = norm(r[M.plate]), vid = pm[p] || pm[p.replace(/^[a-z]+/, "")] || pm[p.replace(/\D/g, "")] || "";
     let gross = num(String(r[M.amount]).replace(/[^\d.-]/g, "")), vat = M.vat ? num(String(r[M.vat]).replace(/[^\d.-]/g, "")) : 0;
@@ -79,13 +98,14 @@ function impPanel(src){
   return `<div class="section" style="border:1px solid var(--line)"><div class="head"><div><h3 style="margin:0">Import ${esc(PUR_SRC[src].label)} – ${esc(I.name)}</h3><p class="sub">${R.length} rows · ${use.length} new · ${R.filter(r => r.dup).length} already imported · ${R.filter(r => !r.ok).length} without date / amount${noCar ? ` · <b class="neg">${noCar} without a matching car</b>` : ""}</p></div><button class="btn ghost" data-impcancel="1">Cancel</button></div>
     <div class="form" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${sel("date", "Date")}${sel("time", "Time")}${sel("plate", "Plate")}${sel("amount", "Amount")}${sel("vat", "VAT")}${sel("qty", PUR_SRC[src].unit)}${sel("place", src === "salik" ? "Gate" : "Station / location")}${sel("txn", "Transaction no.")}
       <div class="f"><label>Amounts</label><select data-impopt="vatMode">${opts({incl: "Include 5% VAT", excl: "Are before VAT (VAT column added)", none: "No VAT"}, I.vatMode)}</select></div>
-      <div class="f"><label>Paid from</label><select data-impopt="paidFrom">${opts(acctOpts(null, true), I.paidFrom)}</select></div>
+      <div class="f"><label>Supplier (prepaid account)</label><select data-impopt="supplier">${opts(Object.fromEntries(Object.values(S.suppliers).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map(x => [x.id, x.name])), I.supplier, "— none: paid directly —")}</select></div>
+      ${I.supplier ? "" : `<div class="f"><label>Paid from</label><select data-impopt="paidFrom">${opts(acctOpts(null, true), I.paidFrom)}</select></div>`}
       <div class="f"><label>Who bears it</label><select data-impopt="recover">${opts({false: "Company cost", true: "Recover from the driver"}, String(I.recover))}</select></div>
       <div class="f"><label>Rows</label><select data-impopt="group">${opts({false: "One expense per row", true: "Group per car and day"}, String(I.group))}</select></div></div>
     <div class="tbl" style="margin-top:10px;max-height:340px;overflow:auto"><table><thead><tr><th>Date</th><th>Plate</th><th>Car</th><th>Driver</th><th>${src === "salik" ? "Gate" : "Station"}</th><th class="num">${PUR_SRC[src].unit}</th><th class="num">Net</th><th class="num">VAT</th><th></th></tr></thead><tbody>
     ${R.slice(0, 300).map(r => `<tr${r.dup || !r.ok ? ' style="opacity:.45"' : ""}><td>${esc(r.date ? dmyS(r.date) : "?")} <span class="small muted">${esc(r.time)}</span></td><td class="mono small">${esc(r.plate)}</td><td>${r.vid ? esc(vName(r.vid)) : '<span class="neg small">no match</span>'}</td><td class="small">${r.drv ? esc(dName(r.drv)) : '<span class="muted">—</span>'}</td><td class="small">${esc(r.place)}</td><td class="num">${r.qty || ""}</td><td class="num">${fmt(r.net)}</td><td class="num">${fmt(r.vat)}</td><td class="small muted">${r.dup ? "already in" : !r.ok ? "skipped" : ""}</td></tr>`).join("")}
     </tbody></table></div>${R.length > 300 ? `<p class="small muted">First 300 rows shown.</p>` : ""}
-    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-impgo="1" ${groups.length && S.canWrite ? "" : "disabled"}>Import ${groups.length} expense${groups.length === 1 ? "" : "s"} – AED ${fmt(sum(groups, r => r.net + r.vat))}</button><span class="small muted">Rows without a car are imported without a car (company cost) – set the plate on the car to match next time.</span></div></div>`;
+    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-impgo="1" ${groups.length && S.canWrite ? "" : "disabled"}>Import ${groups.length} expense${groups.length === 1 ? "" : "s"} – AED ${fmt(sum(groups, r => r.net + r.vat))}</button><span class="small muted">${I.supplier ? `Saved as a purchase invoice from ${esc((S.suppliers[I.supplier] || {}).name || "")} (one per month) – it uses up the top-ups paid to him.` : "Booked as paid directly from the account."} Rows without a car are imported without a car (company cost).</span></div></div>`;
 }
 async function impGo(){
   const I = S.purImp, P = PUR_SRC[I.src], R = impRows().filter(r => r.ok && !r.dup);
@@ -93,6 +113,17 @@ async function impGo(){
   const rows = list.map(r => ({id: uid(), type: "expense", date: r.date, category: P.cat, sub: P.sub, amount: r2(r.net), vat: r2(r.vat), vehicleId: r.vid, driverId: r.drv || "", recover: I.recover && !!r.drv, paidFrom: I.paidFrom,
     qty: r2(r.qty), note: `${P.label}${r.n > 1 ? ` · ${r.n} ${P.sub === "salik" ? "trips" : "transactions"}` : ""}${r.place && !(r.n > 1) ? " · " + r.place : ""}${r.qty ? ` · ${r2(r.qty)} ${P.unit.toLowerCase()}` : ""}`, srcRef: r.refs ? r.refs[0] : r.ref, srcRefs: r.refs || undefined, imported: I.name}));
   rows.forEach(r => { if(!r.srcRefs) delete r.srcRefs; });
+  if(I.supplier){
+    // one purchase invoice per month from the prepaid supplier
+    const byM = {}; rows.forEach(r => (byM[r.date.slice(0,7)] ||= []).push(r));
+    const docs = Object.entries(byM).map(([m, rs]) => ({id: uid(), type: "purchase_invoice", date: rs.map(r => r.date).sort().pop(), dueDate: rs.map(r => r.date).sort().pop(), party: "s:" + I.supplier,
+      number: `${P.label.toUpperCase().replace(/[^A-Z]/g, "")}-${m}`, ref: I.name, note: `${P.label} consumption imported from ${I.name} – to change it, delete this invoice and import again`,
+      lines: rs.map(r => ({desc: `${r.note}${r.vehicleId ? " – " + vName(r.vehicleId) : ""} – ${dmyS(r.date)}`, account: r.category, qty: 1, price: r.amount, vat: r.vat ? "5" : "", vatAmt: r.vat || "", date: r.date, sub: r.sub, units: r.qty, vehicleId: r.vehicleId, driverId: r.driverId, recover: r.recover, srcRef: r.srcRef, ...(r.srcRefs ? {srcRefs: r.srcRefs} : {})})),
+      by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}));
+    try{ await S.db.doc("settings/main").set({...S.settings, [supKey(I.src)]: I.supplier}); }catch(e){}
+    if(await addEntries(docs)){ S.purImp = null; toast(`${rows.length} ${P.label.toLowerCase()} line${rows.length === 1 ? "" : "s"} saved as ${docs.length} purchase invoice${docs.length === 1 ? "" : "s"} from ${(S.suppliers[I.supplier] || {}).name}.`); render(); }
+    return;
+  }
   toast(`Importing ${rows.length} expenses…`);
   if(window.addEntries ? await addEntries(rows) : false){ S.purImp = null; toast(`${rows.length} ${P.label.toLowerCase()} expense${rows.length === 1 ? "" : "s"} imported.`); render(); }
 }
@@ -101,13 +132,21 @@ async function impGo(){
 function purTable(list, unit){
   const pg = paged("pur-" + S.purTab, list.slice().sort((a, b) => b.date.localeCompare(a.date)));
   return `<div class="tbl"><table><thead><tr><th>Date</th><th>Category</th><th>Car</th><th>Driver</th><th>Note</th>${unit ? `<th class="num">${unit}</th>` : ""}<th class="num">Net</th><th class="num">VAT</th><th>Paid from</th><th>Receipt</th><th></th></tr></thead><tbody>
-  ${pg.rows.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td class="small">${esc(EXP_CATS[e.category] || "")}${e.recover ? ' <span class="pill brass">From driver</span>' : ""}</td><td>${e.vehicleId ? esc(vName(e.vehicleId)) : ""}</td><td class="small">${e.driverId ? esc(dName(e.driverId)) : ""}</td><td class="small" style="white-space:normal">${esc(e.note || "")}</td>${unit ? `<td class="num">${num(e.qty) || ""}</td>` : ""}<td class="num">${fmt(num(e.amount))}</td><td class="num">${num(e.vat) ? fmt(num(e.vat)) : ""}</td><td class="small">${esc(e.paidFrom === "driver" ? "Driver's cash" : acctName(e.paidFrom || "1100"))}</td><td>${rcptCell(e)}</td><td><button class="btn sm" data-puredit="${esc(e.id)}">Edit</button></td></tr>`).join("") || `<tr><td colspan="${unit ? 11 : 10}" class="muted">Nothing in this period.</td></tr>`}
+  ${pg.rows.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td class="small">${esc(EXP_CATS[e.category] || "")}${e.recover ? ' <span class="pill brass">From driver</span>' : ""}</td><td>${e.vehicleId ? esc(vName(e.vehicleId)) : ""}</td><td class="small">${e.driverId ? esc(dName(e.driverId)) : ""}</td><td class="small" style="white-space:normal">${esc(e.note || "")}</td>${unit ? `<td class="num">${num(e.qty) || ""}</td>` : ""}<td class="num">${fmt(num(e.amount))}</td><td class="num">${num(e.vat) ? fmt(num(e.vat)) : ""}</td><td class="small">${esc(e.virtual ? "Invoice – " + (window.BOOKS ? BOOKS.partyName(e.party) : "supplier") : e.paidFrom === "driver" ? "Driver's cash" : acctName(e.paidFrom || "1100"))}</td><td>${rcptCell(e)}</td><td><button class="btn sm" data-puredit="${esc(e.id)}">Edit</button></td></tr>`).join("") || `<tr><td colspan="${unit ? 11 : 10}" class="muted">Nothing in this period.</td></tr>`}
   </tbody><tfoot><tr><td colspan="${unit ? 5 : 5}">${list.length} expense(s)</td>${unit ? `<td class="num">${r2(sum(list, e => num(e.qty))) || ""}</td>` : ""}<td class="num">${fmt(sum(list, e => num(e.amount)))}</td><td class="num">${fmt(sum(list, e => num(e.vat)))}</td><td colspan="3"></td></tr></tfoot></table></div>${pg.bar}`;
 }
 function byCar(list, unit){
   const by = {}; list.forEach(e => { const b = by[e.vehicleId || ""] ||= {n: 0, q: 0, a: 0}; b.n++; b.q += num(e.qty); b.a += num(e.amount) + num(e.vat); });
   const rows = Object.entries(by).sort((a, b) => b[1].a - a[1].a); if(!rows.length) return "";
   return `<details style="margin-bottom:10px"><summary class="small" style="cursor:pointer"><b>By car</b> – ${rows.length} car${rows.length === 1 ? "" : "s"}</summary><div class="tbl" style="margin-top:6px"><table><thead><tr><th>Car</th><th class="num">Expenses</th>${unit ? `<th class="num">${unit}</th>` : ""}<th class="num">Total incl. VAT</th></tr></thead><tbody>${rows.map(([v, b]) => `<tr><td>${v ? esc(vName(v)) : '<span class="muted">No car</span>'}</td><td class="num">${b.n}</td>${unit ? `<td class="num">${r2(b.q) || ""}</td>` : ""}<td class="num">${fmt(b.a)}</td></tr>`).join("")}</tbody></table></div></details>`;
+}
+function prepaidBox(src){
+  const id = supOf(src);
+  if(!id) return `<div class="banner info">Fuel, Salik and EV charging are prepaid: create the supplier for this account, top it up with a payment, and import the consumption as his purchase invoice.
+    <div class="row" style="margin-top:6px;gap:6px"><button class="btn sm" data-supmake="${src}">Create supplier "${esc(SUP_NAME[src])}"</button><select data-supset="${src}" aria-label="Or choose a supplier">${opts(Object.fromEntries(Object.values(S.suppliers).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map(x => [x.id, x.name])), "", "…or choose an existing supplier")}</select></div></div>`;
+  const bal = window.BOOKS && BOOKS.partyBal ? BOOKS.partyBal("s:" + id, "2000") : 0, name = (S.suppliers[id] || {}).name;
+  return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">${esc(name)} – ${bal <= 0 ? "prepaid balance" : "owed to supplier"}</div><div class="v ${bal > 0 ? "neg" : ""}">${fmt(Math.abs(bal))}</div><div class="n">top-ups less consumption invoices</div></div>
+    <div class="kpi"><div class="l">Account</div><div class="v" style="font-size:14px"><button class="btn sm primary" data-suptop="${esc(id)}" data-src="${src}">Top up</button> <button class="btn sm" data-supstmt="${esc(id)}">Statement</button> <button class="btn sm ghost" data-supchange="${src}">Change supplier</button></div></div></div>`;
 }
 function purView(){
   const tab = PUR_TABS[S.purTab] ? S.purTab : "all", head = `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>Purchases & expenses</h2><p class="sub">Every purchase, expense and payment. Fuel, Salik and EV charging are imported from the statements downloaded from their portals; attach the receipt to any expense.</p></div></div>${tabBtns("data-purtab", tab, PUR_TABS)}</div>`;
@@ -121,7 +160,7 @@ function purView(){
     body = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${withR.length} of ${E.length} expenses in this period have a receipt. Expenses without a receipt are listed first – attach a photo or PDF.</span></div>${purTable([...without, ...withR].reverse())}`;
   } else {
     const P = PUR_SRC[tab], list = E.filter(e => entSub(e) === tab);
-    body = `${impPanel(tab)}<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · ${list.length} expense(s) · AED ${fmt(sum(list, e => num(e.amount) + num(e.vat)))} incl. VAT</span><div class="row">${dlBtn("purlist", tab)}<button class="btn sm" data-puradd="${P.cat}" data-sub="${P.sub}">Add one manually</button></div></div>${byCar(list, P.unit)}${purTable(list, P.unit)}`;
+    body = `${prepaidBox(tab)}${impPanel(tab)}<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · ${list.length} expense(s) · AED ${fmt(sum(list, e => num(e.amount) + num(e.vat)))} incl. VAT</span><div class="row">${dlBtn("purlist", tab)}<button class="btn sm" data-puradd="${P.cat}" data-sub="${P.sub}">Add one manually</button></div></div>${byCar(list, P.unit)}${purTable(list, P.unit)}`;
   }
   return head + `<div class="section">${body}</div>`;
 }
@@ -132,7 +171,12 @@ document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
   if(t.dataset.purtab){ S.purTab = t.dataset.purtab; S.purImp = null; S.edit = null; render(); return; }
   if(t.dataset.puradd){ S.purTab = "all"; S.edit = {kind: "entry", id: "", data: {date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type: "expense", category: t.dataset.puradd, paidFrom: "1100", sub: t.dataset.sub || ""}}; render(); window.scrollTo(0,0); return; }
-  if(t.dataset.puredit){ const e = S.entries.find(x => x.id === t.dataset.puredit); if(!e) return; S.purTab = "all"; S.edit = {kind: "entry", id: e.id, data: {...e}}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.supmake){ const src = t.dataset.supmake, id = "s-" + uid(); if(await writeOk(S.db.doc("suppliers/" + id).set({name: SUP_NAME[src], creditDays: 0, opening: 0}))){ await writeOk(S.db.doc("settings/main").set({...S.settings, [supKey(src)]: id})); toast(`Supplier "${SUP_NAME[src]}" created – rename it in Suppliers if needed.`); render(); } return; }
+  if(t.dataset.supchange){ const k = supKey(t.dataset.supchange); await writeOk(S.db.doc("settings/main").set({...S.settings, [k]: ""})); render(); return; }
+  if(t.dataset.suptop){ S.view = "payments"; if(window.BOOKS) BOOKS.newPartyDoc("payment", "s:" + t.dataset.suptop, "2000", 0, `${PUR_SRC[t.dataset.src].label} account top-up`); render(); window.scrollTo(0,0); return; }
+  if(t.dataset.supstmt){ S.view = "suppliers"; S.pv = {kind: "supplier", id: t.dataset.supstmt}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.puredit){ const e = S.entries.find(x => x.id === t.dataset.puredit); if(!e) return;
+    if(e.virtual){ S.view = "purchinv"; if(window.BOOKS) BOOKS.openDoc(e.docId); render(); window.scrollTo(0,0); return; } S.purTab = "all"; S.edit = {kind: "entry", id: e.id, data: {...e}}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.rcptopen){ openReceipt(t.dataset.rcptopen); return; }
   if(t.dataset.impcancel){ S.purImp = null; render(); return; }
   if(t.dataset.impgo){ t.disabled = true; t.textContent = "Importing…"; await impGo(); return; }
@@ -141,8 +185,9 @@ document.addEventListener("change", async ev => {
   const t = ev.target; if(!t.dataset) return;
   if(t.dataset.rcptadd && t.files && t.files[0]){ await attachReceipt(t.dataset.rcptadd, t.files[0]); return; }
   if(t.dataset.purimp && t.files && t.files[0]){ const src = t.dataset.purimp, file = t.files[0], rows = await readSheet(file); t.value = ""; if(!rows) return; if(!rows.length){ toast("No rows found in the file."); return; }
-    S.purImp = {src, name: file.name, rows, map: impGuess(Object.keys(rows[0]), src), vatMode: "incl", paidFrom: "1100", recover: src === "salik", group: src === "salik"}; render(); return; }
+    S.purImp = {src, name: file.name, rows, map: impGuess(Object.keys(rows[0]), src), vatMode: "incl", paidFrom: "1100", supplier: supOf(src), recover: src === "salik", group: src === "salik"}; render(); return; }
+  if(t.dataset.supset && t.value){ await writeOk(S.db.doc("settings/main").set({...S.settings, [supKey(t.dataset.supset)]: t.value})); render(); return; }
   if(t.dataset.impmap && S.purImp){ S.purImp.map[t.dataset.impmap] = t.value; render(); return; }
   if(t.dataset.impopt && S.purImp){ const k = t.dataset.impopt; S.purImp[k] = k === "recover" || k === "group" ? t.value === "true" : t.value; render(); return; }
 });
-window.PUR = {view: purView, busy: false};
+window.PUR = {view: purView, busy: false, expand: expandInv};
