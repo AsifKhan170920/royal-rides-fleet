@@ -11,13 +11,13 @@ function applyCoa(){ Object.keys(ACCT).forEach(k => { if(!(k in ACCT_BASE)) dele
 const TYPE_OF = c => ({"1":"Asset", "2":"Liability", "3":"Equity", "4":"Income"})[String(c)[0]] || "Expense";
 
 const BK = {
-  receipt: {title:"Receipt", plural:"Receipts", view:"receipts", cash:"Received in", partyLabel:"Received from", partyTypes:"csde", cols:["account","desc","amount","vat","invoiceId"]},
-  payment: {title:"Payment", plural:"Payments", view:"payments", cash:"Paid from", partyLabel:"Paid to", partyTypes:"scde", cols:["account","desc","amount","vat","invoiceId"]},
+  receipt: {title:"Receipt", plural:"Receipts", view:"receipts", cash:"Received in", partyLabel:"Received from", partyTypes:"csdei", cols:["account","desc","amount","vat","invoiceId"]},
+  payment: {title:"Payment", plural:"Payments", view:"payments", cash:"Paid from", partyLabel:"Paid to", partyTypes:"scdei", cols:["account","desc","amount","vat","invoiceId"]},
   sale_invoice: {title:"Sales invoice", plural:"Sales invoices", view:"salesinv", partyLabel:"Customer", partyTypes:"c", cols:["desc","account","qty","price","vat"], defAcct:"4100"},
   purchase_invoice: {title:"Purchase invoice", plural:"Purchase invoices", view:"purchinv", partyLabel:"Supplier", partyTypes:"s", cols:["desc","account","qty","price","vat"], defAcct:"5310"},
   journal: {title:"Journal entry", plural:"Journal entries", view:"journals", cols:["account","party","desc","dr","cr"]},
 };
-const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e"};
+const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e", "2200":"i"};
 /* Profit & loss groups: drivers and the cars are the cost of the service (cost of sales); office,
    operations and workshop staff and general costs are administrative expenses. */
 function plGroup(code){
@@ -33,7 +33,7 @@ const lineVat = (k, l) => r2(lineNet(k, l) * (l.vat === "5" ? 0.05 : 0));
 function docTotals(e){ const ls = e.lines || [], net = sum(ls, l => lineNet(e.type, l)), vat = sum(ls, l => lineVat(e.type, l)); return {net: r2(net), vat: r2(vat), total: r2(net + vat)}; }
 function partyName(p){
   if(!p) return ""; const [t, id] = [p.slice(0,1), p.slice(2)];
-  return t === "c" ? ((S.customers[id] || {}).name || "Customer") : t === "s" ? ((S.suppliers[id] || {}).name || "Supplier") : t === "d" ? dName(id) : t === "e" ? ((S.employees || {})[id] || {}).name || "Employee" : "";
+  return t === "c" ? ((S.customers[id] || {}).name || "Customer") : t === "s" ? ((S.suppliers[id] || {}).name || "Supplier") : t === "d" ? dName(id) : t === "e" ? ((S.employees || {})[id] || {}).name || "Employee" : t === "i" ? ((S.investors[id] || {}).name || "Investor") : "";
 }
 const docMemo = e => `${BK[e.type].title}${e.number ? " " + e.number : ""}${partyName(e.party) ? " – " + partyName(e.party) : e.payee ? " – " + e.payee : ""}${e.ref ? " – " + e.ref : ""}`;
 const lineParty = (e, l) => e.type === "journal" ? (l.party || "") : (e.party || "");
@@ -94,6 +94,7 @@ function partyOpts(types){
   const o = {};
   if(types.includes("c")) Object.values(S.customers).sort(byName).forEach(x => o["c:" + x.id] = "Customer · " + x.name);
   if(types.includes("s")) Object.values(S.suppliers).sort(byName).forEach(x => o["s:" + x.id] = "Supplier · " + x.name);
+  if(types.includes("i")) Object.values(S.investors).sort(byName).forEach(x => o["i:" + x.id] = "Investor · " + x.name);
   if(types.includes("d")) Object.values(S.drivers).sort(byName).forEach(x => o["d:" + x.id] = "Driver · " + (x.name || x.id));
   if(types.includes("e")) Object.values(S.employees || {}).sort(byName).forEach(x => o["e:" + x.id] = "Employee · " + (x.name || x.id));
   return o;
@@ -179,7 +180,7 @@ function bkEditor(){
   const cell = (l, i, col) => {
     const a = `data-line="${i}" data-lf="${col}"`;
     if(col === "account") return `<select ${a} aria-label="Account">${opts(chartOpts(!!c.cash), l.account || "", "Choose account…")}</select>`;
-    if(col === "party") return `<select ${a} aria-label="Customer, supplier or driver">${opts(partyOpts("csde"), l.party || "", "—")}</select>`;
+    if(col === "party") return `<select ${a} aria-label="Customer, supplier or driver">${opts(partyOpts("csdei"), l.party || "", "—")}</select>`;
     if(col === "vat") return `<select ${a} aria-label="VAT">${opts(VAT_OPTS, l.vat || "")}</select>`;
     if(col === "invoiceId") return CONTROL[l.account] && CONTROL[l.account] !== "d" ? `<select ${a} aria-label="Invoice">${opts(unpaid, l.invoiceId || "", "Not linked")}</select>` : "";
     if(col === "desc") return `<input ${a} value="${esc(l.desc ?? "")}" aria-label="Description">`;
@@ -238,7 +239,7 @@ async function saveBk(){
   if(isInv(k) && !d.party){ toast(`Choose the ${BK[k].partyLabel.toLowerCase()}.`); return; }
   if(k === "journal"){ const dr = sum(lines, l => num(l.dr)), cr = sum(lines, l => num(l.cr)); if(Math.abs(dr - cr) > 0.005){ toast("Debits and credits must be equal."); return; } if(lines.some(l => !l.account)){ toast("Choose the account on every line."); return; } }
   for(const l of lines){ const need = CONTROL[l.account]; if(!need || isInv(k)) continue; const p = lineParty({type:k, party:d.party}, l);
-    if(!p || p[0] !== need){ toast(`Account ${l.account} needs a ${need === "c" ? "customer" : need === "s" ? "supplier" : "driver"}${k === "journal" ? " on the line" : " as " + BK[k].partyLabel.toLowerCase()}.`); return; } }
+    if(!p || p[0] !== need){ toast(`Account ${l.account} needs a ${need === "c" ? "customer" : need === "s" ? "supplier" : need === "i" ? "investor" : need === "e" ? "employee" : "driver"}${k === "journal" ? " on the line" : " as " + BK[k].partyLabel.toLowerCase()}.`); return; } }
   const rec = {id: b.id || uid(), type: k, date: d.date, lines, note: d.note || "", ref: d.ref || "", by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
   if(BK[k].cash){ rec.paidFrom = d.paidFrom || "1100"; rec.party = d.party || ""; rec.payee = d.payee || ""; if(d.pdcId) rec.pdcId = d.pdcId; }
   if(isInv(k)){ rec.party = d.party; rec.dueDate = d.dueDate || ""; rec.number = d.number || ""; }
@@ -441,8 +442,10 @@ function statementsView(){
 
 /* ---------- wiring ---------- */
 // a payment to an employee: salary (2110) or an advance / loan (1180)
+// payment to / receipt from an investor: account 2200 Investor payables
+function newInvestorDoc(k, id, amt){ newDoc(k); S.bk.data.party = "i:" + id; S.bk.lines = [{...blankLine(k), account: "2200", desc: k === "payment" ? "Profit payment to investor" : "Received from investor", amount: amt > 0 ? String(r2(amt)) : ""}]; }
 function newEmpPayment(id, acct, amt, desc){ newDoc("payment"); S.bk.data.party = "e:" + id; S.bk.lines = [{...blankLine("payment"), account: acct, desc, amount: amt > 0 ? String(r2(amt)) : ""}]; }
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, partyName, partyOpts, partyMoves, openDoc: openDocRow};
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, newInvestorDoc, partyName, partyOpts, partyMoves, openDoc: openDocRow};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),

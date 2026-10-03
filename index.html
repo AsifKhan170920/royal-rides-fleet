@@ -163,7 +163,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -193,7 +193,7 @@ const ACCT = {
 const ENTRY_TYPES = {
   expense:"Expense", income:"Direct booking income", uber_payout:"Platform payout received",
   driver_advance:"Advance to driver (deducted in full)", driver_payment:"Payment to driver", driver_receipt:"Received from driver (cash handover)",
-  investor_payout:"Payout to investor", card_settlement:"Card machine settlement to bank", transfer:"Inter-account transfer"
+  investor_payout:"Payout to investor", investor_receipt:"Received from investor", card_settlement:"Card machine settlement to bank", transfer:"Inter-account transfer"
 };
 const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
 const INV_MODELS = {profit_share:"% share of profit", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
@@ -391,7 +391,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -632,6 +632,7 @@ function journal(C){
     else if(e.type === "driver_advance" || e.type === "driver_payment"){ add("2100", a, 0, memo); add(src, 0, a, memo); }
     else if(e.type === "driver_receipt"){ add(src, a, 0, memo); add("2100", 0, a, memo); }
     else if(e.type === "investor_payout"){ add("2200", a, 0, memo); add(src, 0, a, memo); }
+    else if(e.type === "investor_receipt"){ add(src, a, 0, memo); add("2200", 0, a, memo); }
     else if(e.type === "card_settlement"){ add(e.toAccount || "1100", a, 0, memo); add("1120", 0, a, memo); }
     else if(e.type === "transfer"){ const fee = num(e.fee); add(e.toAccount || "1100", a, 0, memo); add(src, 0, a + fee, memo); if(fee) add("5300", fee, 0, "Bank charges – " + memo); }
     else if(window.BOOKS) BOOKS.post(e, add, {inVatRec});
@@ -765,8 +766,8 @@ document.addEventListener("click", ev => {
   if(t.dataset.dl && DL[t.dataset.dl]){ const out = DL[t.dataset.dl](t.dataset.id); if(out) saveCsv(out[0], out[1]); }
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
-const NAV_KEYS = ["view","drvView","drvTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","drvview","drvtab","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_KEYS = ["view","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
@@ -778,7 +779,7 @@ document.addEventListener("click", ev => {
   ev.stopImmediatePropagation();
   const prev = S.navStack.pop();
   if(prev) Object.assign(S, JSON.parse(prev));
-  else { S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
+  else { S.invView = ""; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
   S.edit = null; S.bk = null; S.pe = null; S.tripEdit = null; S.docEdit = null; S.empEdit = null; S.pdcEdit = null; S.ce = null;
   render(); window.scrollTo(0, 0);
 }, true);
@@ -1206,17 +1207,20 @@ function vehicleForm(id, v0){
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save vehicle</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="vehicles" data-id="${esc(id)}">Delete</button>`:""}</div>
   </form>${termHistory("vehicles", id, v0, VEH_TERMS, vehTermText)}</div>`;
 }
-function vInvestors(){
-  const list = Object.values(S.investors).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
-  const e = S.edit && S.edit.kind === "investor" ? S.edit : null; const x = e ? (S.investors[e.id]||{}) : null;
-  return `${e ? `<div class="section"><h2>${e.id?"Edit investor":"New investor"}</h2><form class="form" id="fInvestor" data-id="${esc(e.id)}">
+const vInvestorForm = (e, x) => `<div class="section"><h2>${e.id?"Edit investor":"New investor"}</h2><form class="form" id="fInvestor" data-id="${esc(e.id)}">
     <div class="f"><label for="in">Name</label><input id="in" name="name" required value="${esc(x.name)}"></div>
     <div class="f"><label for="ip">Phone</label><input id="ip" name="phone" value="${esc(x.phone)}"></div>
     <div class="f"><label for="ie">Email</label><input id="ie" name="email" value="${esc(x.email)}"></div>
     <div class="f"><label for="ib">Bank / IBAN note</label><input id="ib" name="bank" value="${esc(x.bank)}"></div>
-    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save investor</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${e.id?`<button class="btn danger" type="button" data-del="investors" data-id="${esc(e.id)}">Delete</button>`:""}</div></form></div>` : ""}
+    <div class="f"><label for="iob">Opening balance on ${esc(dmyS(setting("ledgerStart", "2026-09-01")))} (owed to him; negative = he owes)</label><input id="iob" name="openingBalance" type="number" step="0.01" value="${esc(x.openingBalance ?? "")}"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save investor</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${e.id?`<button class="btn danger" type="button" data-del="investors" data-id="${esc(e.id)}">Delete</button>`:""}</div></form></div>`;
+function vInvestors(){
+  const list = Object.values(S.investors).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const e = S.edit && S.edit.kind === "investor" ? S.edit : null; const x = e ? (S.investors[e.id]||{}) : null;
+  if(S.invView && S.investors[S.invView] && window.investorDetail && !(e && !e.id)){ const form = e ? vInvestorForm(e, x) : ""; return form + investorDetail(S.invView); }
+  return `${e ? vInvestorForm(e, x) : ""}
   <div class="section"><div class="head"><div><h2>Investors</h2><p class="sub">Terms are set per car on the Vehicles page, so one investor can hold cars on different terms.</p></div><button class="btn primary" data-edit="investor" data-id="">Add investor</button></div>
-  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td style="white-space:normal">${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate) + (window.FIN && FIN.of(v) ? ` <span class="small muted">(${esc(FIN.text(v))})</span>` : "")).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td><button class="btn sm ghost" data-invview="${esc(i.id)}" style="padding:2px 6px"><b>${esc(i.name)}</b></button></td><td style="white-space:normal">${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate) + (window.FIN && FIN.of(v) ? ` <span class="small muted">(${esc(FIN.text(v))})</span>` : "")).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
 }
 
 /* ---------- driver & car usage ---------- */
@@ -1724,7 +1728,7 @@ function vSettings(){
 /* ============ events ============ */
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t) return;
-  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.coaView = ""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.coaView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
   if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
   if(t.dataset.del){
@@ -1959,10 +1963,11 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=4"></script>
-<script src="books.js?v=11"></script>
+<script src="books.js?v=12"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
-<script src="fleetfin.js?v=6"></script>
+<script src="investors.js?v=1"></script>
+<script src="fleetfin.js?v=7"></script>
 
 </body></html>

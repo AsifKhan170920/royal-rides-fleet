@@ -279,5 +279,5 @@ DL.vpl = id => {
 };
 document.addEventListener("click", ev => { const t = ev.target.closest("button"); if(t && t.dataset.vplprint) printVehPL(t.dataset.vplprint); });
 
-window.FIN = {inBooks, post: (...a) => postFin(...a), supplierMoves, investorEmi, opening: (...a) => finOpening(...a), text: finText, of: finOf, owner: finOwner, outstanding: finOutstanding, depr: deprFor};
+window.FIN = {schedule: finSchedule, inBooks, post: (...a) => postFin(...a), supplierMoves, investorEmi, opening: (...a) => finOpening(...a), text: finText, of: finOf, owner: finOwner, outstanding: finOutstanding, depr: deprFor};
 window.vehFinTab = vehFinTab; window.vehPLTab = vehPLTab;
