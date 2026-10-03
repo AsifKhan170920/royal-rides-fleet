@@ -16,7 +16,16 @@
 import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
 
 const prefix = id => String(id).toUpperCase().replace(/[^A-Z0-9]/g, '_');
-const pick = (obj, path) => !path ? undefined : String(path).split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+const dig = (obj, path) => !path ? undefined : String(path).split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+// a field can be 'a.b' (nested), 'a.b/1000' (divided, e.g. metres to km) or 'a.b?c=x|y' (only when c is x or y, e.g. the price as cash
+// only for cash payments); several fields can be added with '+'
+function pick(obj, spec){
+  if(!spec) return undefined; const parts = String(spec).split('+').map(x => x.trim()).filter(Boolean);
+  const one = p => { let [path, cond] = p.split('?'); if(cond){ const [k, v] = cond.split('='); if(!String(v || '').split('|').includes(String(dig(obj, k)))) return 0; }
+    let div = 1; const m = path.match(/^(.*)\/(\d+(?:\.\d+)?)$/); if(m){ path = m[1]; div = +m[2]; } const v = dig(obj, path); return div !== 1 && v != null && v !== '' ? +v / div : v; };
+  if(parts.length === 1) return one(parts[0]); return parts.reduce((a, p) => a + (+one(p) || 0), 0);
+}
+const keep = (obj, filter) => !filter || String(filter).split('&').every(c => { const [k, v] = c.split('='); return String(v || '').split('|').includes(String(dig(obj, k.trim()))); });
 const fill = (s, v) => String(s || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? v[k] : m));
 
 async function authHeaders(api, P, env, log) {
@@ -58,6 +67,11 @@ export async function syncPlatformApis({ db, UP, env, log, days, only }) {
     try {
       log(`${p.name || p.id}: fetching ${vars.from} → ${vars.to}…`);
       const headers = { Accept: 'application/json', ...(await authHeaders(api, P, env, log)) };
+      // {companyIds}: the accounts this API key can see (e.g. Bolt getCompanies), fetched first
+      if (/{companyIds}/.test((api.body || '') + api.tripsUrl) && api.companiesUrl) {
+        const r = await fetch(api.companiesUrl, { headers }); if (!r.ok) throw new Error('companies request failed: HTTP ' + r.status);
+        const ids = dig(await r.json(), api.companiesPath || 'data.company_ids'); if (!Array.isArray(ids) || !ids.length) throw new Error('no company ids in the answer'); vars.companyIds = JSON.stringify(ids);
+      }
       const size = +api.pageSize || 0, rows = [];
       for (let page = 0, offset = 0; page < 200; page++) {
         const v = { ...vars, page: page + (+api.pageStart || 0), offset, limit: size || 100 };
@@ -67,7 +81,7 @@ export async function syncPlatformApis({ db, UP, env, log, days, only }) {
         const r = await fetch(url, opt); if (!r.ok) throw new Error(`HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
         const j = await r.json(), arr = api.listPath ? pick(j, api.listPath) : (Array.isArray(j) ? j : []);
         if (!Array.isArray(arr)) throw new Error(`no list at "${api.listPath || '(top)'}" in the answer`);
-        rows.push(...arr); offset += arr.length;
+        rows.push(...arr.filter(x => keep(x, api.filter))); offset += arr.length;
         if (!size || arr.length < size) break;
       }
       // map to trip rows (same fields as an imported file)
