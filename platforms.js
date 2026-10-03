@@ -144,8 +144,56 @@ function pltApiTab(pl){
     ${fld("listPath", "Where the list is in the answer", "data.orders")}${fld("filter", "Only rows where (e.g. order_status=finished)", "order_status=finished")}${fld("companiesUrl", "Accounts URL – for {companyIds} (optional)")}${fld("companiesPath", "Where the account ids are", "data.company_ids")}${fld("pageSize", "Page size (blank = one page)", "100")}${fld("maxDays", "Days per request (blank = whole period)", "15")}${fld("pageStart", "First page number", "0")}
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Fields</b> <span class="small muted">– the name of each field in a list item: dots for nested fields (order_price.ride_price), /1000 to divide (metres → km), ?field=value to take it only then (order_price.ride_price?payment_method=cash), + to add fields</span></div>
     ${API_FIELDS.map(([k, l]) => `<div class="f"><label for="apf_${k}">${l}</label><input id="apf_${k}" name="f_${k}" value="${esc(F[k] || "")}"></div>`).join("")}
-    <div class="f wide"><div class="small" style="background:var(--bg);padding:8px;border-radius:6px">Secrets go only in <b class="mono">uber-sync/.env</b> on the office PC – never here:<br>${envs.map(x => `<span class="mono">${esc(x)}</span>`).join("<br>") || "–"}</div></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Through Google Apps Script</b> <span class="small muted">– no office PC needed: deploy apps-script/bolt-proxy.gs as a web app (the secret stays in its Script Properties), then paste its URL and access key here and use "Sync now".</span></div>
+    ${fld("proxyUrl", "Apps Script web app URL", "https://script.google.com/macros/s/…/exec", ' style="min-width:420px"')}${fld("proxyKey", "Access key (ACCESS_KEY in the script)")}
+    <div class="f wide"><div class="small" style="background:var(--bg);padding:8px;border-radius:6px">With the office sync program instead, the secrets go only in <b class="mono">uber-sync/.env</b> on the office PC – never here:<br>${envs.map(x => `<span class="mono">${esc(x)}</span>`).join("<br>") || "–"}</div></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save API settings</button></div></form>`;
+}
+
+/* ---------- fetching through a Google Apps Script proxy, straight from the browser ----------
+   The platform's API is called by a small Google Apps Script web app (apps-script/bolt-proxy.gs) that keeps the
+   secret; the page calls it with its URL and access key (stored with the platform – only signed-in users read them),
+   maps the orders with the platform's API fields and saves them like an import. No office PC needed. */
+const pdig = (o, path) => !path ? undefined : String(path).split(".").reduce((x, k) => (x == null ? undefined : x[k]), o);
+function ppick(o, spec){
+  if(!spec) return undefined; const parts = String(spec).split("+").map(x => x.trim()).filter(Boolean);
+  const one = p => { let [path, cond] = p.split("?"); if(cond){ const [k, v] = cond.split("="); if(!String(v || "").split("|").includes(String(pdig(o, k)))) return 0; }
+    let div = 1; const m = path.match(/^(.*)\/(\d+(?:\.\d+)?)$/); if(m){ path = m[1]; div = +m[2]; } const v = pdig(o, path); return div !== 1 && v != null && v !== "" ? +v / div : v; };
+  return parts.length === 1 ? one(parts[0]) : parts.reduce((a, p) => a + (+one(p) || 0), 0);
+}
+const pkeep = (o, filter) => !filter || String(filter).split("&").every(c => { const [k, v] = c.split("="); return String(v || "").split("|").includes(String(pdig(o, k.trim()))); });
+function preadDate(v){
+  if(typeof v === "number" || /^\d{10,13}$/.test(String(v || ""))){ const n = +v, d = new Date(n < 1e12 ? n * 1000 : n); return {date: iso(d), time: d.toTimeString().slice(0, 5)}; }
+  return UberParse.parseTripDate(v);
+}
+async function browserSync(pl, days){
+  const p = S.platforms[pl], api = (p || {}).api || {}, F = api.fields || {};
+  if(!api.proxyUrl || !api.proxyKey) throw new Error("set the Apps Script URL and access key first");
+  const to = new Date(), from = new Date(to.getTime() - days * 86400000), fromTs = Math.floor(new Date(iso(from) + "T00:00:00").getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
+  const r = await fetch(`${api.proxyUrl}${api.proxyUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(api.proxyKey)}&from=${fromTs}&to=${toTs}`);
+  const j = await r.json(); if(!j.ok) throw new Error(j.error || "the Apps Script answered with an error");
+  const rows = (Array.isArray(j.orders) ? j.orders : pdig(j, api.listPath) || []).filter(o => pkeep(o, api.filter));
+  const trips = rows.map(o => { const dt = preadDate(ppick(o, F.date)); if(!dt) return null; const n = k => num(ppick(o, F[k])); const id = String(ppick(o, F.id) ?? "").trim() || `${dt.date}|${ppick(o, F.driverName)}|${n("fare")}`;
+    return {id: pl + ":" + norm(id), tr: pl + ":" + norm(id), d: dt.date, t: dt.time, name: String(ppick(o, F.driverName) ?? "").trim(), uuid: String(ppick(o, F.driverId) ?? "").trim(), p: String(ppick(o, F.plate) ?? "").trim(),
+      f: n("fare"), sf: Math.abs(n("fee")), tx: Math.abs(n("vat")), tp: n("tip"), rf: n("refund"), c: Math.abs(n("cash")), oe: n("other"), po: Math.abs(n("payout")), km: n("km")}; }).filter(Boolean);
+  // drivers by their id on this platform or their name; cars by plate
+  const byId = {}, byName = {}; Object.values(S.drivers).forEach(d => { if((d.platformIds || {})[pl]) byId[d.platformIds[pl]] = d.id; byName[norm(d.name)] = d.id; });
+  const plates = {}; Object.values(S.vehicles).forEach(v => plates[norm(v.plate)] = v.id);
+  for(const t of trips){
+    let id = (t.uuid && byId[t.uuid]) || (t.name && byName[norm(t.name)]);
+    if(!id){ id = "d-" + (norm(t.name).slice(0, 20) || norm(t.uuid).slice(0, 12) || uid()); const rec = {name: t.name || "Unnamed driver", platformIds: t.uuid ? {[pl]: t.uuid} : {}, payModel: "", commissionPct: 0, active: true, createdFromImport: true}; await writeOk(S.db.doc("drivers/" + id).set(rec)); S.drivers[id] = {id, ...rec}; }
+    else if(t.uuid && !((S.drivers[id] || {}).platformIds || {})[pl]){ const {id: _, ...b} = S.drivers[id]; const rec = {...b, platformIds: {...(b.platformIds || {}), [pl]: t.uuid}}; await writeOk(S.db.doc("drivers/" + id).set(rec)); S.drivers[id] = {id, ...rec}; }
+    byId[t.uuid] = id; byName[norm(t.name)] = id; t.dr = id;
+    if(t.p && !plates[norm(t.p)]){ const vid = "v-" + norm(t.p).slice(0, 20); plates[norm(t.p)] = vid; const rec = {plate: t.p, fleetId: "", model: "", investorId: "", active: true, createdFromImport: true}; await writeOk(S.db.doc("vehicles/" + vid).set(rec)); S.vehicles[vid] = {id: vid, ...rec}; }
+  }
+  const byDay = {}; trips.forEach(t => (byDay[t.d] ||= []).push(t)); let added = 0, dup = 0;
+  for(const [day, L] of Object.entries(byDay)){
+    const ref = S.db.doc("trips/" + day), snap = await ref.get(), ex = snap.exists ? (snap.data().rows || {}) : {}, merged = {...ex};
+    for(const t of L){ if(ex[t.id]){ dup++; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
+    if(!await writeOk(ref.set({date: day, rows: merged}))) throw new Error("could not save the trips");
+  }
+  const {id: _, ...b} = S.platforms[pl]; await writeOk(S.db.doc("platforms/" + pl).set({...b, sync: {at: new Date().toISOString(), from: iso(from), to: iso(to), added, dup, error: "", via: "Apps Script"}}));
+  return {orders: (j.orders || []).length, kept: rows.length, added, dup};
 }
 
 /* "Sync now": asks the sync listener on the office PC to fetch the trips now (settings/syncRequest) */
@@ -154,7 +202,7 @@ function syncBox(only){
   const r = S.syncReq || {}, alive = r.listener && (Date.now() - new Date(r.listener).getTime()) < 3 * 60000, st = r.status;
   const when = x => x ? new Date(x).toLocaleString("en-GB") : "";
   return `<div class="section" style="padding:10px 14px"><div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-    <div><b>Sync now</b> <span class="small muted">– fetch the trips from the platform APIs${only ? "" : " (and Uber, if ticked)"} through the office PC.</span>
+    <div><b>Sync now</b> <span class="small muted">– fetch the trips from the platform APIs${only ? "" : " (and Uber, if ticked)"}${(() => { const px = Object.values(S.platforms).filter(p => p.api && p.api.proxyUrl && (!only || p.id === only)).map(p => p.name || p.id); return px.length ? ` – ${esc(px.join(", "))} straight through Google Apps Script${only ? "" : ", the others"}` : ""; })()}${only && S.platforms[only] && S.platforms[only].api && S.platforms[only].api.proxyUrl ? "" : " through the office PC"}.</span>
       <div class="small" style="margin-top:3px">Office PC listener: ${alive ? '<span class="pill good">Online</span>' : '<span class="pill bad">Offline</span> <span class="muted">– start "5 - Start sync listener" on the office PC</span>'}
       ${st ? ` · last request ${when(r.at)}: ${st === "done" ? `<span class="pill good">Done</span> ${when(r.doneAt)}` : st === "error" ? '<span class="pill bad">Failed</span>' : st === "running" ? '<span class="pill warn">Running…</span>' : '<span class="pill warn">Waiting for the PC…</span>'}` : ""}</div>
       ${r.log && r.log.length && (st === "done" || st === "error") ? `<div class="small muted" style="margin-top:3px;white-space:pre-line">${esc(r.log.slice(-6).join("\n"))}</div>` : ""}</div>
@@ -177,7 +225,12 @@ document.addEventListener("click", async ev => {
   if(t.dataset.poconfirm){ const p = S.platforms[t.dataset.poconfirm]; if(!p){ toast("Add the platform on Platforms & contracts first."); return; } const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, payoutConfirm: !p.payoutConfirm}))) toast(p.payoutConfirm ? "Payouts are taken as received again." : "Reconciliation on – match each payout with the bank credit."); render(); return; }
   if(t.dataset.pomatch != null){ S.poMatch = t.dataset.pomatch ? {pl: t.dataset.pl, id: t.dataset.pomatch} : null; render(); return; }
-  if(t.dataset.syncnow != null){ const days = Math.max(1, Math.min(62, num(($("#syncDays") || {}).value) || 2)), uber = !!(($("#syncUber") || {}).checked);
+  if(t.dataset.syncnow != null){ const days0 = Math.max(1, Math.min(62, num(($("#syncDays") || {}).value) || 2)), only = t.dataset.syncnow;
+    const direct = Object.values(S.platforms).filter(p => p.api && p.api.proxyUrl && p.api.proxyKey && (!only || p.id === only));
+    if(direct.length){ t.disabled = true; const lines = [];
+      for(const p of direct){ t.textContent = "Fetching " + (p.name || p.id) + "…"; try{ const x = await browserSync(p.id, days0); lines.push(`${p.name || p.id}: ${x.kept} trips, ${x.added} new, ${x.dup} already there`); }catch(e){ lines.push(`${p.name || p.id}: failed – ${e.message}`); } }
+      await loadPeriod(); S.ledger = null; toast(lines.join(" · ")); render(); if(only && direct.some(p => p.id === only)) return; }
+    const days = days0, uber = !!(($("#syncUber") || {}).checked);
     const prev = S.syncReq || {}; if(await writeOk(S.db.doc("settings/syncRequest").set({...prev, status: "waiting", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", days, uber, only: t.dataset.syncnow || "", log: []}))) toast(prev.listener && (Date.now() - new Date(prev.listener).getTime()) < 180000 ? "Sync requested – the office PC is fetching the trips." : "Sync requested – it runs when the listener on the office PC is started."); return; }
   if(t.dataset.apipreset){ const p = S.platforms[t.dataset.apipreset], pr = PLT_PRESETS[t.dataset.apipreset]; if(!p || !pr) return; const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...(p.api || {}), ...pr.api}}))) toast(`${pName(id)} API settings filled in – the secrets stay in uber-sync/.env.`); render(); return; }
