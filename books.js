@@ -349,10 +349,10 @@ function partyStatement(kind, id, hist){
   mv.forEach(m => { bal = r2(bal + sign * (m.dr - m.cr)); if(m.date < S.from) before = bal; else shown.push({...m, bal}); });
   const invType = kind === "customer" ? "sale_invoice" : "purchase_invoice", open = hist.filter(e => e.type === invType && e.party === p).map(e => [e, invStatus(e, hist)]).filter(([, s]) => s.due > 0.005);
   return `<div class="section"><div class="head"><div><h2>${esc(x.name)} · statement</h2><p class="sub">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}${x.trn ? " · TRN " + esc(x.trn) : ""}</p></div><div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-pedit="${kind}" data-id="${esc(id)}">Edit</button></div></div>
-  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">${kind === "customer" ? "Invoiced" : "Paid"}</th><th class="num">${kind === "customer" ? "Received" : "Invoiced"}</th><th class="num">Balance</th></tr></thead><tbody>
-  <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(before)}</b></td></tr>
-  ${shown.map(m => `<tr><td>${esc(dmyS(m.date))}</td><td style="white-space:normal">${esc(m.desc)}</td><td class="num">${m.dr ? fmt(m.dr) : ""}</td><td class="num">${m.cr ? fmt(m.cr) : ""}</td><td class="num">${aed(m.bal)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="4">Balance ${esc(dmyS(S.to))}</td><td class="num"><b>${aed(bal)}</b></td></tr></tfoot></table></div>
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">${kind === "customer" ? "Invoiced" : "Paid"}</th><th class="num">${kind === "customer" ? "Received" : "Invoiced"}</th><th class="num">Balance</th><th></th></tr></thead><tbody>
+  <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(before)}</b></td><td></td></tr>
+  ${shown.map(m => `<tr><td>${esc(dmyS(m.date))}</td><td style="white-space:normal">${esc(m.desc)}</td><td class="num">${m.dr ? fmt(m.dr) : ""}</td><td class="num">${m.cr ? fmt(m.cr) : ""}</td><td class="num">${aed(m.bal)}</td><td>${m.e && window.ledgerActions ? ledgerActions({kind: "doc", id: m.e.id, date: m.e.date, type: m.e.type}) : ""}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="4">Balance ${esc(dmyS(S.to))}</td><td class="num"><b>${aed(bal)}</b></td><td></td></tr></tfoot></table></div>
   ${open.length ? `<h2 style="margin-top:14px">Unpaid invoices</h2><div class="tbl"><table><thead><tr><th>No.</th><th>Date</th><th>Due</th><th class="num">Total</th><th class="num">Balance due</th><th>Status</th></tr></thead><tbody>${open.map(([e, s]) => `<tr><td class="mono">${esc(e.number || "—")}</td><td>${esc(dmyS(e.date))}</td><td>${e.dueDate ? esc(dmyS(e.dueDate)) : ""}</td><td class="num">${fmt(s.total)}</td><td class="num"><b>${fmt(s.due)}</b></td><td><span class="pill ${s.cls}">${s.label}</span></td></tr>`).join("")}</tbody></table></div>` : ""}</div>`;
 }
 
@@ -460,10 +460,10 @@ function coaLedger(code){
   const J = historyJournal().filter(l => l.acct === code).sort((a,b) => a.date.localeCompare(b.date)); let bal = openingOf(code); const open = bal;
   const rows = J.map(l => { bal = r2(bal + l.dr - l.cr); return {...l, bal}; });
   return `<div class="section"><div class="head"><div><h2>${esc(code)} · ${esc(acctName(code))}</h2><p class="sub">${TYPE_OF(code)} · from the books start to ${esc(dmyS(S.to))}. Totals that come from the trips are dated at the end of the period.</p></div><button class="btn ghost" data-back="1">← Back</button></div>
-  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance (Dr +)</th></tr></thead><tbody>
-  <tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(open)}</b></td></tr>
-  ${rows.slice(-1000).map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="2">Balance</td><td class="num">${fmt(sum(rows, l => l.dr))}</td><td class="num">${fmt(sum(rows, l => l.cr))}</td><td class="num"><b>${aed(bal)}</b></td></tr></tfoot></table></div></div>`;
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance (Dr +)</th><th></th></tr></thead><tbody>
+  ${(rows.pg = paged("coa-" + code, rows.slice().reverse())).rows.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td>${window.ledgerActions ? ledgerActions(l.ref) : ""}</td></tr>`).join("")}
+  ${rows.pg.last ? `<tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(open)}</b></td><td></td></tr>` : ""}
+  </tbody><tfoot><tr><td colspan="2">Balance</td><td class="num">${fmt(sum(rows, l => l.dr))}</td><td class="num">${fmt(sum(rows, l => l.cr))}</td><td class="num"><b>${aed(bal)}</b></td><td></td></tr></tfoot></table></div>${rows.pg.bar}</div>`;
 }
 
 /* ---------- financial statements ---------- */

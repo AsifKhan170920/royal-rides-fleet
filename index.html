@@ -606,7 +606,8 @@ function compute(){
 function journal(C){
   // every line carries a date, so bank and cash accounts can show a dated ledger; period totals are dated at the period end
   const L = []; let day = null;
-  const add = (acct, dr, cr, memo, date) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo, date: date || day || S.to}); };
+  const add = (acct, dr, cr, memo, date) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo, date: date || day || S.to, ...(add.src ? {ref: add.src} : {})}); };
+  add.src = null;   // set by whoever posts: an entry, a document, a payslip, a loan, a fine…
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
   const tips2drv = setting("tipsToDriver", true);
   const tot = ts => ({f:sum(ts,t=>t.f), sf:sum(ts,t=>t.sf), tx:sum(ts,t=>t.tx), tp:sum(ts,t=>t.tp), rf:sum(ts,t=>t.rf), c:sum(ts,t=>t.c), oe:sum(ts,t=>t.oe), po:sum(ts,t=>t.po)});
@@ -636,6 +637,7 @@ function journal(C){
   if(inv >= 0){ add("5900", inv, 0, "Investor share"); add("2200", 0, inv, "Investor share"); } else { add("2200", -inv, 0, "Investor share (loss)"); add("5900", 0, -inv, "Investor share (loss)"); }
   for(const e of S.entries){
     day = e.date;
+    add.src = e.virtual ? {kind: "doc", id: e.docId, date: e.date, type: "purchase_invoice"} : (window.BOOKS && BOOKS.TYPES.includes(e.type)) ? {kind: "doc", id: e.id, date: e.date, type: e.type} : {kind: "entry", id: e.id, date: e.date};
     // a line of an imported supplier invoice: the invoice itself is posted by the books; only a recovery from the driver here
     if(e.virtual){ if(e.recover){ const rv = (num(e.amount) + num(e.vat)) * recoverShare(e); add("2100", rv, 0, "Recovered from driver – " + (e.note || "")); add(e.category || "5310", 0, rv, "Recovered from driver – " + (e.note || "")); } continue; }
     const a = num(e.amount), vat = num(e.vat), src = srcAcct(e.paidFrom), who = e.driverId ? dName(e.driverId) : e.investorId ? iName(e.investorId) : "";
@@ -655,7 +657,7 @@ function journal(C){
     else if(e.type === "transfer"){ const fee = num(e.fee); add(e.toAccount || "1100", a, 0, memo); add(src, 0, a + fee, memo); if(fee) add("5300", fee, 0, "Bank charges – " + memo); }
     else if(window.BOOKS) BOOKS.post(e, add, {inVatRec});
   }
-  day = null;
+  day = null; add.src = null;
   // card payments on company terminals: the money goes to the machine's network account, the driver is credited
   for(const x of S.cardtx || []){ const dr = cardDriver(x), na = netAcct(x.tid), m = `Card payment – terminal ${x.tid}${dr ? " – " + dName(dr) : ""}`; add(na, x.amt, 0, m, x.d); add(dr ? "2100" : "2150", 0, x.amt, m, x.d);
     if(x.fee){ add("5300", x.fee, 0, "Card fee – terminal " + x.tid, x.d); add(na, 0, x.fee, "Card fee – terminal " + x.tid, x.d); } }
@@ -673,11 +675,12 @@ function journal(C){
     p.inst.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add("2100", x.amt, 0, "Instalment – " + memo, x.date); add("1170", 0, x.amt, "Instalment – " + memo, x.date); });
     p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo, x.date); add("1170", 0, num(x.amount), "Repayment – " + memo, x.date); });
   }
-  if(window.EMP) EMP.post(add);   // employee payroll runs
-  if(window.FIN) FIN.post(add);   // vehicle purchases and finance instalments
-  if(window.LOANS) LOANS.post(add);   // other bank loans and facilities
-  if(window.RTA) RTA.post(add);   // RTA deposits and unpaid fines
-  if(window.PLT) PLT.post(add);   // platform payouts matched with the bank
+  add.src = null; if(window.EMP) EMP.post(add);   // employee payroll runs
+  add.src = null; if(window.FIN) FIN.post(add);   // vehicle purchases and finance instalments
+  add.src = null; if(window.LOANS) LOANS.post(add);   // other bank loans and facilities
+  add.src = null; if(window.RTA) RTA.post(add);   // RTA deposits and unpaid fines
+  add.src = null; if(window.PLT) PLT.post(add);   // platform payouts matched with the bank
+  add.src = null;
   // deductions from drivers' salaries for violations
   Object.values(S.drvAdj || {}).forEach(a => { if(a.kind !== "penalty" || a.date < S.from || a.date > S.to) return; const m = `Violation deduction – ${dName(a.driverId)}${a.reason ? " – " + a.reason : ""}`; add("2100", num(a.amount), 0, m, a.date); add("4210", 0, num(a.amount), m, a.date); });
   return L;
@@ -742,10 +745,10 @@ function acctLedgerView(code){
   const a = cashAccounts().find(x => x.id === code) || {id:code, name:acctName(code)}, R = acctLines(code, historyJournal());
   return `<div class="section"><div class="head"><div><h2>${esc(a.name)} <span class="mono small muted">${esc(code)}</span></h2><p class="sub">${esc(CASH_TYPES[a.type] || "")}${a.bankName || a.number ? " · " + esc([a.bankName, a.number].filter(Boolean).join(" · ")) : ""} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button>${fmtGroup('data-legacy="expAcct"')}<button class="btn" data-nav="transfers">Transfer</button></div></div>
-  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">Balance</th></tr></thead><tbody>
-  <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(R.before)}</b></td></tr>
-  ${R.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="2">Closing balance ${esc(dmyS(S.to))}</td><td class="num">${fmt(R.inn)}</td><td class="num">${fmt(R.out)}</td><td class="num"><b>${aed(R.close)}</b></td></tr></tfoot></table></div>${R.pg.bar}</div>`;
+  <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">Balance</th><th></th></tr></thead><tbody>
+  ${(R.pg = paged("acct-" + code, R.shown.slice().reverse())).rows.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td>${ledgerActions(l.ref)}</td></tr>`).join("")}
+  ${R.pg.last ? `<tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(R.before)}</b></td><td></td></tr>` : ""}
+  </tbody><tfoot><tr><td colspan="2">Closing balance ${esc(dmyS(S.to))}</td><td class="num">${fmt(R.inn)}</td><td class="num">${fmt(R.out)}</td><td class="num"><b>${aed(R.close)}</b></td><td></td></tr></tfoot></table></div>${R.pg.bar}</div>`;
 }
 function vTransfers(){
   const list = S.entries.filter(e => e.type === "transfer" || e.type === "card_settlement").slice().reverse(), ao = acctOpts();
@@ -797,7 +800,23 @@ document.addEventListener("click", ev => {
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
 const NAV_KEYS = ["view","pltView","pltTab","slipShow","slipEdit","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","pltview","plttab","slipshow","slipedit","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_ATTRS = ["nav","goview","pltview","plttab","slipshow","slipedit","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+/* View / Edit / Delete on a ledger line: entries and documents (vouchers) as in the driver's account; payslips, loans,
+   fines, deposits, car finance and platform items open their own page. data-goview switches to that page first. */
+function ledgerActions(ref){
+  if(!ref) return "";
+  if(ref.kind === "entry" || ref.kind === "doc" || ref.kind === "payroll") return window.txActions ? txActions(ref) : "";
+  const b = (label, attrs, cls = "") => `<button class="btn sm ${cls}" ${attrs}>${label}</button>`, row = h => `<div class="row" style="gap:4px;flex-wrap:nowrap">${h}</div>`;
+  if(ref.kind === "payslip") return row(b("View", `data-slipshow="${esc(ref.month)}" data-lid="${esc(ref.lid)}"`) + b("Edit", `data-slipedit="${esc(ref.month)}" data-lid="${esc(ref.lid)}"`) + b("Delete", `data-slipdel="${esc(ref.month)}" data-lid="${esc(ref.lid)}"`, "danger"));
+  if(ref.kind === "loan") return row(b("View", `data-goview="bankfin" data-loanview="${esc(ref.id)}"`) + b("Edit", `data-goview="bankfin" data-loanedit="${esc(ref.id)}"`) + b("Delete", `data-goview="bankfin" data-loanedit="${esc(ref.id)}"`, "danger"));
+  if(ref.kind === "fine") return row(b("View", `data-goview="rta" data-fineedit="${esc(ref.id)}"`) + b("Edit", `data-goview="rta" data-fineedit="${esc(ref.id)}"`) + b("Delete", `data-finedel="${esc(ref.id)}"`, "danger"));
+  if(ref.kind === "rtadep") return row(b("View", `data-goview="rta" data-rtaedit="dep" data-id="${esc(ref.id)}"`) + b("Edit", `data-goview="rta" data-rtaedit="dep" data-id="${esc(ref.id)}"`) + b("Delete", `data-rtadel="rtadep" data-id="${esc(ref.id)}"`, "danger"));
+  if(ref.kind === "vehfin") return row(b("View", `data-vehview="${esc(ref.id)}" data-vehtab="fin" data-goview="vehicles"`) + b("Edit", `data-goview="vehicles" data-vehview="${esc(ref.id)}" data-vehtab="fin"`));
+  if(ref.kind === "payout" || ref.kind === "pladj") return row(b("View", `data-goview="platforms" data-pltview="${esc(ref.pl)}" data-plttab="${ref.kind === "payout" ? "payouts" : "ledger"}"`) + (ref.kind === "pladj" ? b("Delete", `data-pladjdel="${esc(ref.id)}"`, "danger") : ""));
+  return "";
+}
+window.ledgerActions = ledgerActions;
+document.addEventListener("click", ev => { const t = ev.target.closest("[data-goview]"); if(!t) return; S.view = t.dataset.goview; S.edit = null; S.coaView = ""; S.acctView = ""; S.pv = null; }, true);
 S.navStack = [];
 /* Vouchers opened from another page (Pay salary, Pay investor, Top up, Record PDC, Pay fee, View / Edit from a ledger…)
    return to that page – the same tab – when they are saved, cancelled or deleted. */
@@ -2057,17 +2076,17 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=6"></script>
-<script src="books.js?v=22"></script>
+<script src="books.js?v=23"></script>
 <script src="drivers.js?v=24"></script>
 <script src="pdc.js?v=2"></script>
-<script src="employees.js?v=12"></script>
+<script src="employees.js?v=13"></script>
 <script src="investors.js?v=4"></script>
-<script src="fleetfin.js?v=9"></script>
-<script src="loans.js?v=3"></script>
-<script src="rta.js?v=2"></script>
+<script src="fleetfin.js?v=10"></script>
+<script src="loans.js?v=4"></script>
+<script src="rta.js?v=3"></script>
 <script src="reminders.js?v=3"></script>
 <script src="purchases.js?v=4"></script>
-<script src="platforms.js?v=6"></script>
+<script src="platforms.js?v=7"></script>
 <script src="settings.js?v=2"></script>
 
 </body></html>

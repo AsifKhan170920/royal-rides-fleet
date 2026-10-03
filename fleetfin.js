@@ -53,7 +53,7 @@ function finOutstanding(v, day){ return r2(num((finOf(v) || {}).loan) - sum(finS
 /* journal: purchases and instalments in the period */
 function postFin(add){
   for(const v of Object.values(S.vehicles)){
-    const f = finOf(v); if(!f) continue;
+    const f = finOf(v); if(!f) continue; add.src = {kind: "vehfin", id: v.id};
     const owner = finOwner(v), name = vName(v.id), acct = f.payFrom || "1100", price = num(f.price), loan = num(f.loan), dp = num(f.downPayment);
     if(f.purchaseDate && f.purchaseDate >= S.from && f.purchaseDate <= S.to){
       const m = `Purchase of ${name}${dealerName(f) ? " – " + dealerName(f) : ""}`, cred = r2(price - dp);

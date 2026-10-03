@@ -50,12 +50,14 @@ const loanAcct = l => LOAN_ACCT[l.type] || "2420";
 /* journal and opening balances */
 function postLoans(add){
   for(const l of Object.values(S.loans)){
+    add.src = {kind: "loan", id: l.id};
     const acct = l.account || "1100", name = `${LOAN_TYPES[l.type] || "Loan"} – ${l.bank || "bank"}${l.facility ? " " + l.facility : ""}`;
     if(l.date >= S.from && l.date <= S.to){ add(acct, num(l.amount), 0, name + " – disbursed", l.date); add(loanAcct(l), 0, num(l.amount), name + " – disbursed", l.date);
       if(num(l.fee)){ add("5300", num(l.fee), 0, name + " – processing fee", l.date); add(acct, 0, num(l.fee), name + " – processing fee", l.date); } }
     for(const x of loanSchedule(l)){ if(x.date < S.from || x.date > S.to) continue; const m = `${name} – instalment ${x.no}`;
       add(loanAcct(l), x.principal, 0, m, x.date); add("5955", x.profit, 0, m, x.date); add(acct, 0, x.emi, m, x.date); }
   }
+  add.src = null;
   postClassification(add);
 }
 /* ---------- current / non-current split and accrued interest (IAS 1, accruals) ----------

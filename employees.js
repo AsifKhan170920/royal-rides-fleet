@@ -276,6 +276,7 @@ function postPayroll(add){
   Object.values(S.emppay).forEach(r => {
     if(!r.posted || r.date < S.from || r.date > S.to) return;
     (r.lines || []).forEach(l => {
+      add.src = {kind: "payslip", month: r.month, lid: l.lid || ""};
       const m = `Salary ${r.month} – ${l.name}`, g = gratuityFor(l, r);
       if(g){ add("6020", g, 0, "Gratuity accrued – " + m, r.date); add("2120", 0, g, "Gratuity accrued – " + m, r.date); }
       add(DEPT_ACCT[l.dept] || "6000", l.earned, 0, m, r.date); add("2110", 0, l.earned, m, r.date);

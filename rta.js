@@ -41,6 +41,7 @@ const daysSince = d => d ? Math.round((parseD(iso(new Date())) - parseD(d.slice(
 function postRta(add){
   const acct = d => d.account || "1100";
   for(const d of Object.values(S.rtadep)){
+    add.src = {kind: "rtadep", id: d.id};
     if(d.date >= S.from && d.date <= S.to){ add("1400", num(d.amount), 0, `RTA deposit – ${d.purpose || ""}${d.ref ? " " + d.ref : ""}`, d.date); add(acct(d), 0, num(d.amount), `RTA deposit – ${d.purpose || ""}`, d.date); }
     if(d.closedOn && d.closedOn >= S.from && d.closedOn <= S.to){
       if(d.status === "refunded"){ add(d.refundAccount || acct(d), num(d.amount), 0, `RTA deposit refunded – ${d.purpose || ""}`, d.closedOn); add("1400", 0, num(d.amount), `RTA deposit refunded – ${d.purpose || ""}`, d.closedOn); }
@@ -50,6 +51,7 @@ function postRta(add){
   // unpaid fines: the change in the accrual over the period
   const before = addDays(S.from, -1);
   for(const f of Object.values(S.fines)){
+    add.src = {kind: "fine", id: f.id};
     const d = r2((unpaidAt(f, S.to) ? num(f.amount) : 0) - (unpaidAt(f, before) ? num(f.amount) : 0)); if(!d) continue;
     const dr = f.recover ? "1170" : fineCat(f), m = `${f.kind === "rta" ? "RTA fine" : "Traffic fine"} ${f.fineNo || ""}${f.vehicleId ? " – " + vName(f.vehicleId) : ""}${f.recover ? " (to recover from driver)" : ""}`;
     if(d > 0){ add(dr, d, 0, m + " – unpaid", S.to); add("2450", 0, d, m + " – unpaid", S.to); } else { add("2450", -d, 0, m + " – paid", S.to); add(dr, 0, -d, m + " – paid", S.to); }

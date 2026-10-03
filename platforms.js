@@ -31,10 +31,12 @@ function statementPayouts(pl){
 function postPlt(add){
   // balancing adjustments from imports: the report's total that no field of the trip data covers
   for(const a of Object.values(S.pladj)){
+    add.src = {kind: "pladj", id: a.id, pl: a.pl};
     if(!a.date || a.date < S.from || a.date > S.to) continue; const v = r2(num(a.amount)), c = clearingAcct(a.pl), memo = `${pName(a.pl)} balancing adjustment – ${a.file || "import"}`;
     if(v > 0){ add(c, v, 0, memo, a.date); add("4030", 0, v, memo, a.date); } else if(v < 0){ add("5020", -v, 0, memo, a.date); add(c, 0, -v, memo, a.date); }
   }
   for(const m of Object.values(S.payouts)){
+    add.src = {kind: "payout", pl: m.pl};
     if(!m.bankDate || m.bankDate < S.from || m.bankDate > S.to || !pltConfirm(m.pl)) continue;
     const memo = `${pName(m.pl)} payout of ${dmyS(m.date)} received`, diff = r2(num(m.bankAmount) - num(m.amount));
     add(m.account || payAcct(m.pl), num(m.bankAmount), 0, memo, m.bankDate); add("1158", 0, num(m.amount), memo, m.bankDate);
@@ -67,7 +69,7 @@ function pltLedgerTab(pl){
   return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(pName(pl))}'s account (${esc(clearingAcct(pl))} · ${esc(acctName(clearingAcct(pl)))}) from ${esc(dmyS(R.start))}: collected for us = debit; fee, VAT, cash kept by drivers and payouts = credit. Balance = what ${esc(pName(pl))} still owes us. Newest first.</span>
     <select id="pltGrp" aria-label="Group">${opts({day: "By day", week: "By week", month: "By month"}, S.pltGroup)}</select></div>
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th><th></th></tr></thead><tbody>
-  ${(R.pg = paged("pltled-" + pl, R.shown.slice().reverse())).rows.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td>${l.adj ? `<button class="btn sm danger" data-pladjdel="${esc(l.adj)}">Delete</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Nothing in this period.</td></tr>`}
+  ${(R.pg = paged("pltled-" + pl, R.shown.slice().reverse())).rows.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td>${l.adj ? `<button class="btn sm danger" data-pladjdel="${esc(l.adj)}">Delete</button>` : l.ref ? ledgerActions(l.ref) : l.po ? `<button class="btn sm" data-plttab="payouts">View</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Nothing in this period.</td></tr>`}
   ${R.pg.last ? `<tr><td>${esc(dmyS(S.from < R.start ? R.start : S.from))}</td><td><b>${S.from <= R.start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= R.start ? R.open : R.before)}</b></td><td></td></tr>` : ""}
   </tbody><tfoot><tr><td colspan="2">Balance ${esc(dmyS(S.to))} – ${R.close >= 0 ? "owed by " + esc(pName(pl)) : "we owe " + esc(pName(pl))}</td><td class="num">${fmt(sum(R.shown, l => l.dr || 0))}</td><td class="num">${fmt(sum(R.shown, l => l.cr || 0))}</td><td class="num"><b>${aed(R.close)}</b></td><td></td></tr></tfoot></table></div>${R.pg.bar}`;
 }
