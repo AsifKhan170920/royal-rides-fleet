@@ -163,7 +163,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -173,6 +173,7 @@ const VIEWS = [
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
+  ["RTA",null],["rta","RTA – licences, deposits & fines"],
   ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["bankfin","Bank finance"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
   ["Documents",null],["offers","Driver offer letters"],["empoffers","Employee offer letters"],["agreements","Investor agreements"],
@@ -391,7 +392,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -658,6 +659,7 @@ function journal(C){
   if(window.EMP) EMP.post(add);   // employee payroll runs
   if(window.FIN) FIN.post(add);   // vehicle purchases and finance instalments
   if(window.LOANS) LOANS.post(add);   // other bank loans and facilities
+  if(window.RTA) RTA.post(add);   // RTA deposits and unpaid fines
   // deductions from drivers' salaries for violations
   Object.values(S.drvAdj || {}).forEach(a => { if(a.kind !== "penalty" || a.date < S.from || a.date > S.to) return; const m = `Violation deduction – ${dName(a.driverId)}${a.reason ? " – " + a.reason : ""}`; add("2100", num(a.amount), 0, m, a.date); add("4210", 0, num(a.amount), m, a.date); });
   return L;
@@ -767,8 +769,8 @@ document.addEventListener("click", ev => {
   if(t.dataset.dl && DL[t.dataset.dl]){ const out = DL[t.dataset.dl](t.dataset.id); if(out) saveCsv(out[0], out[1]); }
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
-const NAV_KEYS = ["view","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_KEYS = ["view","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
@@ -828,7 +830,7 @@ function vDashboard(){
     <div class="kpi"><div class="l">Company profit</div><div class="v ${company<0?"neg":""}">${fmt(company)}</div><div class="n">After drivers & investors</div></div>
     <div class="kpi"><div class="l">Owed to drivers</div><div class="v ${drvDue<0?"neg":""}">${fmt(drvDue)}</div><div class="n">Negative = drivers owe you</div></div>
   </div>
-  ${contractAlerts()}${vehicleAlerts()}${window.EMP ? EMP.dashList() : ""}
+  ${contractAlerts()}${vehicleAlerts()}${window.RTA ? RTA.dash() : ""}${window.EMP ? EMP.dashList() : ""}
   ${(()=>{ const by = {}; T.forEach(t => { const b = by[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0)+(t.tx||0); if(t.tr || t.f) b.n.add(t.tr||t.id); });
     const ks = Object.keys(by); if(ks.length < 2 && !Object.keys(S.platforms).length) return "";
     return `<div class="section"><h2>By platform</h2><div class="tbl"><table><thead><tr><th>Platform</th><th class="num">Trips</th><th class="num">Gross fares</th><th class="num">Fee + VAT</th><th class="num">Fee %</th><th>Contract commission</th></tr></thead><tbody>
@@ -1124,6 +1126,7 @@ function vehicleDetail(id){
   if(tab === "fin") body = window.vehFinTab ? vehFinTab(id) : "";
   else if(tab === "pl") body = window.vehPLTab ? vehPLTab(id) : "";
   else if(tab === "ledger" && window.vehTripsTab) body = vehTripsTab(id);
+  else if(tab === "fines" && window.vehFinesTab) body = vehFinesTab(id);
   else if(tab === "assign"){
     body = `<form class="form" id="fVehAssign" data-id="${esc(id)}">
       <div class="f"><label for="va_d">Driver</label><select id="va_d" name="driverId">${listOpts(S.drivers, d => d.name || d.id, cur, "No driver")}</select></div>
@@ -1142,7 +1145,7 @@ function vehicleDetail(id){
   }
   return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p><p class="sub">Mulkiya ${v.mulkiyaNo ? esc(v.mulkiyaNo) + " " : ""}expires ${expiryCell(v.mulkiyaExpiry)} · Insurance${v.insurer ? " (" + esc(v.insurer) + (v.policyNo ? " " + esc(v.policyNo) : "") + ")" : ""} expires ${expiryCell(v.insuranceExpiry)}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
-  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", pl:"Profit & loss", ledger:"Trip summary", fin:"Purchase & finance"})}${body}</div>`;
+  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", pl:"Profit & loss", ledger:"Trip summary", fines:"Road fines", fin:"Purchase & finance"})}${body}</div>`;
 }
 DL.vled = id => { const R = vehLedger(id); return [`car_ledger_${norm(vName(id))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit","Credit","Balance"], ...R.L.map(l => [l.date, l.desc, l.dr ? r2(l.dr) : "", l.cr ? r2(l.cr) : "", r2(l.bal)])]]; };
 DL.vasg = id => [`car_assignments_${norm(vName(id))}.csv`, [["From","Driver","Note","Changed by"], ...vehDrv(S.vehicles[id]).map(a => [a.from === BEGIN ? "start" : a.from, a.driverId ? dName(a.driverId) : "Not assigned", a.note || "", a.by || ""])]];
@@ -1730,7 +1733,7 @@ function vSettings(){
 /* ============ events ============ */
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t) return;
-  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.loanView = ""; S.loanEdit = null; S.coaView = ""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.loanView = ""; S.loanEdit = null; S.rtaEdit = null; S.finePay = null; S.coaView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
   if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
   if(t.dataset.del){
@@ -1749,7 +1752,7 @@ document.addEventListener("click", async ev => {
   }
   if(t.dataset.assigncar){ const v = S.vehicles[t.dataset.assigncar]; if(!v) return; const {id:_, ...body} = v;
     if(await writeOk(S.db.doc("vehicles/" + v.id).set({...body, drv: addHist(vehDrv(v), t.dataset.id, S.from, "From the car usage report")}))) toast(vName(v.id) + " → " + dName(t.dataset.id) + " from " + dmyS(S.from)); return; }
-  if(t.dataset.vehview != null){ S.vehView = t.dataset.vehview; S.edit = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.vehview != null){ S.vehView = t.dataset.vehview; if(t.dataset.vehtab) S.vehTab = t.dataset.vehtab; S.edit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.vehtab){ S.vehTab = t.dataset.vehtab; render(); return; }
   if(t.dataset.trmview != null){ S.trmView = t.dataset.trmview; S.edit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.trmtab){ S.trmTab = t.dataset.trmtab; render(); return; }
@@ -1967,12 +1970,13 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=5"></script>
-<script src="books.js?v=14"></script>
+<script src="books.js?v=15"></script>
 <script src="drivers.js?v=23"></script>
-<script src="pdc.js?v=1"></script>
+<script src="pdc.js?v=2"></script>
 <script src="employees.js?v=4"></script>
 <script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=8"></script>
 <script src="loans.js?v=3"></script>
+<script src="rta.js?v=1"></script>
 
 </body></html>

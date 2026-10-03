@@ -47,7 +47,7 @@ function vPdc(){
   </tbody><tfoot><tr><td colspan="6">${list.length} cheque(s)</td><td class="num">${fmt(sum(list, p => num(p.amount)))}</td><td colspan="3"></td></tr></tfoot></table></div>` : `<div class="empty"><b>No cheques here</b>Add the post-dated cheques you have received or issued, or change the filter.</div>`}</div>`;
 }
 function pdcForm(id){
-  const p = S.pdcs[id] || {dir: "in", status: "pending", account: "1100", date: todayIso()};
+  const p = S.pdcs[id] || {dir: "in", status: "pending", account: "1100", date: todayIso(), ...(S.pdcPreset || {})};   // preset: e.g. a cheque to RTA
   return `<div class="section"><h2>${id ? "Edit cheque " + esc(p.chequeNo || "") : "Add post-dated cheque"}</h2>
   <form class="form" id="fPdc" data-id="${esc(id || "")}">
     <div class="f"><label for="pd_dir">Type</label><select id="pd_dir" name="dir">${opts(PDC_DIR, p.dir)}</select></div>
@@ -90,7 +90,7 @@ document.addEventListener("submit", async ev => {
   const fd = Object.fromEntries(new FormData(f).entries()), id = f.dataset.id || ("q-" + uid()), {id:_, ...prev} = S.pdcs[id] || {};
   fd.amount = num(fd.amount);
   if(!fd.party && !fd.payee){ toast("Choose who the cheque is from / to, or type a name."); return; }
-  if(await writeOk(S.db.doc("pdcs/" + id).set({...prev, ...fd, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}))){ S.pdcEdit = null; toast("Cheque saved."); render(); }
+  if(await writeOk(S.db.doc("pdcs/" + id).set({...prev, ...fd, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}))){ S.pdcEdit = null; S.pdcPreset = null; toast("Cheque saved."); render(); }
 });
 window.PDC = {banner: pdcBanner, cleared: pdcCleared};
 window.BOOK_VIEWS = {...(window.BOOK_VIEWS || {}), pdc: vPdc};
