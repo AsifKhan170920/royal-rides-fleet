@@ -754,11 +754,13 @@ function vTransfers(){
 }
 
 /* ============ rendering ============ *//* ============ rendering ============ */
-/* menu groups fold: the group you open stays open and the others close (remembered); the current page's group is always open */
+/* menu groups fold: the group you open stays open and the others close (remembered); a click on an open group closes it */
 function renderNav(){
   let g = "", cur = ""; const grpOf = {}; VIEWS.forEach(([k, l]) => { if(l === null) g = k; else grpOf[k] = g; }); cur = grpOf[S.view === "purchinv" ? "entries" : S.view] || "";
   if(S.navOpen === undefined){ try{ S.navOpen = localStorage.getItem("rrNavOpen"); }catch(e){} if(S.navOpen == null) S.navOpen = cur; }
-  const open = k => k === S.navOpen || k === cur;
+  // going to another page opens its group; after that any group, the current one too, can be closed with its arrow
+  if(S.navView !== S.view){ if(S.navView !== undefined && cur) S.navOpen = cur; S.navView = S.view; }
+  const open = k => k === S.navOpen;
   $("#nav").innerHTML = VIEWS.map(([k,l]) => l === null ? `<button class="grp" data-navgrp="${esc(k)}" aria-expanded="${open(k)}">${esc(k)}<span aria-hidden="true">${open(k) ? "▾" : "▸"}</span></button>` : `<button data-nav="${k}" class="${open(grpOf[k]) ? "" : "hid"}" ${S.view===k || (k === "entries" && S.view === "purchinv")?'aria-current="page"':""}>${esc(l)}</button>`).join("");
 }
 document.addEventListener("click", ev => { const t = ev.target.closest("[data-navgrp]"); if(!t) return; const k = t.dataset.navgrp; S.navOpen = S.navOpen === k ? "" : k; try{ localStorage.setItem("rrNavOpen", S.navOpen); }catch(e){} renderNav(); });
