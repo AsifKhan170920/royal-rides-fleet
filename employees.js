@@ -143,7 +143,7 @@ function vEmpPayroll(){
   const months = [...new Set([month, ...Object.keys(S.emppay), S.to.slice(0,7), S.from.slice(0,7)])].sort().reverse();
   const inp = (e, k, v) => `<input type="number" step="0.01" data-payl="${esc(e.empId)}" data-payk="${k}" value="${esc(v || "")}" style="width:90px;text-align:right" ${posted ? "disabled" : ""}>`;
   return `<div class="section"><div class="head"><div><h2>Employee payroll · ${esc(month)}</h2><p class="sub">Monthly salaries of employees (not drivers). Posting the run records Dr salaries (administrative expenses, by department) / Cr 2110 Staff salaries payable on ${esc(dmyS(monthEnd(month)))}. Then pay each employee from Payments (account 2110), or with the Pay buttons.</p></div>
-    <div class="row"><select id="payM" aria-label="Month">${opts(Object.fromEntries(months.map(m => [m, m])), month)}</select>${posted ? `<span class="pill good">Posted</span><button class="btn" id="payCsv">Export CSV</button><button class="btn danger" id="payReopen">Reopen</button>` : `<button class="btn primary" id="payPost" ${S.canWrite && S.db && lines.length ? "" : "disabled"}>Post payroll</button>`}</div></div>
+    <div class="row"><select id="payM" aria-label="Month">${opts(Object.fromEntries(months.map(m => [m, m])), month)}</select>${posted ? `<span class="pill good">Posted</span>${fmtGroup('data-legacy="payCsv"')}<button class="btn danger" id="payReopen">Reopen</button>` : `<button class="btn primary" id="payPost" ${S.canWrite && S.db && lines.length ? "" : "disabled"}>Post payroll</button>`}</div></div>
   ${lines.length ? `<div class="tbl"><table><thead><tr><th>Employee</th><th>Department</th><th class="num">Basic</th><th class="num">Allowances</th><th class="num">Gross</th><th class="num">Unpaid days</th><th class="num">Other deductions</th><th class="num">Earned</th><th class="num">Advance recovered</th><th class="num">Net pay</th><th></th></tr></thead><tbody>
   ${lines.map(l => `<tr><td>${esc(l.name)}</td><td class="small">${esc(DEPTS[l.dept] || "")}</td><td class="num">${fmt(l.basic)}</td><td class="num">${fmt(l.allow)}</td><td class="num">${fmt(l.gross)}</td><td class="num">${inp(l, "unpaidDays", l.unpaidDays)}</td><td class="num">${inp(l, "otherDed", l.otherDed)}</td><td class="num">${fmt(l.earned)}</td><td class="num">${inp(l, "recover", l.recover)}</td><td class="num"><b>${fmt(l.net)}</b></td>
     <td>${posted && l.net > 0 ? `<button class="btn sm" data-emppay="${esc(l.empId)}" data-amt="${l.net}">Pay</button>` : ""}</td></tr>`).join("")}
@@ -195,7 +195,7 @@ document.addEventListener("click", async ev => {
     const month = S.payMonth || S.to.slice(0,7), r = S.emppay[month]; if(!r) return; const {id:_, ...b} = r;
     if(await writeOk(S.db.doc("emppay/" + month).set({...b, posted: false}))){ S.payDraft = null; toast("Payroll reopened."); render(); } return;
   }
-  if(t.id === "payCsv"){ const month = S.payMonth || S.to.slice(0,7), r = S.emppay[month]; if(!r) return;
+  if(t.id === "payCsv" || t.dataset.legacy === "payCsv"){ const month = S.payMonth || S.to.slice(0,7), r = S.emppay[month]; if(!r) return;
     saveCsv(`payroll_${month}.csv`, [["Employee","Department","IBAN","Basic","Allowances","Gross","Unpaid days","Other deductions","Earned","Advance recovered","Net pay"], ...r.lines.map(l => [l.name, DEPTS[l.dept] || "", (S.employees[l.empId] || {}).iban || "", l.basic, l.allow, l.gross, l.unpaidDays, l.otherDed, l.earned, l.recover, l.net])]); return; }
 });
 document.addEventListener("input", ev => {

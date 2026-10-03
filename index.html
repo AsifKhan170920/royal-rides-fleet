@@ -713,7 +713,7 @@ function accountForm(id){
 function acctLedgerView(code){
   const a = cashAccounts().find(x => x.id === code) || {id:code, name:acctName(code)}, R = acctLines(code, historyJournal());
   return `<div class="section"><div class="head"><div><h2>${esc(a.name)} <span class="mono small muted">${esc(code)}</span></h2><p class="sub">${esc(CASH_TYPES[a.type] || "")}${a.bankName || a.number ? " · " + esc([a.bankName, a.number].filter(Boolean).join(" · ")) : ""} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</p></div>
-    <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" id="expAcct">Export CSV</button><button class="btn" data-nav="transfers">Transfer</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button>${fmtGroup('data-legacy="expAcct"')}<button class="btn" data-nav="transfers">Transfer</button></div></div>
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Money in</th><th class="num">Money out</th><th class="num">Balance</th></tr></thead><tbody>
   <tr><td>${esc(dmyS(S.from))}</td><td><b>Balance brought forward</b></td><td></td><td></td><td class="num"><b>${aed(R.before)}</b></td></tr>
   ${R.shown.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.memo)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
@@ -751,7 +751,7 @@ function paged(key, rows){
     <span class="small" style="padding:0 6px">Page ${p + 1} of ${pages}</span><button class="btn sm" data-pg="${key}" data-to="${p + 1}" ${p < pages - 1 ? "" : "disabled"}>Older ›</button><button class="btn sm" data-pg="${key}" data-to="${pages - 1}" ${p < pages - 1 ? "" : "disabled"}>Oldest »</button></div></div>`;
   return {rows: rows.slice(p * PAGE, p * PAGE + PAGE), bar, last: p === pages - 1};
 }
-const dlBtn = (key, id = "") => `<button class="btn sm" data-dl="${key}" data-id="${esc(id)}">Download CSV</button>`;
+const dlBtn = (key, id = "") => fmtGroup(`data-dl="${key}" data-id="${esc(id)}"`);
 const newest = (a, b) => ((b.d || b.date || "") + (b.t || "")).localeCompare((a.d || a.date || "") + (a.t || ""));
 document.addEventListener("click", ev => {
   const t = ev.target.closest("button"); if(!t) return;
@@ -1384,7 +1384,7 @@ function vDriverLedger(){
       <td class="row"><button class="btn sm" data-edit="ditem" data-id="${esc(it.id)}">Edit</button>${out > 0.004 ? `<button class="btn sm" data-edit="drep" data-id="${esc(it.id)}">Repayment</button>` : ""}</td></tr>`; }).join("")}
     </tbody></table></div>` : `<p class="sub">No loans, advances or shared costs for this driver.</p>`;
   return `<div class="section"><div class="head"><div><h2>Driver ledger</h2><p class="sub">Running account from ${esc(dmyS(start))} (change in Settings). Positive = the company owes the driver; negative = the driver owes the company. Use the period at the top to choose which lines to show.</p></div>
-    <div class="row"><select id="ldrv" aria-label="Driver">${listOpts(S.drivers, d => d.name || d.id, id)}</select><select id="lgrp" aria-label="Group trips">${opts({day:"Trips by day", week:"Trips by week", month:"Trips by month"}, S.ledgerGroup)}</select><button class="btn" id="expLedger" ${S.ledger && S.ledger.trips ? "" : "disabled"}>Export CSV</button></div></div>
+    <div class="row"><select id="ldrv" aria-label="Driver">${listOpts(S.drivers, d => d.name || d.id, id)}</select><select id="lgrp" aria-label="Group trips">${opts({day:"Trips by day", week:"Trips by week", month:"Trips by month"}, S.ledgerGroup)}</select>${fmtGroup('data-legacy="expLedger"')}</div></div>
     ${led}</div>
   ${e ? (e.kind === "drep" ? repForm(e.id) : itemForm(e.id, S.ditems[e.id] || {driverId:id, kind:"loan", date: iso(new Date()), paidFrom:"1100", category:"5280"})) : ""}
   <div class="section"><div class="head"><div><h2>Loans, advances & shared costs · ${esc(dName(id))}</h2><p class="sub">Recovered from the driver's account in monthly instalments on the last day of each month. Still to recover after ${esc(dmyS(S.to))}: <b class="mono">AED ${fmt(loanOut)}</b>.</p></div>
@@ -1556,7 +1556,7 @@ function vRecon(){
   return `<div class="banner info"><b>Total payment = Payout from application + Card payment + Cash from driver + Difference.</b> Total payment is what riders paid for the driver's trips (plus direct bookings he collected). The difference is cash the driver still holds – it is deducted from his pay in the Driver settlement. A negative difference means card and cash are more than his trips: check the terminal assignment or record the booking.</div>
   ${unas.length ? `<div class="banner">${unas.length} card payments (AED ${fmt(sum(unas, x => x.amt))}) are on terminals with no driver assigned for that date: ${esc([...new Set(unas.map(x => x.tid))].join(", "))}. Assign them on the Machines page, with the date the machine was handed over.</div>` : ""}
   ${detail}
-  <div class="section"><div class="head"><div><h2>Reconciliation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">Click a driver to see each day.</p></div><button class="btn" id="expRecon">Export CSV</button></div>
+  <div class="section"><div class="head"><div><h2>Reconciliation · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><p class="sub">Click a driver to see each day.</p></div>${fmtGroup('data-legacy="expRecon"')}</div>
   ${R.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th class="num">Trips</th><th class="num">Total payment</th><th class="num">Payout from application</th><th class="num">Card payment</th><th class="num">Cash from driver</th><th class="num">Difference</th><th></th></tr></thead><tbody>
   ${R.map(r => `<tr><td><button class="btn sm ghost" data-recon="${esc(r.id)}" style="padding:2px 6px">${esc(dName(r.id))}</button></td><td class="num">${r.n}</td><td class="num">${fmt(r.total)}</td><td class="num">${fmt(r.app)}</td><td class="num">${fmt(r.card)}</td><td class="num">${fmt(r.handed)}</td><td class="num"><b>${aed(r.diff)}</b></td><td>${status(r)}</td></tr>`).join("")}
   </tbody><tfoot><tr><td>Total</td><td class="num">${sum(R, r => r.n)}</td><td class="num">${fmt(sum(R, r => r.total))}</td><td class="num">${fmt(sum(R, r => r.app))}</td><td class="num">${fmt(sum(R, r => r.card))}</td><td class="num">${fmt(sum(R, r => r.handed))}</td><td class="num">${fmt(sum(R, r => r.diff))}</td><td></td></tr></tfoot></table></div>` : `<div class="empty"><b>Nothing to reconcile</b>Import trips and terminal statements for this period.</div>`}
@@ -1664,7 +1664,7 @@ function vLedger(){
   const outVat = -bal("2300"), inVat = bal("1300"), uberBal = bal("1150");
   return `<div class="kpis"><div class="kpi"><div class="l">Income</div><div class="v">${fmt(income)}</div></div><div class="kpi"><div class="l">Expenses</div><div class="v">${fmt(exps)}</div></div><div class="kpi"><div class="l">Net profit</div><div class="v ${income-exps<0?"neg":""}">${fmt(income-exps)}</div></div><div class="kpi"><div class="l">VAT payable</div><div class="v">${fmt(outVat-inVat)}</div><div class="n">Output ${fmt(outVat)} − input ${fmt(inVat)}</div></div></div>
   <div class="banner info">Uber balance in the ledger (account 1150): <b class="mono">AED ${fmt(uberBal)}</b>. For a period that matches an Uber Payments report, this equals the report's “Paid to you” total; the Import page shows that total when you import.${accts.filter(a => a !== "1150" && acctName(a).endsWith(" clearing (receivable)")).map(a => ` ${esc(acctName(a))} (${a}): <b class="mono">AED ${fmt(bal(a))}</b>.`).join("")}</div>
-  <div class="section"><div class="head"><div><h2>Trial balance · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Built automatically from imported trips, driver and investor terms, and your entries. ${Math.abs(totDr-totCr) < 0.02 ? '<span class="pill good">Balanced</span>' : '<span class="pill bad">Out of balance</span>'}</p></div><div class="row"><button class="btn" id="expJournal">Export journal CSV</button></div></div>
+  <div class="section"><div class="head"><div><h2>Trial balance · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Built automatically from imported trips, driver and investor terms, and your entries. ${Math.abs(totDr-totCr) < 0.02 ? '<span class="pill good">Balanced</span>' : '<span class="pill bad">Out of balance</span>'}</p></div><div class="row">${fmtGroup('data-legacy="expJournal"')}</div></div>
   <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
   ${accts.map(a=>`<tr><td class="mono">${a}</td><td>${esc(acctName(a))}</td><td class="num">${fmt(TB[a].dr)}</td><td class="num">${fmt(TB[a].cr)}</td><td class="num">${aed(TB[a].dr-TB[a].cr)}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">No transactions in this period.</td></tr>`}
   </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${fmt(totDr)}</td><td class="num">${fmt(totCr)}</td><td></td></tr></tfoot></table></div></div>
@@ -1752,24 +1752,64 @@ document.addEventListener("click", async ev => {
   if(t.id === "impAct"){ runActivityImport(); return; }
   if(t.id === "posGo"){ runPosImport(); return; }
   if(t.dataset.acctview != null){ S.acctView = t.dataset.acctview; S.edit = null; render(); window.scrollTo(0,0); return; }
-  if(t.id === "expAcct"){ const R = acctLines(S.acctView, historyJournal()); saveCsv(`${norm(acctName(S.acctView))}_${S.from}_${S.to}.csv`, [["Date","Description","Money in","Money out","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.memo, l.dr ? l.dr.toFixed(2) : "", l.cr ? l.cr.toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
+  if(t.id === "expAcct" || t.dataset.legacy === "expAcct"){ const R = acctLines(S.acctView, historyJournal()); saveCsv(`${norm(acctName(S.acctView))}_${S.from}_${S.to}.csv`, [["Date","Description","Money in","Money out","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.memo, l.dr ? l.dr.toFixed(2) : "", l.cr ? l.cr.toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
   if(t.id === "posCancel"){ S.posState = (S.posQueue||[]).shift() || null; render(); return; }
   if(t.dataset.recon != null){ S.reconDriver = t.dataset.recon === S.reconDriver ? "" : t.dataset.recon; render(); return; }
-  if(t.id === "expRecon"){ const R = reconRows(); saveCsv(`reconciliation_${S.from}_${S.to}.csv`, [["Driver","Trips","Total payment","Payout from application","Card payment (terminal)","Cash from driver (handed over / spent)","Difference (cash still with driver)"], ...R.map(r => [dName(r.id), r.n, ...[r.total, r.app, r.card, r.handed, r.diff].map(x => r2(x).toFixed(2))])]); return; }
-  if(t.id === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [l.date, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
+  if(t.id === "expRecon" || t.dataset.legacy === "expRecon"){ const R = reconRows(); saveCsv(`reconciliation_${S.from}_${S.to}.csv`, [["Driver","Trips","Total payment","Payout from application","Card payment (terminal)","Cash from driver (handed over / spent)","Difference (cash still with driver)"], ...R.map(r => [dName(r.id), r.n, ...[r.total, r.app, r.card, r.handed, r.diff].map(x => r2(x).toFixed(2))])]); return; }
+  if(t.id === "expJournal" || t.dataset.legacy === "expJournal"){ const L = journal(compute()); saveCsv(`journal_${S.from}_${S.to}.csv`, [["Date","Account code","Account","Debit","Credit","Narration"], ...L.map(l => [l.date, l.acct, acctName(l.acct), l.dr.toFixed(2), l.cr.toFixed(2), l.memo])]); return; }
   if(t.dataset.repdel != null && t.dataset.item){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
     const it = S.ditems[t.dataset.item]; if(!it) return; const {id:_, ...b} = it;
     if(await writeOk(S.db.doc("driverItems/" + t.dataset.item).set({...b, repayments: (b.repayments || []).filter((_, i) => i !== +t.dataset.repdel)}))){ toast("Repayment removed."); render(); }
     return;
   }
-  if(t.id === "expLedger"){ const R = window.drvTx ? drvTx(S.ledgerDriver) : ledgerLines(S.ledgerDriver); saveCsv(`driver_ledger_${norm(dName(S.ledgerDriver))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit (driver owes)","Credit (owed to driver)","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.desc, l.dr ? r2(l.dr).toFixed(2) : "", l.cr ? r2(l.cr).toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
+  if(t.id === "expLedger" || t.dataset.legacy === "expLedger"){ const R = window.drvTx ? drvTx(S.ledgerDriver) : ledgerLines(S.ledgerDriver); saveCsv(`driver_ledger_${norm(dName(S.ledgerDriver))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit (driver owes)","Credit (owed to driver)","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.desc, l.dr ? r2(l.dr).toFixed(2) : "", l.cr ? r2(l.cr).toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
   if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Card on terminal","Loan instalments","Driver's cash used","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.card,d.inst,d.viaDriver,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
 });
+/* Reports: every download goes through saveCsv(name, rows); the button pressed (data-fmt) picks the format –
+   "csv", "xlsx" (Excel, SheetJS) or "pdf" (table on the letterhead, landscape for wide reports). */
+document.addEventListener("click", ev => { const t = ev.target.closest("[data-fmt]"); if(t){ window.__fmt = t.dataset.fmt; setTimeout(() => { window.__fmt = null; }, 0); } }, true);
+const fmtGroup = (attrs, label = "Download") => `<span class="row" style="gap:3px;flex-wrap:nowrap;align-items:center"><span class="small muted">${label}:</span><button class="btn sm" ${attrs} data-fmt="xlsx">Excel</button><button class="btn sm" ${attrs} data-fmt="pdf">PDF</button><button class="btn sm" ${attrs} data-fmt="csv">CSV</button></span>`;
+const reportTitle = name => name.replace(/\.[a-z]+$/i, "").replace(/_\d{4}-\d{2}-\d{2}(_\d{4}-\d{2}-\d{2})?$/, "").replace(/[_-]+/g, " ").replace(/^./, c => c.toUpperCase());
 async function saveCsv(name, rows){
+  const fmt = window.__fmt || "csv";
+  if(fmt === "xlsx") return saveXlsx(name.replace(/\.csv$/i, ".xlsx"), rows);
+  if(fmt === "pdf") return savePdf(name.replace(/\.csv$/i, ".pdf"), rows);
   const csv = rows.map(r => r.map(c => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; }).join(",")).join("\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["\ufeff" + csv], {type:"text/csv"})); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000); toast("Saved " + name);
+}
+function saveXlsx(name, rows){
+  if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return; }
+  const data = rows.map(r => r.map(c => typeof c === "string" && /^-?\d+(\.\d+)?$/.test(c) && c.length < 16 ? +c : c));
+  const ws = XLSX.utils.aoa_to_sheet(data), cols = Math.max(...data.map(r => r.length));
+  ws["!cols"] = Array.from({length: cols}, (_, i) => ({wch: Math.min(48, Math.max(8, ...data.slice(0, 300).map(r => String(r[i] ?? "").length + 2)))}));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, reportTitle(name).slice(0, 31) || "Report");
+  XLSX.writeFile(wb, name); toast("Saved " + name);
+}
+// PDF reports: jsPDF + AutoTable (loaded on first use) – fast for long lists, header row repeated on every page
+const loadJs = src => new Promise((ok, no) => { const el = document.createElement("script"); el.src = src; el.onload = ok; el.onerror = no; document.head.appendChild(el); });
+async function savePdf(name, rows){
+  try{
+    if(!window.jspdf) await loadJs("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+    if(!window.jspdf.jsPDF.API.autoTable) await loadJs("https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js");
+  }catch(e){ toast("The PDF tool could not load – check the internet connection, or use Excel."); return; }
+  const head = (rows[0] || []).map(h => String(h ?? "")), body = rows.slice(1).map(r => head.map((_, j) => r[j] == null ? "" : String(r[j]))), wide = head.length > 7;
+  const isNum = v => /^-?[\d,]+(\.\d+)?$/.test(v);
+  const colStyles = {}; head.forEach((_, j) => { const vals = body.map(r => r[j]).filter(v => v !== ""); if(vals.length && vals.filter(isNum).length / vals.length > 0.8) colStyles[j] = {halign: "right"}; });
+  const co = S.settings.company || "Royal Rides Limousine LLC", title = reportTitle(name), per = dmyS(S.from) + " – " + dmyS(S.to);
+  const doc = new window.jspdf.jsPDF({orientation: wide ? "landscape" : "portrait", unit: "mm", format: "a4", compress: true}), W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  doc.autoTable({head: [head], body, startY: 21, margin: {left: 9, right: 9, top: 21, bottom: 11}, columnStyles: colStyles,
+    styles: {fontSize: wide ? 7 : 7.5, cellPadding: 1.3, lineColor: [197, 201, 210], lineWidth: 0.1, textColor: [17, 17, 17], overflow: "linebreak"},
+    headStyles: {fillColor: [22, 33, 58], textColor: 255, fontStyle: "bold"}, alternateRowStyles: {fillColor: [246, 247, 249]},
+    didDrawPage: () => {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(22, 33, 58); doc.text(co, 9, 12);
+      doc.setFontSize(10); doc.text(title, W - 9, 11, {align: "right"}); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(80); doc.text(per, W - 9, 15.5, {align: "right"});
+      doc.setDrawColor(22, 33, 58); doc.setLineWidth(0.6); doc.line(9, 17.5, W - 9, 17.5);
+      doc.setFontSize(7); doc.setTextColor(120); doc.text("Page " + doc.internal.getNumberOfPages() + " of {total} · printed " + dmyS(iso(new Date())), W - 9, H - 5, {align: "right"});
+    }});
+  if(typeof doc.putTotalPages === "function") doc.putTotalPages("{total}");
+  doc.save(name); toast("Saved " + name);
 }
 document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
@@ -1911,8 +1951,8 @@ boot();
 </script>
 <script src="docs.js?v=4"></script>
 <script src="books.js?v=9"></script>
-<script src="drivers.js?v=20"></script>
+<script src="drivers.js?v=21"></script>
 <script src="pdc.js?v=1"></script>
-<script src="employees.js?v=3"></script>
+<script src="employees.js?v=4"></script>
 
 </body></html>

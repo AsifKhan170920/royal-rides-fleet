@@ -133,4 +133,4 @@ The driver's **Transactions**: when a salary period is finalised, it adds "salar
 ## Pages and downloads
 
 - Long lists show 50 rows a page, **newest first**, with Newest / Newer / Older / Oldest buttons. This covers the Trips page, the driver's Trip history and Transactions, a car's ledger, a machine's transactions, card payments and Expenses & payments.
-- Every tab has a **Download CSV** button, oldest first. That includes trips; the driver's trips, transactions, salary statement, performance and accounts; a car's ledger and assignments; and a machine's transactions and assignments.
+- Every tab has **Download: Excel · PDF · CSV**, oldest first. Excel is a real .xlsx with numbers as numbers. PDF is a table on the company header (landscape for wide reports), with the header row on every page and page numbers; it is built with jsPDF + AutoTable, loaded on first use, so long lists take seconds. That includes trips; the driver's trips, transactions, salary statement, performance and accounts; a car's ledger and assignments; and a machine's transactions and assignments.
