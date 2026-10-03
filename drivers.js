@@ -40,17 +40,17 @@ function drvTx(id){
   const d = S.drivers[id] || {}, ents = (S.ledger && S.ledger.entries) || [], lines = [];
   Object.values(S.payroll).filter(p => p.driverId === id && p.to <= S.to).forEach(p => {
     const v = num(p.entitled != null ? p.entitled : num(p.salary != null ? p.salary : salaryOf(p)) + num(p.cash) - num(p.card));
+    const per = `${dmyS(p.from)} – ${dmyS(p.to)}`, cash = num(p.cashCollected != null ? p.cashCollected : p.cash), card = num(p.card), bcash = num(p.bookingCash);
     lines.push({date: p.to, desc: `Salary entitled ${dmyS(p.from)} – ${dmyS(p.to)} (finalised, ${p.n || 0} trips${p.late && p.late.length ? ` + ${p.late.length} earlier` : ""})`, ...(v >= 0 ? {cr: v} : {dr: -v}), sal: true});
+    if(r2(cash)) lines.push({date: p.to, desc: `Cash collected from riders ${per}`, dr: r2(cash), sal: true});
+    if(r2(bcash)) lines.push({date: p.to, desc: `Cash from direct bookings ${per}`, dr: r2(bcash), sal: true});
+    if(r2(card)) lines.push({date: p.to, desc: `Card payments on the company machine ${per}`, cr: r2(card), sal: true});
   });
   ents.filter(e => e.driverId === id).forEach(e => { const a = num(e.amount), n = e.note ? " – " + e.note : "";
     if(e.type === "driver_payment") lines.push({date: e.date, desc: "Payment to driver" + n, dr: a});
     else if(e.type === "driver_receipt") lines.push({date: e.date, desc: "Received from driver" + n, cr: a}); });
   if(window.BOOKS) BOOKS.driverLines(ents, id).forEach(l => lines.push({...l}));
-  const day = {}; ((S.ledger && S.ledger.trips) || []).forEach(t => { if(t.dr === id && t.c){ const g = day[t.d] ||= {c:0, n:0, card:0}; g.c += t.c; g.n++; } });
-  ((S.ledger && S.ledger.cards) || []).forEach(q => { if(cardDriver(q) === id){ (day[q.d] ||= {c:0, n:0, card:0}).card += q.amt; } });
-  Object.entries(day).forEach(([d, g]) => { if(d > S.to) return; if(r2(g.c)) lines.push({date: d, desc: `Cash collected from riders (${g.n} cash trip${g.n === 1 ? "" : "s"})`, dr: r2(g.c)}); if(r2(g.card)) lines.push({date: d, desc: "Card payments on the company machine", cr: r2(g.card)}); });
-  ents.filter(e => e.driverId === id && e.type === "income" && e.paidFrom === "driver").forEach(e => lines.push({date: e.date, desc: "Cash from a direct booking" + (e.note ? " – " + e.note : ""), dr: num(e.amount) + num(e.vat)}));
-  lines.sort((a,b) => a.date.localeCompare(b.date) || (b.sal ? 1 : 0) - (a.sal ? 1 : 0));
+  lines.sort((a,b) => a.date.localeCompare(b.date) || (a.sal ? 1 : 0) - (b.sal ? 1 : 0));   // a period's lines come after the payments of that day
   let bal = num(d.openingBalance), before = bal; const open = bal, shown = [];
   lines.forEach(l => { bal = r2(bal + (l.cr || 0) - (l.dr || 0)); l.bal = bal; if(l.date < S.from) before = bal; else shown.push(l); });
   return {open, before, shown, closing: bal};
@@ -62,7 +62,7 @@ function dTx(id){
   const loanOut = sum(Object.values(S.ditems).filter(it => it.driverId === id), it => itemOutstanding(it, S.to));
   const fin = Object.values(S.payroll).some(p => p.driverId === id && p.from <= S.to && p.to >= S.from);
   const x = compute().D[id], late = lateTrips(id) || [], pending = x ? r2(salaryOf(x) + sum(late, tripEffect)) : 0;
-  return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">The driver's account from ${esc(dmyS(start))}: cash he collects from riders is a debit (he holds company money), card payments on the company machine and each finalised salary are credits, payments to him are debits. Positive balance = the company owes the driver.</span><button class="btn" id="expLedger">Export CSV</button></div>
+  return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">The driver's account from ${esc(dmyS(start))}: when a salary period is finalised, its salary entitled is a credit, and the cash he collected from riders in that period a debit (card payments on the company machine a credit); payments to him are debits. Positive balance = the company owes the driver.</span><button class="btn" id="expLedger">Export CSV</button></div>
   ${!fin && (x && (x.n || x.inst || x.adv) || late.length) ? `<div class="banner">The salary for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} is not finalised yet (AED ${fmt(pending)} so far), so it is not in this account. <button class="btn sm" data-drvtab="salary">Open Salary</button></div>` : ""}
   <div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>
   <tr><td>${esc(dmyS(S.from < start ? start : S.from))}</td><td><b>${S.from <= start ? "Opening balance" : "Balance brought forward"}</b></td><td></td><td></td><td class="num"><b>${aed(S.from <= start ? T.open : T.before)}</b></td></tr>
@@ -278,6 +278,7 @@ async function finalise(id){
   const rec = {driverId: id, from: S.from, to: S.to, termsText: x.termsText || "", ...Object.fromEntries(k.map(f => [f, r2(num(x[f]))])),
     salary: r2(salaryOf(x) + lateEff), nonTrip: r2(salaryOf(x) - sum(periodTrips, tripEffect)), lateEffect: lateEff,
     entitled: (() => { const M = salaryModel(id, x, late, lateEff, T); return r2(M.due + x.cash + M.viaInc - x.card + sum(late, t => t.c || 0)); })(),
+    cashCollected: r2(x.cash + sum(late, t => t.c || 0)), bookingCash: r2(sum(S.entries.filter(e => e.driverId === id && e.type === "income" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat))),
     rows: [...periodTrips.map(t => t.id), ...late.map(t => t.id)], late: late.map(t => t.id), opening: T.before, closing: r2(T.before + salaryOf(x) + lateEff + num(x.balance) - salaryOf(x)),
     by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
   if(await writeOk(S.db.doc("payroll/" + id + "_" + S.from).set(rec))) toast(`Salary finalised for ${dmyS(S.from)} – ${dmyS(S.to)}: ${rec.rows.length} trip rows settled.`);

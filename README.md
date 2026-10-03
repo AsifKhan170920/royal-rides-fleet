@@ -115,4 +115,4 @@ Drivers → driver → Salary shows one statement in sections. The same statemen
 5. **Entitled to be paid**: salary less loan, advance, visa and other instalments (extra recoveries can be added), then the cash settlement and the balance payable.
 6. **Cash reconciliation**: total receivable, less platform payments, other bookings received by the company, machine payments, cash handed over and cash in hand counted. The difference shows a shortage or excess.
 
-The driver's **Transactions** show cash collected from riders day by day (debit), card payments on the company machine (credit), each finalised salary as "salary entitled" before the cash settlement (credit), and payments and receipts.
+The driver's **Transactions**: when a salary period is finalised, it adds "salary entitled" (credit) and, for the same period, the cash collected from riders and from direct bookings (debit) and the card payments on the company machine (credit). Payments and receipts are added as they happen.
