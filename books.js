@@ -67,7 +67,7 @@ function partyMoves(entries, p, acct){
   }
   return out.sort((a,b) => a.date.localeCompare(b.date));
 }
-const driverLines = (entries, drId) => partyMoves(entries, "d:" + drId, "2100").map(x => ({date:x.date, desc:x.desc, ...(x.dr ? {dr:x.dr} : {}), ...(x.cr ? {cr:x.cr} : {})}));
+const driverLines = (entries, drId) => partyMoves(entries, "d:" + drId, "2100").map(x => ({date:x.date, desc:x.desc, ...(x.dr ? {dr:x.dr} : {}), ...(x.cr ? {cr:x.cr} : {}), ...(x.e ? {ref:{kind:"doc", id:x.e.id, date:x.e.date, type:x.e.type}} : {})}));
 const driverNet = (entries, drId) => r2(sum(partyMoves(entries, "d:" + drId, "2100"), x => x.cr - x.dr));
 function invPaid(inv, entries){
   return r2(sum(entries.filter(e => e.type === (inv.type === "sale_invoice" ? "receipt" : "payment")), e => sum((e.lines || []).filter(l => l.invoiceId === inv.id), l => lineNet(e.type, l) + lineVat(e.type, l))));
@@ -440,7 +440,7 @@ function statementsView(){
 /* ---------- wiring ---------- */
 // a payment to an employee: salary (2110) or an advance / loan (1180)
 function newEmpPayment(id, acct, amt, desc){ newDoc("payment"); S.bk.data.party = "e:" + id; S.bk.lines = [{...blankLine("payment"), account: acct, desc, amount: amt > 0 ? String(r2(amt)) : ""}]; }
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, partyName, partyOpts, partyMoves};
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, partyName, partyOpts, partyMoves, openDoc: openDocRow};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),
