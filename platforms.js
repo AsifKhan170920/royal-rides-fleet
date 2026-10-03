@@ -17,7 +17,7 @@ const PLT_ACCTS = {"1158": "Platform payouts in transit", "4030": "Platform adju
 Object.assign(ACCT, PLT_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, PLT_ACCTS);
 S.pladj = S.pladj || {};
 S.pltView = S.pltView || ""; S.pltTab = S.pltTab || "ledger"; S.pltGroup = S.pltGroup || "week"; S.payouts = S.payouts || {}; S.feeinv = S.feeinv || {}; S.feeEdit = S.feeEdit || null; S.poMatch = S.poMatch || null;
-const PLT_TABS = {ledger: "Ledger", payouts: "Payouts", fees: "Fee invoices"};
+const PLT_TABS = {ledger: "Ledger", payouts: "Payouts", fees: "Fee invoices", api: "API / data sync"};
 const pltConfirm = pl => !!(S.platforms[pl] || {}).payoutConfirm;
 const histTrips = () => (S.ledger && S.ledger.trips && !S.ledger.loading) ? S.ledger.trips : S.trips;
 const histEnts = () => (S.ledger && S.ledger.entries && !S.ledger.loading) ? S.ledger.entries : S.entries;
@@ -113,10 +113,37 @@ function pltFeesTab(pl){
   ${(() => { const d = feeData(pl, S.from, S.to), cov = rows.filter(x => x.from <= S.to && x.to >= S.from); return `<p class="small muted" style="margin-top:6px">This period (${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}): fee in the trip data AED ${fmt(d.fee)}, VAT ${fmt(d.vat)}; ${cov.length ? `covered by ${cov.length} invoice(s)` : `<b class="neg">no fee invoice recorded yet</b>`}.</p>`; })()}`;
 }
 
+/* ---------- API / data sync ----------
+   How the platform's trips come in: by file (Import trip data) or through its API, fetched by the sync program on the
+   office PC (uber-sync: "4 - Sync platform APIs", also run by the daily sync). Here: what to call and how to read the
+   answer – nothing secret. The secrets go in uber-sync/.env under the platform's name. */
+const API_FIELDS = [["id", "Trip / order id"], ["date", "Date & time"], ["driverId", "Driver id on the platform"], ["driverName", "Driver name"], ["plate", "Number plate"], ["fare", "Fare"], ["fee", "Platform fee / commission"], ["vat", "VAT on fee"], ["tip", "Tip"], ["refund", "Tolls & refunds"], ["cash", "Cash collected by driver"], ["other", "Other earnings / bonus"], ["payout", "Payout to bank"], ["km", "Distance (km)"]];
+function pltApiTab(pl){
+  const p = S.platforms[pl];
+  if(!p) return `<div class="banner">Add ${esc(pName(pl))} on Platforms & contracts first (Add Uber, Bolt…), then set its API here.</div>`;
+  const a = p.api || {}, F = a.fields || {}, pre = String(pl).toUpperCase().replace(/[^A-Z0-9]/g, "_"), sy = p.sync;
+  const fld = (n, l, ph = "", extra = "") => `<div class="f"><label for="ap_${n}">${l}</label><input id="ap_${n}" name="${n}" value="${esc(a[n] ?? "")}" placeholder="${esc(ph)}"${extra}></div>`;
+  const envs = (a.authType || "oauth") === "oauth" ? [`${pre}_CLIENT_ID=`, `${pre}_CLIENT_SECRET=`] : a.authType === "apikey" ? [`${pre}_API_KEY=`] : a.authType === "bearer" ? [`${pre}_TOKEN=`] : [];
+  return `<div class="banner ${a.enabled ? "info" : ""}"><b>${a.enabled ? "API on" : "File import"}</b> – ${a.enabled ? `the sync program on the office PC fetches ${esc(pName(pl))}'s trips every day (and with "4 - Sync platform APIs").` : `${esc(pName(pl))}'s trips come from the files dropped on Import trip data. Switch the API on when ${esc(pName(pl))} has given you API access.`}
+    ${sy ? `<div style="margin-top:6px">Last sync: <b>${esc(new Date(sy.at).toLocaleString("en-GB"))}</b> · ${esc(dmyS(sy.from))} – ${esc(dmyS(sy.to))} · ${sy.error ? `<span class="pill bad">Failed</span> ${esc(sy.error)}` : `<span class="pill good">OK</span> ${sy.added} new trips, ${sy.dup} already there`}</div>` : a.enabled ? '<div style="margin-top:6px" class="small">Not run yet.</div>' : ""}</div>
+  <form class="form" id="fApi" data-pl="${esc(pl)}">
+    <div class="f"><label for="ap_en">Trips come by</label><select id="ap_en" name="enabled">${opts({false: "File import (Import trip data)", true: "API – fetched by the office sync program"}, String(!!a.enabled))}</select></div>
+    <div class="f"><label for="ap_auth">Sign-in</label><select id="ap_auth" name="authType">${opts({oauth: "OAuth 2 – client ID & secret", apikey: "API key in a header", bearer: "Fixed bearer token", none: "None"}, a.authType || "oauth")}</select></div>
+    ${fld("tokenUrl", "Token URL (OAuth)", "https://…/oauth/token")}${fld("scope", "Scope (if asked)")}${fld("keyHeader", "API key header name", "X-API-Key")}
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Trips / earnings request</b> <span class="small muted">– placeholders: {from} {to} (dates), {fromTs} {toTs} (Unix time), {offset} {page} {limit} (pages)</span></div>
+    <div class="f"><label for="ap_m">Method</label><select id="ap_m" name="method">${opts({GET: "GET", POST: "POST"}, a.method || "GET")}</select></div>
+    ${fld("tripsUrl", "URL", "https://…/orders?start={fromTs}&end={toTs}&offset={offset}&limit={limit}", ' style="min-width:420px"')}${fld("body", "Body (POST, JSON)", '{"start_ts":{fromTs},"end_ts":{toTs},"offset":{offset},"limit":{limit}}')}
+    ${fld("listPath", "Where the list is in the answer", "data.orders")}${fld("pageSize", "Page size (blank = one page)", "100")}${fld("pageStart", "First page number", "0")}
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Fields</b> <span class="small muted">– the name of each field in a list item; use dots for nested fields (e.g. order_price.ride_price)</span></div>
+    ${API_FIELDS.map(([k, l]) => `<div class="f"><label for="apf_${k}">${l}</label><input id="apf_${k}" name="f_${k}" value="${esc(F[k] || "")}"></div>`).join("")}
+    <div class="f wide"><div class="small" style="background:var(--bg);padding:8px;border-radius:6px">Secrets go only in <b class="mono">uber-sync/.env</b> on the office PC – never here:<br>${envs.map(x => `<span class="mono">${esc(x)}</span>`).join("<br>") || "–"}</div></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save API settings</button></div></form>`;
+}
+
 /* ---------- the page ---------- */
 function platformDetail(pl){
   const p = S.platforms[pl] || {id: pl, name: pName(pl)}, tab = PLT_TABS[S.pltTab] ? S.pltTab : "ledger";
-  const body = tab === "payouts" ? pltPayoutsTab(pl) : tab === "fees" ? pltFeesTab(pl) : pltLedgerTab(pl);
+  const body = tab === "payouts" ? pltPayoutsTab(pl) : tab === "fees" ? pltFeesTab(pl) : tab === "api" ? pltApiTab(pl) : pltLedgerTab(pl);
   return `<div class="section"><div class="head"><div><h2>${esc(p.name || pName(pl))}</h2><p class="sub">${esc(p.legalName || "")}${p.legalName ? " · " : ""}account ${esc(clearingAcct(pl))} · payouts to ${esc(acctName(payAcct(pl)))}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button>${S.platforms[pl] ? `<button class="btn" data-edit="platform" data-id="${esc(pl)}">Edit platform</button>` : ""}</div></div>
   ${tabBtns("data-plttab", tab, PLT_TABS)}${body}</div>`;
@@ -135,7 +162,14 @@ document.addEventListener("click", async ev => {
 });
 document.addEventListener("change", ev => { if(ev.target.id === "pltGrp"){ S.pltGroup = ev.target.value; render(); } });
 document.addEventListener("submit", async ev => {
-  const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv") return; ev.preventDefault(); if(!S.db) return;
+  const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv" && f.id !== "fApi") return; ev.preventDefault(); if(!S.db) return;
+  if(f.id === "fApi"){ const d = Object.fromEntries(new FormData(f).entries()), p = S.platforms[f.dataset.pl]; if(!p) return; const {id, ...b} = p, fields = {};
+    Object.keys(d).filter(k => k.startsWith("f_")).forEach(k => { if(d[k].trim()) fields[k.slice(2)] = d[k].trim(); delete d[k]; });
+    // anything that looks like a secret is refused – it belongs in the .env file on the office PC
+    if(Object.values(d).some(v => /secret|password/i.test(v) && v.length > 20)){ toast("Do not enter secrets here – put them in uber-sync/.env on the office PC."); return; }
+    const api = {...d, enabled: d.enabled === "true", pageSize: d.pageSize ? num(d.pageSize) : "", pageStart: d.pageStart ? num(d.pageStart) : "", fields};
+    if(api.enabled && (!api.tripsUrl || !fields.date)){ toast("Set at least the URL and the date field before switching the API on."); return; }
+    if(await writeOk(S.db.doc("platforms/" + id).set({...b, api}))){ toast(api.enabled ? "Saved – the office sync program will fetch these trips." : "Saved."); render(); } return; }
   const d = Object.fromEntries(new FormData(f).entries()), by = (S.user && (S.user.name || S.user.id)) || "";
   if(f.id === "fPoMatch"){ const id = f.dataset.id;
     if(await writeOk(S.db.doc("payouts/" + id).set({pl: f.dataset.pl, date: f.dataset.date, amount: num(f.dataset.amount), bankDate: d.bankDate, bankAmount: num(d.bankAmount), account: d.account, ref: d.ref || "", by, at: new Date().toISOString()}))){ S.poMatch = null; toast("Payout matched with the bank."); render(); } return; }

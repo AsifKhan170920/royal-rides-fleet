@@ -4,6 +4,7 @@
 //   npm run sync             download the Payments Transaction report and save the trips
 //   npm run sync -- --file X import a CSV you already have
 //   npm run sync -- --days 3 how many past days to fetch (default: from SYNC_DAYS, else 2)
+//   npm run apis             fetch the other platforms through their APIs (see platform-api.js)
 //
 // The Uber window uses its own Chrome profile in ./profile, so the sign-in stays there between runs.
 // Trips go to the Fair Tax portal's Firestore (apps/fleet/store/rr), the same place the
@@ -17,6 +18,7 @@ import { chromium } from 'playwright-core';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { syncPlatformApis } from './platform-api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = n => { const i = process.argv.indexOf(n); return i < 0 ? null : (process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : true); };
@@ -168,6 +170,7 @@ async function fetchReport(page) {
 }
 
 async function main() {
+  if (arg('--apis')) { await portal(); await syncPlatformApis({ db, UP, env: ENV, log, days: DAYS, only: typeof arg('--only') === 'string' ? arg('--only') : null }); process.exit(0); }
   const files = process.argv.flatMap((x, i, a) => x === '--file' && a[i + 1] ? [path.resolve(a[i + 1])] : []);
   if (files.length) {
     files.sort((x, y) => (/activity/i.test(y) ? 1 : 0) - (/activity/i.test(x) ? 1 : 0));
