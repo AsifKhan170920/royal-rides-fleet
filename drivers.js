@@ -204,7 +204,7 @@ function salaryRows(M){
   const S3 = Object.entries(M.byCat).map(([c, v]) => L(esc(EXP_CATS[c] || "Expense"), -v));
   if(!S3.length) S3.push(L('<span class="sub">No direct expenditure this period</span>', null));
   S3.push(L("Total direct expenditure", -M.expenditure, "t"));
-  if(M.mode === "before") S3.push(L("Net earnings", M.netEarn, "t"));
+  S3.push(L("Net earnings", r2(M.earnings - M.expenditure), "g"));   // earnings less direct expenditure
   const S4 = [];
   if(M.rentAmt) S4.push(L(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -M.rentAmt));
   if(M.rta) S4.push(L(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta));
