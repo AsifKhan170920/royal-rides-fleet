@@ -162,7 +162,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, pdcs:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, pdcs:{}, employees:{}, emppay:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -170,6 +170,7 @@ const S = {
 const VIEWS = [
   ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import trip data"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
+  ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],["expiries","Visa & EID expiry"],["empoffers","Employee offer letters"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
   ["Accounts",null],["cashbank","Bank & cash accounts"],["receipts","Receipts"],["payments","Payments"],["transfers","Inter-account transfers"],["pdc","PDC cheques"],["salesinv","Sales invoices"],["customers","Customers"],["purchinv","Purchase invoices"],["suppliers","Suppliers"],["journals","Journal entries"],["coa","Chart of accounts"],["statements","Financial statements"],
   ["Money",null],["entries","Expenses & payments"],["collections","Collections & cash"],["recon","Reconciliation"],["investorpl","Investor P&L"],["ledger","Ledger & VAT"],
@@ -389,7 +390,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("pdcs","pdcs");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -627,6 +628,7 @@ function journal(C){
     p.inst.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add("2100", x.amt, 0, "Instalment – " + memo, x.date); add("1170", 0, x.amt, "Instalment – " + memo, x.date); });
     p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo, x.date); add("1170", 0, num(x.amount), "Repayment – " + memo, x.date); });
   }
+  if(window.EMP) EMP.post(add);   // employee payroll runs
   return L;
 }
 
@@ -725,7 +727,8 @@ function render(){
   let html = "";
   if(!S.db) html += `<div class="banner">Sign in to load and save the fleet data.</div>`;
   else if(!S.canWrite) html += `<div class="banner">You have view-only access. Ask the owner for editor access to make changes.</div>`;
-  if(S.db && window.PDC) html += PDC.banner();   // post-dated cheques that are due
+  if(S.db && window.PDC) html += PDC.banner();
+  if(S.db && window.EMP) html += EMP.banner();   // visa / Emirates ID expiring   // post-dated cheques that are due
   const focus = document.activeElement && document.activeElement.id; const sel = focus && document.activeElement.selectionStart;
   el.innerHTML = html + fns[S.view]();
   if(focus){ const f = document.getElementById(focus); if(f && f !== document.body){ f.focus(); try{ if(sel != null) f.setSelectionRange(sel, sel); }catch(e){} } }
@@ -992,6 +995,9 @@ function driverForm(id, d0){
     <div class="f"><label for="du">Uber driver UUID</label><input id="du" name="uberUuid" value="${esc(d.uberUuid)}"></div>
     <div class="f"><label for="dp">Phone</label><input id="dp" name="phone" value="${esc(d.phone)}"></div>
     <div class="f"><label for="dob">Opening balance (+ we owe driver, − driver owes)</label><input id="dob" name="openingBalance" type="number" step="0.01" value="${esc(d.openingBalance ?? "")}"></div>
+    <div class="f"><label for="dnat">Nationality</label><input id="dnat" name="nationality" value="${esc(d.nationality)}"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Visa & documents</b> <span class="small muted">– you are reminded before they expire (Visa & EID expiry page).</span></div>
+    ${window.EMP ? EMP.docFields(d, "dd") : ""}
     <div class="f"><label>Car (assigned on the Vehicles page)</label><div style="padding:7px 0;font-weight:600">${carNow ? esc(vName(carNow)) : '<span class="muted">None</span>'}</div></div>
     <div class="f"><label>Payment machine (assigned on the Machines page)</label><div style="padding:7px 0;font-weight:600">${trmNow ? esc((trmNow.name ? trmNow.name + " · " : "") + trmNow.tid) : '<span class="muted">None</span>'}</div></div>    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
@@ -1608,6 +1614,7 @@ function vSettings(){
     <div class="f"><label for="ssn">Signatory name</label><input id="ssn" name="signatory" value="${esc(s.signatory)}"></div>
     <div class="f"><label for="sst">Signatory title</label><input id="sst" name="signatoryTitle" value="${esc(s.signatoryTitle)}" placeholder="e.g. Managing Director"></div>
     <div class="f"><label for="sls">Books start on (driver ledgers, bank & cash opening balances)</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
+    <div class="f"><label for="srd">Remind before visa / EID / document expiry (days)</label><input id="srd" name="remindDays" type="number" step="1" value="${esc(s.remindDays ?? 30)}"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
   </form></div>
@@ -1817,9 +1824,10 @@ document.addEventListener("click", async ev => {
 
 boot();
 </script>
-<script src="docs.js?v=2"></script>
-<script src="books.js?v=5"></script>
+<script src="docs.js?v=3"></script>
+<script src="books.js?v=6"></script>
 <script src="drivers.js?v=4"></script>
 <script src="pdc.js?v=1"></script>
+<script src="employees.js?v=1"></script>
 
 </body></html>

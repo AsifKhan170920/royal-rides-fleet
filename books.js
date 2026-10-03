@@ -11,13 +11,21 @@ function applyCoa(){ Object.keys(ACCT).forEach(k => { if(!(k in ACCT_BASE)) dele
 const TYPE_OF = c => ({"1":"Asset", "2":"Liability", "3":"Equity", "4":"Income"})[String(c)[0]] || "Expense";
 
 const BK = {
-  receipt: {title:"Receipt", plural:"Receipts", view:"receipts", cash:"Received in", partyLabel:"Received from", partyTypes:"csd", cols:["account","desc","amount","vat","invoiceId"]},
-  payment: {title:"Payment", plural:"Payments", view:"payments", cash:"Paid from", partyLabel:"Paid to", partyTypes:"scd", cols:["account","desc","amount","vat","invoiceId"]},
+  receipt: {title:"Receipt", plural:"Receipts", view:"receipts", cash:"Received in", partyLabel:"Received from", partyTypes:"csde", cols:["account","desc","amount","vat","invoiceId"]},
+  payment: {title:"Payment", plural:"Payments", view:"payments", cash:"Paid from", partyLabel:"Paid to", partyTypes:"scde", cols:["account","desc","amount","vat","invoiceId"]},
   sale_invoice: {title:"Sales invoice", plural:"Sales invoices", view:"salesinv", partyLabel:"Customer", partyTypes:"c", cols:["desc","account","qty","price","vat"], defAcct:"4100"},
   purchase_invoice: {title:"Purchase invoice", plural:"Purchase invoices", view:"purchinv", partyLabel:"Supplier", partyTypes:"s", cols:["desc","account","qty","price","vat"], defAcct:"5310"},
   journal: {title:"Journal entry", plural:"Journal entries", view:"journals", cols:["account","party","desc","dr","cr"]},
 };
-const CONTROL = {"1200":"c", "2000":"s", "2100":"d"};
+const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e"};
+/* Profit & loss groups: drivers and the cars are the cost of the service (cost of sales); office,
+   operations and workshop staff and general costs are administrative expenses. */
+function plGroup(code){
+  const n = +code; if(String(code)[0] === "4") return "income";
+  if(n === 5900) return "investor";
+  return n >= 5000 && n < 5290 ? "cos" : "admin";
+}
+const PL_GROUPS = {cos:"Cost of sales", admin:"Administrative & general expenses", investor:"Investors' profit share"};
 const VAT_OPTS = {"":"No VAT", "5":"5% VAT"};
 const isInv = k => k === "sale_invoice" || k === "purchase_invoice";
 const lineNet = (k, l) => r2(isInv(k) ? num(l.qty === "" || l.qty == null ? 1 : l.qty) * num(l.price) : num(l.amount));
@@ -25,7 +33,7 @@ const lineVat = (k, l) => r2(lineNet(k, l) * (l.vat === "5" ? 0.05 : 0));
 function docTotals(e){ const ls = e.lines || [], net = sum(ls, l => lineNet(e.type, l)), vat = sum(ls, l => lineVat(e.type, l)); return {net: r2(net), vat: r2(vat), total: r2(net + vat)}; }
 function partyName(p){
   if(!p) return ""; const [t, id] = [p.slice(0,1), p.slice(2)];
-  return t === "c" ? ((S.customers[id] || {}).name || "Customer") : t === "s" ? ((S.suppliers[id] || {}).name || "Supplier") : t === "d" ? dName(id) : "";
+  return t === "c" ? ((S.customers[id] || {}).name || "Customer") : t === "s" ? ((S.suppliers[id] || {}).name || "Supplier") : t === "d" ? dName(id) : t === "e" ? ((S.employees || {})[id] || {}).name || "Employee" : "";
 }
 const docMemo = e => `${BK[e.type].title}${e.number ? " " + e.number : ""}${partyName(e.party) ? " – " + partyName(e.party) : e.payee ? " – " + e.payee : ""}${e.ref ? " – " + e.ref : ""}`;
 const lineParty = (e, l) => e.type === "journal" ? (l.party || "") : (e.party || "");
@@ -86,6 +94,7 @@ function partyOpts(types){
   if(types.includes("c")) Object.values(S.customers).sort(byName).forEach(x => o["c:" + x.id] = "Customer · " + x.name);
   if(types.includes("s")) Object.values(S.suppliers).sort(byName).forEach(x => o["s:" + x.id] = "Supplier · " + x.name);
   if(types.includes("d")) Object.values(S.drivers).sort(byName).forEach(x => o["d:" + x.id] = "Driver · " + (x.name || x.id));
+  if(types.includes("e")) Object.values(S.employees || {}).sort(byName).forEach(x => o["e:" + x.id] = "Employee · " + (x.name || x.id));
   return o;
 }
 
@@ -169,7 +178,7 @@ function bkEditor(){
   const cell = (l, i, col) => {
     const a = `data-line="${i}" data-lf="${col}"`;
     if(col === "account") return `<select ${a} aria-label="Account">${opts(chartOpts(!!c.cash), l.account || "", "Choose account…")}</select>`;
-    if(col === "party") return `<select ${a} aria-label="Customer, supplier or driver">${opts(partyOpts("csd"), l.party || "", "—")}</select>`;
+    if(col === "party") return `<select ${a} aria-label="Customer, supplier or driver">${opts(partyOpts("csde"), l.party || "", "—")}</select>`;
     if(col === "vat") return `<select ${a} aria-label="VAT">${opts(VAT_OPTS, l.vat || "")}</select>`;
     if(col === "invoiceId") return CONTROL[l.account] && CONTROL[l.account] !== "d" ? `<select ${a} aria-label="Invoice">${opts(unpaid, l.invoiceId || "", "Not linked")}</select>` : "";
     if(col === "desc") return `<input ${a} value="${esc(l.desc ?? "")}" aria-label="Description">`;
@@ -368,7 +377,7 @@ function coaView(){
   const rows = coaBalances(historyJournal());
   return ce + `<div class="section"><div class="head"><div><h2>Chart of accounts</h2><p class="sub">Every account with its opening balance (books start ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}) and balance at ${esc(dmyS(S.to))}. Click an account for its ledger. Codes: 1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses.</p></div><button class="btn primary" data-coanew="1">Add account</button></div>
   <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th>Type</th><th class="num">Opening</th><th class="num">Balance ${esc(dmyS(S.to))}</th><th></th></tr></thead><tbody>
-  ${TYPE_ORDER.map(ty => { const rs = rows.filter(r => r.type === ty); return `<tr><td colspan="6" style="background:var(--bg)"><b>${ty === "Liability" ? "Liabilities" : ty + "s"}</b></td></tr>` + rs.map(r => `<tr><td class="mono">${esc(r.code)}</td><td><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button>${S.coa[r.code] && !(r.code in ACCT_BASE) && !cashAccounts().some(a => a.id === r.code) ? ' <span class="pill">Custom</span>' : ""}</td><td class="small">${ty}</td><td class="num">${r.open ? aed(natural(r.code, r.open)) : ""}</td><td class="num">${aed(natural(r.code, r.bal))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`).join(""); }).join("")}
+  ${TYPE_ORDER.map(ty => { const rs = rows.filter(r => r.type === ty); return `<tr><td colspan="6" style="background:var(--bg)"><b>${ty === "Liability" ? "Liabilities" : ty + "s"}</b></td></tr>` + rs.map(r => `<tr><td class="mono">${esc(r.code)}</td><td><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button>${S.coa[r.code] && !(r.code in ACCT_BASE) && !cashAccounts().some(a => a.id === r.code) ? ' <span class="pill">Custom</span>' : ""}</td><td class="small">${ty}${ty === "Expense" ? ` · <span class="muted">${esc(PL_GROUPS[plGroup(r.code)] || "")}</span>` : ""}</td><td class="num">${r.open ? aed(natural(r.code, r.open)) : ""}</td><td class="num">${aed(natural(r.code, r.bal))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`).join(""); }).join("")}
   </tbody></table></div><p class="small muted" style="margin-top:6px">Balances are shown the natural way round: assets and expenses as debits, liabilities, equity and income as credits.</p></div>`;
 }
 function coaForm(code){
@@ -395,14 +404,21 @@ function coaLedger(code){
 function statementsView(){
   // profit & loss for the period at the top
   const L = journal(compute()), mv = {}; L.forEach(l => { mv[l.acct] = (mv[l.acct] || 0) + l.dr - l.cr; });
-  const inc = Object.keys(mv).filter(c => TYPE_OF(c) === "Income" && r2(mv[c])).sort(), exp = Object.keys(mv).filter(c => TYPE_OF(c) === "Expense" && r2(mv[c])).sort();
-  const tInc = sum(inc, c => -mv[c]), tExp = sum(exp, c => mv[c]);
+  const codes = g => Object.keys(mv).filter(c => TYPE_OF(c) !== "Asset" && TYPE_OF(c) !== "Liability" && TYPE_OF(c) !== "Equity" && plGroup(c) === g && r2(mv[c])).sort();
+  const inc = codes("income"), cos = codes("cos"), adm = codes("admin"), invs = codes("investor");
+  const tInc = sum(inc, c => -mv[c]), tCos = sum(cos, c => mv[c]), tAdm = sum(adm, c => mv[c]), tInv = sum(invs, c => mv[c]);
+  const gp = tInc - tCos, op = gp - tAdm, np = op - tInv;
   const line = (c, v) => `<tr><td class="mono small">${esc(c)}</td><td>${esc(acctName(c))}</td><td class="num">${aed(v)}</td></tr>`;
+  const head = t => `<tr><td colspan="3"><b>${t}</b></td></tr>`, tot = (t, v) => `<tr class="tot"><td></td><td><b>${t}</b></td><td class="num"><b>${aed(v)}</b></td></tr>`;
   const pl = `<div class="section"><h2>Profit & loss · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
-    <tr><td colspan="3"><b>Income</b></td></tr>${inc.map(c => line(c, -mv[c])).join("")}<tr class="tot"><td></td><td><b>Total income</b></td><td class="num"><b>${aed(tInc)}</b></td></tr>
-    <tr><td colspan="3"><b>Expenses</b></td></tr>${exp.map(c => line(c, mv[c])).join("")}<tr class="tot"><td></td><td><b>Total expenses</b></td><td class="num"><b>${aed(tExp)}</b></td></tr>
-    <tr class="tot"><td></td><td><b>${tInc - tExp >= 0 ? "Net profit" : "Net loss"}</b></td><td class="num"><b>${aed(tInc - tExp)}</b></td></tr></tbody></table></div>
-    <p class="small muted" style="margin-top:6px">Driver earnings share (5100) and investor share (5900) are expenses. The company's share of a driver's visa or loan is an expense; the driver's own share is not – it sits in 1170 until recovered.</p></div>`;
+    ${head("Revenue")}${inc.map(c => line(c, -mv[c])).join("")}${tot("Total revenue", tInc)}
+    ${head(PL_GROUPS.cos + " <span class=\"small muted\">(drivers, platform fees, vehicle running costs)</span>")}${cos.map(c => line(c, mv[c])).join("")}${tot("Total cost of sales", tCos)}
+    ${tot("Gross profit", gp)}
+    ${head(PL_GROUPS.admin + " <span class=\"small muted\">(office, operations & workshop staff, overheads)</span>")}${adm.map(c => line(c, mv[c])).join("")}${tot("Total administrative & general expenses", tAdm)}
+    ${tot("Operating profit", op)}
+    ${invs.length ? head(PL_GROUPS.investor) + invs.map(c => line(c, mv[c])).join("") : ""}
+    ${tot(np >= 0 ? "Net profit" : "Net loss", np)}</tbody></table></div>
+    <p class="small muted" style="margin-top:6px">Drivers are direct staff: their earnings share or salary (5100) and their visas & permits (5280) are cost of sales. Employees' salaries post to administrative expenses by department (6000–6002) with their visa & EID (6010). A driver's own share of a loan or visa is not an expense – it sits in 1170 until recovered.</p></div>`;
   const wait = needHistory();
   if(wait) return pl + `<div class="section"><h2>Balance sheet</h2>${wait}</div>`;
   // balance sheet at the end of the period: opening balances + everything posted since the books start
@@ -422,7 +438,9 @@ function statementsView(){
 }
 
 /* ---------- wiring ---------- */
-window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, partyName, partyOpts};
+// a payment to an employee: salary (2110) or an advance / loan (1180)
+function newEmpPayment(id, acct, amt, desc){ newDoc("payment"); S.bk.data.party = "e:" + id; S.bk.lines = [{...blankLine("payment"), account: acct, desc, amount: amt > 0 ? String(r2(amt)) : ""}]; }
+window.BOOKS = {TYPES: Object.keys(BK), post, driverNet, driverLines, applyCoa, newDriverDoc, newFromPdc, newEmpPayment, partyName, partyOpts, partyMoves};
 window.BOOK_VIEWS = {
   receipts: () => docList("receipt"), payments: () => docList("payment"), salesinv: () => docList("sale_invoice"),
   purchinv: () => docList("purchase_invoice"), journals: () => docList("journal"),

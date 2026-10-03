@@ -95,3 +95,12 @@ When a driver's salary is finalised, the ids of the trip rows it paid are stored
 - A PDC is a memo until its date; nothing is posted.
 - When the cheque date arrives, a banner shows on every page. A browser notification can be switched on from the PDC page.
 - "Record receipt" / "Record payment" opens the form filled in from the cheque (1200 for a customer, 2000 for a supplier, the driver form for a driver). Saving it marks the PDC cleared, with a link to the document.
+
+## Employees (employees.js) and how staff costs are split
+
+- **Drivers** are direct staff. Their earnings share or salary (5100) and their visas, permits and benefits (5280) are **cost of sales**, together with platform fees and vehicle running costs (5000–5289).
+- **Employees** are office, operations and workshop staff. Their salaries post to **administrative expenses** by department (6000 administration, 6001 operations, 6002 workshop / other), with visa, Emirates ID & medical (6010), gratuity (6020) and leave salary & tickets (6030).
+- Profit & loss: Revenue → Cost of sales → Gross profit → Administrative & general expenses → Operating profit → Investors' profit share → Net profit.
+- **Employee payroll**: a monthly run (`emppay/{YYYY-MM}`) with unpaid days (gross ÷ 30), other deductions and advance recovery. Posting records Dr salaries / Cr 2110 Staff salaries payable at month end; a recovered advance moves from 1180 to 2110. Salaries and advances are paid from Payments with the employee as payee (2110 / 1180).
+- **Visa & EID expiry**: passport, visa, Emirates ID, labour card, licence and medical expiry for drivers and employees. A banner shows on every page within the reminder window (Settings, default 30 days), and an optional browser notification can be switched on.
+- **Employee offer letters**: drafted from the designation and salary breakdown, with UAE Labour Law terms; edited and downloaded as PDF like the driver letters.

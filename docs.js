@@ -6,7 +6,9 @@
 const DOCS = {
   offer: { view: "offers", title: "Driver offer letter", party: "Driver", file: "Offer_Letter" },
   agreement: { view: "agreements", title: "Investor agreement", party: "Investor", file: "Investor_Agreement" },
+  empoffer: { view: "empoffers", title: "Employee offer letter", party: "Employee", file: "Offer_Letter" },
 };
+const PEOPLE = kind => kind === "offer" ? S.drivers : kind === "empoffer" ? (S.employees || {}) : S.investors;
 S.docs = S.docs || {}; S.docEdit = null;
 
 /* ---------- defaults from the fleet data ---------- */
@@ -18,6 +20,16 @@ function offerDefaults(d) {
     rentPerDay: num(d.rentPerDay), salary: num(d.salary), housing: 0, transport: 0, settle: "weekly",
     hours: "8 hours a day, 6 days a week (48 hours a week)", leave: 30, notice: 30, vehicle: v ? vName(v.id) : "",
     benefits: "Employment visa, Emirates ID, medical insurance and the RTA limousine driver permit, arranged and paid by the Company.",
+    other: "", validDays: 7,
+  };
+}
+function empOfferDefaults(e) {
+  return {
+    name: e.name || "", nationality: e.nationality || "", passport: e.passportNo || "", phone: e.phone || "", position: e.designation || "",
+    department: ({admin:"Administration", operations:"Operations", workshop:"Workshop", other:""})[e.dept] || "", place: "Dubai, UAE",
+    start: e.joinDate || iso(new Date()), probation: 6, basic: num(e.basic), housing: num(e.housing), transport: num(e.transport), otherAllow: num(e.otherAllow),
+    hours: "8 hours a day, 6 days a week (48 hours a week)", leave: 30, notice: 30,
+    benefits: "Employment visa, Emirates ID and medical insurance, arranged and paid by the Company.", ticket: "One economy return air ticket to your home country every two years of service.",
     other: "", validDays: 7,
   };
 }
@@ -73,6 +85,34 @@ function offerBody(x) {
   ].join("");
 }
 
+function empOfferBody(x) {
+  const total = num(x.basic) + num(x.housing) + num(x.transport) + num(x.otherAllow);
+  const row = (l, v) => num(v) ? `<tr><td style="padding:3px 12px 3px 0">${l}</td><td style="text-align:right">${aedT(v)}</td></tr>` : "";
+  return [
+    P(`Date: ${dmy(iso(new Date()))}`),
+    P(`<b>${esc(x.name) || "[Employee name]"}</b>${x.nationality ? `<br>Nationality: ${esc(x.nationality)}` : ""}${x.passport ? `<br>Passport no.: ${esc(x.passport)}` : ""}${x.phone ? `<br>Mobile: ${esc(x.phone)}` : ""}`),
+    P(`<b>Subject: Offer of employment – ${esc(x.position) || "[Position]"}</b>`),
+    P(`Dear ${esc((x.name || "").split(" ")[0]) || "Sir / Madam"},`),
+    P(`We are pleased to offer you the position of <b>${esc(x.position)}</b>${x.department ? ` in our ${esc(x.department)} department` : ""} with ${esc(company())} (“the Company”), based in ${esc(x.place)}, on the following terms.`),
+    H("1. Start date and probation"),
+    P(`Your employment starts on <b>${dmy(x.start)}</b>, subject to your employment visa and Emirates ID being issued. The first ${num(x.probation)} month(s) are a probation period, as allowed by the UAE Labour Law (Federal Decree-Law No. 33 of 2021).`),
+    H("2. Salary"),
+    P(`Your total monthly salary is <b>${aedT(total)}</b>, made up as follows:`),
+    `<table style="margin:0 0 8px">${row("Basic salary", x.basic)}${row("Housing allowance", x.housing)}${row("Transport allowance", x.transport)}${row("Other allowance", x.otherAllow)}<tr><td style="padding:3px 12px 3px 0"><b>Total</b></td><td style="text-align:right"><b>${aedT(total)}</b></td></tr></table>`,
+    P("Salary is paid monthly through the Wage Protection System (WPS) to your bank account. End-of-service gratuity is calculated on the basic salary as set out in the UAE Labour Law."),
+    H("3. Working hours"),
+    P(`Your normal working hours are ${esc(x.hours)}, in line with the UAE Labour Law.`),
+    H("4. Leave and benefits"),
+    P(`${esc(x.benefits)} You are entitled to ${num(x.leave)} days' paid annual leave per completed year of service and the official public holidays. ${esc(x.ticket || "")}`),
+    H("5. Notice period"),
+    P(`After probation, either party may end the employment by giving ${num(x.notice)} days' written notice, or as otherwise allowed by law.`),
+    H("6. Company policies"),
+    P("You agree to follow the Company's policies and procedures, keep the Company's information confidential, and not take up other work without the Company's written approval."),
+    x.other ? H("7. Other terms") + P(L(x.other)) : "",
+    P(`This offer is valid for ${num(x.validDays)} days from the date above. Please sign below to confirm that you accept it.`),
+    P("We look forward to welcoming you to the team."),
+  ].join("");
+}
 function agreementBody(x) {
   const ret = x.invModel === "fixed" ? `a fixed amount of <b>${aedT(x.invFixed)} per month</b> for each month of the term, pro-rated for part months`
     : `<b>${num(x.invPct)}%</b> of the Operating Profit of the Vehicle(s) remaining after the Management Fee`;
@@ -131,8 +171,8 @@ function letterhead() {
 function signatures(kind, x) {
   const s = S.settings;
   const left = `<div><div class="sig-line"></div><b>For ${esc(company())}</b><br>${esc(s.signatory || "Authorised signatory")}${s.signatoryTitle ? `<br>${esc(s.signatoryTitle)}` : ""}<br>Date: ______________</div>`;
-  const right = kind === "offer"
-    ? `<div><div class="sig-line"></div><b>Accepted by</b><br>${esc(x.name) || "Driver"}<br>Date: ______________</div>`
+  const right = kind === "offer" || kind === "empoffer"
+    ? `<div><div class="sig-line"></div><b>Accepted by</b><br>${esc(x.name) || (kind === "offer" ? "Driver" : "Employee")}<br>Date: ______________</div>`
     : `<div><div class="sig-line"></div><b>The Investor</b><br>${esc(x.name) || "Investor"}<br>Date: ______________</div>`;
   return `<div class="sigs">${left}${right}</div>`;
 }
@@ -168,11 +208,12 @@ function vAgreements() { return docsView("agreement"); }
 function docsView(kind) {
   const K = DOCS[kind], e = S.docEdit && S.docEdit.kind === kind ? S.docEdit : null;
   const list = Object.values(S.docs).filter(d => d.kind === kind).sort((a, b) => (b.updated || "").localeCompare(a.updated || ""));
-  const people = kind === "offer" ? S.drivers : S.investors;
+  const people = PEOPLE(kind);
   const picker = `<div class="row"><select id="docPick" aria-label="Choose ${K.party.toLowerCase()}">${listOpts(people, p => p.name || p.id, "", `Choose a ${K.party.toLowerCase()}…`)}</select>
     <button class="btn primary" id="docNew" data-kind="${kind}">New ${K.title.toLowerCase()}</button></div>`;
   return `${e ? docEditor(e) : ""}
-  <div class="section"><div class="head"><div><h2>${K.title}s</h2><p class="sub">${kind === "offer"
+  <div class="section"><div class="head"><div><h2>${K.title}s</h2><p class="sub">${kind === "empoffer" ? "Drafted from the employee's designation and salary breakdown. Edit the text on the page, save it, and download a PDF on the company letterhead for signing."
+    : kind === "offer"
     ? "Drafted from the driver's pay terms and car. Edit the text on the page, save it, and download a PDF on the company letterhead for signing."
     : "Drafted from the investor's cars and the terms set on the Vehicles page. Edit, save, and download a PDF for signing."}</p></div>${picker}</div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>${K.party}</th><th>Date</th><th>Status</th><th>Last saved</th><th></th></tr></thead><tbody>
@@ -187,7 +228,13 @@ const sel = (k, l, x, o) => `<div class="f"><label for="dx_${k}">${l}</label><se
 
 function docEditor(e) {
   const x = e.fields, K = DOCS[e.kind];
-  const form = e.kind === "offer" ? [
+  const form = e.kind === "empoffer" ? [
+    fld("name", "Employee name", x), fld("nationality", "Nationality", x), fld("passport", "Passport no.", x), fld("phone", "Mobile", x),
+    fld("position", "Position", x), fld("department", "Department", x), fld("place", "Work place", x), fld("start", "Start date", x, "date"),
+    fld("probation", "Probation (months, max 6)", x, "number"), fld("basic", "Basic salary / month", x, "number"), fld("housing", "Housing allowance", x, "number"), fld("transport", "Transport allowance", x, "number"),
+    fld("otherAllow", "Other allowance", x, "number"), fld("hours", "Working hours", x), fld("leave", "Annual leave (days)", x, "number"), fld("notice", "Notice period (days)", x, "number"),
+    fld("validDays", "Offer valid for (days)", x, "number"), area("benefits", "Visa and benefits", x), area("ticket", "Air ticket", x), area("other", "Other terms (optional)", x),
+  ] : e.kind === "offer" ? [
     fld("name", "Driver name", x), fld("nationality", "Nationality", x), fld("passport", "Passport / Emirates ID", x), fld("phone", "Mobile", x),
     fld("position", "Position", x), fld("place", "Work place", x), fld("start", "Start date", x, "date"), fld("probation", "Probation (months, max 6)", x, "number"),
     sel("payModel", "Pay model", x, PAY_MODELS), fld("commissionPct", "Commission %", x, "number"), fld("salary", "Basic salary / month", x, "number"), fld("rentPerDay", "Vehicle charge / day", x, "number"),
@@ -212,7 +259,8 @@ function docEditor(e) {
 }
 
 /* ---------- actions ---------- */
-const buildBody = e => (e.kind === "offer" ? offerBody : agreementBody)(e.fields);
+const buildBody = e => (e.kind === "offer" ? offerBody : e.kind === "empoffer" ? empOfferBody : agreementBody)(e.fields);
+function newEmpOffer(emp) { S.docEdit = { id: "", kind: "empoffer", refId: emp.id, fields: empOfferDefaults(emp), body: "", manual: false, status: "draft" }; S.docEdit.body = buildBody(S.docEdit); }
 function openDoc(id) { const d = S.docs[id]; if (!d) return; S.docEdit = { id, kind: d.kind, refId: d.refId, fields: { ...d.fields }, body: d.body, manual: !!d.manual, status: d.status || "draft" }; render(); window.scrollTo(0, 0); }
 async function saveDoc(statusChange) {
   const e = S.docEdit; if (!e || !S.db) return;
@@ -231,8 +279,8 @@ document.addEventListener("click", async ev => {
   if (t.id === "docNew") {
     const kind = t.dataset.kind, pick = document.getElementById("docPick").value;
     if (!pick) { toast(`Choose a ${DOCS[kind].party.toLowerCase()} first.`); return; }
-    const person = (kind === "offer" ? S.drivers : S.investors)[pick] || {};
-    const fields = kind === "offer" ? offerDefaults(person) : agreementDefaults(person);
+    const person = PEOPLE(kind)[pick] || {};
+    const fields = kind === "offer" ? offerDefaults(person) : kind === "empoffer" ? empOfferDefaults(person) : agreementDefaults(person);
     S.docEdit = { id: "", kind, refId: pick, fields, body: "", manual: false, status: "draft" };
     S.docEdit.body = buildBody(S.docEdit); render(); window.scrollTo(0, 0); return;
   }
