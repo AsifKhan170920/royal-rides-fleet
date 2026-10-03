@@ -184,21 +184,22 @@ function vehPLModel(id){
 function vehStmt(M){
   const v = M.v, R = [], H = label => R.push({k: "h", label}), I = (label, a) => R.push({k: "i", label, a: r2(a)}), T = (label, b, k = "s") => R.push({k, label, b: r2(b)});
   H("Revenue");
-  Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f).forEach(([k, b]) => { I(`${pName(k)} – fares (${b.n} trips)`, b.f); if(r2(b.fee)) I(`Less: ${pName(k)} service fee & VAT`, -b.fee); });
+  Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f).forEach(([k, b]) => { I(`${pName(k)} – fares (${b.n} trips)`, b.f); });
   if(M.fareStd && v.fareRev) I("Less: output VAT on fares", -r2(sum(Object.values(M.byPl), b => b.f) - v.fareRev));
   if(r2(v.ref)) I("Tolls & fees recovered", v.ref);
-  T("Net revenue", M.netRev);
+  T("Total revenue", r2(M.netRev + sum(Object.values(M.byPl), b => b.fee)));
   H("Direct costs");
+  Object.entries(M.byPl).sort((x, y) => y[1].f - x[1].f).forEach(([k, b]) => { if(r2(b.fee)) I(`${pName(k)} service fee & VAT`, -b.fee); });
   I("Driver cost (earnings share / salary)", -v.drvCost);
   Object.entries(M.byCat).forEach(([c, val]) => I(EXP_CATS[c] || "Other expenses", -val));
-  T("Total direct costs", -r2(v.drvCost + v.exp));
+  T("Total direct costs", -r2(v.drvCost + v.exp + sum(Object.values(M.byPl), b => b.fee)));
   if(M.owner === "investor"){
     T("Operating profit", v.op);
     H("Profit sharing");
     const terms = vehTermText(M.terms).replace(/^[^:]*: /, "");
     if(v.rmInv){ I(`Investor's share (${terms})`, v.invShare + v.rmInv); I("Less: repairs & maintenance borne by the investor", -v.rmInv); }
-    T(v.rmInv ? "Investor's share" : `Investor's share (${terms})`, v.invShare);
-    T(`Company's share${v.mgmt ? ` (incl. management fee ${fmt(v.mgmt)})` : ""}`, v.company);
+    (v.rmInv ? T : I)(v.rmInv ? "Investor's share" : `Investor's share (${terms})`, v.invShare);
+    I(`Company's share${v.mgmt ? ` (incl. management fee ${fmt(v.mgmt)})` : ""}`, v.company);
     if(M.emi){
       H("Investor settlement");
       I("Investor's share", v.invShare);
@@ -226,13 +227,13 @@ function vehMemo(M){
   if(f.funding === "credit" && f.supplierId) out.push([`Owed to ${dealerName(f)} (supplier balance)`, (() => { try{ return r2(num((S.suppliers[f.supplierId] || {}).opening) + sum(BOOKS.partyMoves(histEntries(), "s:" + f.supplierId, "2000"), x => x.cr - x.dr)); }catch(e){ return ""; } })()]);
   return out;
 }
-const vehPerf = M => [["Trips", M.trips], ["Days in service", M.days], ["Distance", fmt(M.km) + " km"], ["Drivers", M.drivers], ["Net revenue / day", fmt(M.days ? M.netRev / M.days : 0)], ["Net revenue / km", fmt(M.km ? M.netRev / M.km : 0)], ["Operating margin", (M.netRev ? Math.round(100 * M.v.op / M.netRev) : 0) + "%"]];
+const vehPerf = M => { const rev = r2(M.netRev + sum(Object.values(M.byPl), b => b.fee)); return [["Trips", M.trips], ["Days in service", M.days], ["Distance", fmt(M.km) + " km"], ["Drivers", M.drivers], ["Revenue / day", fmt(M.days ? rev / M.days : 0)], ["Revenue / km", fmt(M.km ? rev / M.km : 0)], ["Operating margin", (rev ? Math.round(100 * M.v.op / rev) : 0) + "%"]]; };
 const br = x => x == null || x === "" ? "" : typeof x === "string" ? x : x < 0 ? `(${fmt(-x)})` : fmt(x);
 const VPL_CSS = `.vst{width:100%;border-collapse:collapse}.vst td{padding:4px 8px;vertical-align:top}.vst td.n{text-align:right;white-space:nowrap;width:120px;font-variant-numeric:tabular-nums}
 .vst tr.h td{font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:.85em;padding-top:12px}.vst tr.i td:first-child{padding-left:22px}
-.vst tr.s td{font-weight:700}.vst tr.s td.n.b{border-top:1px solid currentColor}.vst tr.g td{font-weight:700}.vst tr.g td.n.b{border-top:1px solid currentColor;border-bottom:3px double currentColor}
+.vst tr.s td{font-weight:700}.vst tr.s td.n{border-top:1px solid currentColor}.vst tr.g td{font-weight:700}.vst tr.g td.n{border-top:1px solid currentColor;border-bottom:3px double currentColor}
 .vst tr.memo td{font-size:.92em}`;
-const stmtTable = R => `<table class="vst"><tr><td></td><td class="n"><b>AED</b></td><td class="n"><b>AED</b></td></tr>${R.map(r => `<tr class="${r.k}"><td>${esc(r.label)}</td><td class="n">${r.k === "i" ? br(r.a) : ""}</td><td class="n${r.k === "s" || r.k === "g" ? " b" : ""}">${r.k === "s" || r.k === "g" ? br(r.b) : ""}</td></tr>`).join("")}</table>`;
+const stmtTable = R => `<table class="vst"><tr><td></td><td class="n"><b>AED</b></td></tr>${R.map(r => `<tr class="${r.k}"><td>${esc(r.label)}</td><td class="n">${r.k === "h" ? "" : br(r.k === "i" ? r.a : r.b)}</td></tr>`).join("")}</table>`;
 const memoTable = rows => rows.length ? `<table class="vst"><tr class="h"><td>Vehicle & finance – ${esc(dmyS(S.to))}</td><td class="n"></td></tr>${rows.map(([l, x]) => `<tr class="memo"><td>${esc(l)}</td><td class="n">${br(x)}</td></tr>`).join("")}</table>` : "";
 function vehPLTab(id){
   const M = vehPLModel(id), cells = vehPerf(M);
@@ -263,10 +264,10 @@ async function printVehPL(id){
 DL.vpl = id => {
   if(window.__fmt === "pdf"){ printVehPL(id); return null; }
   const M = vehPLModel(id), memo = vehMemo(M);
-  return [`vehicle_pl_${norm(vName(id))}_${S.from}_${S.to}.csv`, [[`${vName(id)} – Profit & loss statement, ${dmyS(S.from)} to ${dmyS(S.to)}`, "AED", "AED"],
-    ...vehStmt(M).map(r => r.k === "h" ? [r.label.toUpperCase(), "", ""] : r.k === "i" ? ["   " + r.label, r.a, ""] : [r.label, "", r.b]),
-    ...(memo.length ? [["", "", ""], ["VEHICLE & FINANCE – " + dmyS(S.to), "", ""], ...memo.map(([l, x]) => ["   " + l, x, ""])] : []),
-    ["", "", ""], ["KEY FIGURES", "", ""], ...vehPerf(M).map(c => ["   " + c[0], String(c[1]), ""])]];
+  return [`vehicle_pl_${norm(vName(id))}_${S.from}_${S.to}.csv`, [[`${vName(id)} – Profit & loss statement, ${dmyS(S.from)} to ${dmyS(S.to)}`, "AED"],
+    ...vehStmt(M).map(r => r.k === "h" ? [r.label.toUpperCase(), ""] : r.k === "i" ? ["   " + r.label, r.a] : [r.label, r.b]),
+    ...(memo.length ? [["", ""], ["VEHICLE & FINANCE – " + dmyS(S.to), ""], ...memo.map(([l, x]) => ["   " + l, x])] : []),
+    ["", ""], ["KEY FIGURES", ""], ...vehPerf(M).map(c => ["   " + c[0], String(c[1])])]];
 };
 document.addEventListener("click", ev => { const t = ev.target.closest("button"); if(t && t.dataset.vplprint) printVehPL(t.dataset.vplprint); });
 
