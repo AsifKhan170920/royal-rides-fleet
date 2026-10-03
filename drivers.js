@@ -212,7 +212,7 @@ function salaryRows(M){
   if(M.rta) S4.push(L(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta));
   S4.push(L(payLabel, M.base, "t"));
   if(x.tipsDue) S4.push(L("Tips from platforms", x.tipsDue));
-  M.pens.forEach(a => S4.push({...L(`Violation deduction ${num(a.pct)}%${a.reason ? " – " + esc(a.reason) : ""}`, -num(a.amount)), pen: a.id}));
+  M.pens.forEach(a => S4.push({...L(`Violation deduction${a.pct ? " " + num(a.pct) + "%" : ""}${a.reason ? " – " + esc(a.reason) : ""}`, -num(a.amount)), pen: a.id}));
   S4.push(L("Salary for the period", M.salary, "g"));
   const S5 = [L("Salary for the period", M.salary)];
   M.items.forEach(o => S5.push(L(`Less ${esc((ITEM_KINDS[o.it.kind] || "recovery").toLowerCase())}${o.it.desc ? " – " + esc(o.it.desc) : ""}`, -o.amt)));
@@ -239,7 +239,7 @@ function salaryHtml(M, print, locked){
   const cells = perfCells(M.perf);
   const perf = `<h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>`;
   const forms = {
-    "4": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penPct" placeholder="%" style="width:70px" aria-label="Deduction %"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct % of salary</button></div>`,
+    "4": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penAmt" placeholder="AED" style="width:100px" aria-label="Deduction amount (AED)"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct from salary</button></div>`,
     "5": recovTbl(M.id, locked),
     "6": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="cashDecl" placeholder="${r2(M.expected - M.handed)}" value="${M.inHand == null ? "" : M.inHand}" style="width:120px" aria-label="Cash in hand"><button class="btn sm" data-cashset="${esc(M.id)}">Save cash in hand (counted)</button></div>`};
   return perf + salaryRows(M).map(([n, title, rows]) => `<h3 style="margin:16px 0 6px">${n}. ${title}</h3><div class="tbl"><table><tbody>
@@ -412,12 +412,10 @@ document.addEventListener("click", async ev => {
   }
   if(t.dataset.txdel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Sure?"; return; } await txDelete(JSON.parse(t.dataset.txdel)); return; }
   if(t.dataset.penadd){
-    const id = t.dataset.penadd, pct = num((document.getElementById("penPct") || {}).value), why = ((document.getElementById("penWhy") || {}).value || "").trim();
-    if(pct <= 0 || pct > 100){ toast("Enter the deduction % (1–100)."); return; }
-    if(!historyReady()){ toast("Still loading – try again in a moment."); return; }
-    const x = compute().D[id] || {}, late = lateTrips(id) || [], M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), amount = r2(M.base * pct / 100);
-    if(amount <= 0){ toast("There is no salary to deduct from in this period."); return; }
-    if(await writeOk(S.db.doc("drvAdj/pen-" + uid()).set({kind: "penalty", driverId: id, date: S.to, from: S.from, pct, amount, reason: why, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}))) toast(`Deducted AED ${fmt(amount)} (${pct}%).`);
+    const id = t.dataset.penadd, amount = r2(num((document.getElementById("penAmt") || {}).value)), why = ((document.getElementById("penWhy") || {}).value || "").trim();
+    if(amount <= 0){ toast("Enter the amount to deduct (AED)."); return; }
+    if(!why){ toast("Enter the reason for the deduction."); return; }
+    if(await writeOk(S.db.doc("drvAdj/pen-" + uid()).set({kind: "penalty", driverId: id, date: S.to, from: S.from, amount, reason: why, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}))) toast(`Deducted AED ${fmt(amount)} from the salary.`);
     return;
   }
   if(t.dataset.pendel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Remove?"; return; } if(await writeOk(S.db.doc("drvAdj/" + t.dataset.pendel).delete())) toast("Deduction removed."); return; }

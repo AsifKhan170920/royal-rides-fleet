@@ -111,7 +111,7 @@ Drivers → driver → Salary shows one statement in sections. The same statemen
 1. **Performance**: trips, days, km, net per day against the fleet, net per trip, cash share, completion, rank.
 2. **Earnings**: net of platform fee and VAT, per platform (Uber, Bolt…), plus other (direct) bookings.
 3. **Direct expenditure**: fare-related costs charged to the driver (fuel, Salik, fines, repairs). Per driver (pay terms) they are either recovered in full after the salary, or deducted before the commission so the company carries its share (`expMode`).
-4. **Salary calculation**: company fee / RTA fee per day, company share, salary + commission, tips, and **violation deductions** as a % of the salary (`drvAdj`, posted Dr 2100 / Cr 4210).
+4. **Salary calculation**: company fee / RTA fee per day, company share, salary + commission, tips, and **violation deductions** as a fixed amount with a reason (`drvAdj`, posted Dr 2100 / Cr 4210).
 5. **Entitled to be paid**: salary less loan, advance, visa and other instalments (extra recoveries can be added), then the cash settlement and the balance payable.
 6. **Cash reconciliation**: total receivable, less platform payments, other bookings received by the company, machine payments, cash handed over and cash in hand counted. The difference shows a shortage or excess.
 
