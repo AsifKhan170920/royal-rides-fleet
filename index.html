@@ -167,7 +167,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, reminders:{}, rcpt:{}, payouts:{}, feeinv:{}, pladj:{}, pltView:"", pltTab:"ledger", rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, rtablocks:{}, rtaplates:{}, reminders:{}, rcpt:{}, payouts:{}, feeinv:{}, pladj:{}, pltView:"", pltTab:"ledger", rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -403,7 +403,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("payouts","payouts"); sub("feeinv","feeinv"); sub("pladj","pladj"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("rtablocks","rtablocks"); sub("rtaplates","rtaplates"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("payouts","payouts"); sub("feeinv","feeinv"); sub("pladj","pladj"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/syncRequest").onSnapshot(d => { const was = (S.syncReq || {}).status; S.syncReq = d.exists ? d.data() : null; if(S.syncReq && was !== S.syncReq.status && S.syncReq.status === "done"){ loadPeriod().then(() => { S.ledger = null; render(); }); toast("Sync finished – new trips loaded."); } else softRender(); });
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
@@ -1142,6 +1142,8 @@ function driverForm(id, d0){
     <div class="f"><label for="dnat">Nationality</label><input id="dnat" name="nationality" value="${esc(d.nationality)}"></div>
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Visa & documents</b> <span class="small muted">– you are reminded before they expire (Visa & EID expiry page).</span></div>
     ${window.EMP ? EMP.docFields(d, "dd") : ""}
+    <div class="f"><label for="dr_un">RTA unified no.</label><input id="dr_un" name="rtaUnifiedNo" value="${esc(d.rtaUnifiedNo || "")}"></div><div class="f"><label for="dr_li">Licence issue date</label><input id="dr_li" name="licenceIssue" type="date" value="${esc(d.licenceIssue || "")}"></div>
+    <div class="f"><label for="dr_ls">Licence status</label><input id="dr_ls" name="licenceStatus" value="${esc(d.licenceStatus || "")}"></div><div class="f"><label for="dr_lc">Licence categories</label><input id="dr_lc" name="licenceCategories" value="${esc(d.licenceCategories || "")}"></div>
     <div class="f"><label>Car (assigned on the Vehicles page)</label><div style="padding:7px 0;font-weight:600">${carNow ? esc(vName(carNow)) : '<span class="muted">None</span>'}</div></div>
     <div class="f"><label>Payment machine (assigned on the Machines page)</label><div style="padding:7px 0;font-weight:600">${trmNow ? esc((trmNow.name ? trmNow.name + " · " : "") + trmNow.tid) : '<span class="muted">None</span>'}</div></div>    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
@@ -1260,13 +1262,16 @@ function vehicleForm(id, v0){
     <div class="f"><label for="vf">Fleet ID (e.g. RR12)</label><input id="vf" name="fleetId" value="${esc(v.fleetId)}"></div>
     <div class="f"><label for="vp">Plate</label><input id="vp" name="plate" required value="${esc(v.plate)}"></div>
     <div class="f"><label for="vm">Model</label><input id="vm" name="model" value="${esc(v.model)}"></div>
-    <div class="f"><label for="vvin">VIN</label><input id="vvin" name="vin" value="${esc(v.vin)}"></div>
+    <div class="f"><label for="vvin">VIN / chassis no.</label><input id="vvin" name="vin" value="${esc(v.vin)}"></div>
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Mulkiya & insurance</b> <span class="small muted">– you are warned 30 days before either expires.</span></div>
     <div class="f"><label for="vmn">Mulkiya (registration) no.</label><input id="vmn" name="mulkiyaNo" value="${esc(v.mulkiyaNo)}"></div>
     <div class="f"><label for="vme">Mulkiya expiry</label><input id="vme" name="mulkiyaExpiry" type="date" value="${esc(v.mulkiyaExpiry)}"></div>
     <div class="f"><label for="vic">Insurance company</label><input id="vic" name="insurer" value="${esc(v.insurer)}"></div>
     <div class="f"><label for="vip">Policy no.</label><input id="vip" name="policyNo" value="${esc(v.policyNo)}"></div>
     <div class="f"><label for="vie">Insurance expiry</label><input id="vie" name="insuranceExpiry" type="date" value="${esc(v.insuranceExpiry)}"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>RTA registration</b> <span class="small muted">– filled in by RTA → Import from RTA portal, or by hand</span></div>
+    ${[["plateCode","Plate code"],["make","Make"],["year","Year"],["colour","Colour"],["bodyType","Body type"],["fuel","Fuel"],["seats","Seats"],["origin","Origin"],["regStatus","Licence status"],["mortgaged","Mortgaged"]].map(([k, l]) => `<div class="f"><label for="vr_${k}">${l}</label><input id="vr_${k}" name="${k}" value="${esc(v[k] ?? "")}"></div>`).join("")}
+    <div class="f"><label for="vr_fr">First registered</label><input id="vr_fr" name="firstRegistered" type="date" value="${esc(v.firstRegistered || "")}"></div><div class="f"><label for="vr_lr">Last renewed</label><input id="vr_lr" name="lastRenewed" type="date" value="${esc(v.lastRenewed || "")}"></div>
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Investor and fee terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="vi">Investor</label><select id="vi" name="investorId">${listOpts(S.investors, i=>i.name||i.id, v.investorId, "None (company-owned)")}</select></div>
     <div class="f"><label for="vim">Investor terms</label><select id="vim" name="invModel">${opts(INV_MODELS, v.invModel || (v.investorId ? "profit_share" : "none"))}</select></div>
@@ -2083,10 +2088,11 @@ boot();
 <script src="investors.js?v=4"></script>
 <script src="fleetfin.js?v=10"></script>
 <script src="loans.js?v=4"></script>
-<script src="rta.js?v=6"></script>
-<script src="reminders.js?v=3"></script>
+<script src="rta.js?v=7"></script>
+<script src="rta-import.js?v=2"></script>
+<script src="reminders.js?v=5"></script>
 <script src="purchases.js?v=8"></script>
 <script src="platforms.js?v=7"></script>
-<script src="settings.js?v=2"></script>
+<script src="settings.js?v=3"></script>
 
 </body></html>

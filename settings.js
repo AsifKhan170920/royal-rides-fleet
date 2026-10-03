@@ -128,7 +128,7 @@ function vatTab(){
    Backup: every collection of the fleet data as one JSON file. Reset: deletes the data so fresh data can be entered –
    a backup is downloaded first; business information, VAT settings, the chart of accounts and the platforms with
    their contracts can be kept. Only the owner should do this; it cannot be undone (except by restoring the backup). */
-const DATA_COLS = ["trips", "tripinfo", "cardtx", "entries", "drivers", "vehicles", "investors", "platforms", "documents", "driverItems", "terminals", "accounts", "customers", "suppliers", "coa", "payroll", "pdcs", "employees", "emppay", "drvAdj", "invpay", "loans", "rtalic", "rtadep", "fines", "reminders", "rcptmeta", "receipts", "payouts", "feeinv", "pladj"];
+const DATA_COLS = ["trips", "tripinfo", "cardtx", "entries", "drivers", "vehicles", "investors", "platforms", "documents", "driverItems", "terminals", "accounts", "customers", "suppliers", "coa", "payroll", "pdcs", "employees", "emppay", "drvAdj", "invpay", "loans", "rtalic", "rtadep", "fines", "reminders", "rcptmeta", "receipts", "payouts", "feeinv", "pladj", "rtablocks", "rtaplates"];
 async function dataBackup(){
   const out = {exportedAt: new Date().toISOString(), company: S.settings.company || "", settings: S.settings, data: {}};
   for(const c of DATA_COLS){ toast("Backing up " + c + "…"); const snap = await S.db.collection(c).get(); out.data[c] = {}; snap.docs.forEach(d => out.data[c][d.id] = d.data()); }

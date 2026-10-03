@@ -19,7 +19,7 @@ const RTA_ACCTS = {"1400": "RTA deposits (refundable)", "2450": "Traffic & RTA f
 Object.assign(ACCT, RTA_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, RTA_ACCTS);
 if(typeof NON_CURRENT !== "undefined") NON_CURRENT.add("1400");
 S.rtalic = S.rtalic || {}; S.rtadep = S.rtadep || {}; S.fines = S.fines || {}; S.rtaTab = S.rtaTab || "lic"; S.rtaEdit = S.rtaEdit || null; S.finePay = S.finePay || null;
-const RTA_TABS = {lic: "Licences & permits", dep: "Deposits", pdc: "PDC cheques", fines: "RTA fines", road: "Road fines (all cars)", fees: "Fees & charges"};
+const RTA_TABS = {lic: "Licences & permits", dep: "Deposits", pdc: "PDC cheques", fines: "RTA fines", road: "Road fines (all cars)", blocks: "Blocks & circulars", plates: "Reserved plates", fees: "Fees & charges", import: "Import from RTA portal"};
 const LIC_TYPES = {company: "Limousine operator licence (company)", trade: "Trade licence", vehicle: "Vehicle limousine permit", driver: "Driver RTA permit / limousine card", other: "Other RTA approval"};
 const FINE_SRC = {dxbpolice: "Dubai Police", rta: "RTA", parking: "RTA parking", salik: "Salik", auh: "Abu Dhabi Police", shj: "Sharjah Police", other: "Other"};
 const RTA_URL = "https://www.rta.ae", DXB_POLICE_URL = "https://www.dubaipolice.gov.ae";
@@ -225,6 +225,9 @@ function vRta(){
       <div class="row" style="margin-top:6px;gap:6px"><a class="btn sm" href="${RTA_URL}" target="_blank" rel="noopener">RTA website</a><a class="btn sm" href="${DXB_POLICE_URL}" target="_blank" rel="noopener">Dubai Police website</a><label class="btn sm" style="cursor:pointer">Import fines statement (all cars, matched by plate)<input type="file" accept=".xlsx,.xls,.csv" data-fineimport="" hidden></label>
       <label class="small">Check every <input id="fineDays" type="number" min="1" value="${checkDays()}" style="width:60px"> days</label></div></div>
     <div class="row" style="justify-content:flex-end;margin:8px 0">${dlBtn("allfines")}</div>${fineTable(fineList("road"), "allfines", true)}`;
+  } else if(tab === "import"){ body = window.RTAIMP ? RTAIMP.panel() : "";
+  } else if(tab === "blocks"){ body = window.RTAIMP ? RTAIMP.blocks() : "";
+  } else if(tab === "plates"){ body = window.RTAIMP ? RTAIMP.plates() : "";
   } else {
     const L = S.entries.filter(e => e.type === "expense" && ["5250", "5225", "5220"].includes(e.category)).sort((a, b) => b.date.localeCompare(a.date)), by = {};
     L.forEach(e => by[e.category] = (by[e.category] || 0) + num(e.amount) + num(e.vat));

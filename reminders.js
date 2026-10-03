@@ -31,8 +31,10 @@ function allReminders(){
   if(window.RTA){ const days = num(setting("finesCheckDays", 7)) || 7, due = Object.values(S.vehicles).filter(v => v.active !== false).map(v => v.finesCheckedAt ? addDays(v.finesCheckedAt.slice(0,10), days) : today).filter(d => d <= today);
     if(due.length) add("car", due.sort()[0], "Check road fines on RTA / Dubai Police", due.length + " car" + (due.length === 1 ? "" : "s"), "", 0, {view: "rta", set: {rtaTab: "road"}}); }
   // RTA
-  Object.values(S.rtalic || {}).forEach(l => add("rta", l.expiry, (typeof LIC_TYPES !== "undefined" && LIC_TYPES[l.type]) || "RTA licence", l.name || (l.vehicleId ? vName(l.vehicleId) : l.driverId ? dName(l.driverId) : ""), l.number, num(l.remind) || 30, {view: "rta", set: {rtaTab: "lic", rtaEdit: {kind: "lic", id: l.id}}}));
+  // certificates the RTA portal shows as expired / used / cancelled are history, not reminders
+  Object.values(S.rtalic || {}).filter(l => !l.portalStatus || /valid|active|issued/i.test(l.portalStatus)).forEach(l => add("rta", l.expiry, (typeof LIC_TYPES !== "undefined" && LIC_TYPES[l.type]) || "RTA licence", l.name || (l.vehicleId ? vName(l.vehicleId) : l.driverId ? dName(l.driverId) : ""), l.number, num(l.remind) || 30, {view: "rta", set: {rtaTab: "lic", rtaEdit: {kind: "lic", id: l.id}}}));
   Object.values(S.fines || {}).filter(f => f.dueDate && !f.paidOn && f.status !== "cancelled").forEach(f => add("rta", f.dueDate, "Pay RTA fine – " + (f.desc || ""), f.vehicleId ? vName(f.vehicleId) : "Company", f.fineNo, 7, {view: "rta", set: {rtaTab: "fines"}}));
+  Object.values(S.rtaplates || {}).forEach(p => add("rta", p.expiry, "Reserved plate – reservation ends", `${p.code || ""} ${p.plateNo || ""}`, p.category, 30, {view: "rta", set: {rtaTab: "plates"}}));
   // platform contracts
   Object.values(S.platforms).forEach(p => add("contract", p.contractEnd, "Contract ends", p.legalName || p.name || p.id, "", 30, {view: "platforms", set: {edit: {kind: "platform", id: p.id}}}));
   // post-dated cheques
