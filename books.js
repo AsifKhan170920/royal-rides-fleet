@@ -363,6 +363,7 @@ function openingOf(code){
   if(code === "1200") o += sum(Object.values(S.customers), c => num(c.opening));
   if(code === "2000") o -= sum(Object.values(S.suppliers), x => num(x.opening));
   if(code === "2100") o -= sum(Object.values(S.drivers), d => num(d.openingBalance));
+  if(window.FIN) o += FIN.opening(code);   // cars bought (and financed) before the books start
   return r2(o);
 }
 const natural = (code, v) => ["Asset","Expense"].includes(TYPE_OF(code)) ? v : -v;

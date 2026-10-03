@@ -580,7 +580,8 @@ function compute(){
     const vs = Object.values(V).filter(v => v.investorId === inv.id || inv.id in v.byInv);
     const share = sum(vs, v => v.byInv[inv.id] || 0);
     const payouts = sum(S.entries.filter(e => e.type === "investor_payout" && e.investorId === inv.id), e => num(e.amount));
-    I[inv.id] = {id:inv.id, vs, share, payouts, balance: share - payouts};
+    const emi = window.FIN ? FIN.investorEmi(inv.id, from, to) : 0;   // finance instalments recovered from his earnings
+    I[inv.id] = {id:inv.id, vs, share, payouts, emi, balance: share - payouts - emi};
   }
   return {D, V, I, calDays};
 }
@@ -650,6 +651,7 @@ function journal(C){
     p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo, x.date); add("1170", 0, num(x.amount), "Repayment – " + memo, x.date); });
   }
   if(window.EMP) EMP.post(add);   // employee payroll runs
+  if(window.FIN) FIN.post(add);   // vehicle purchases and finance instalments
   // deductions from drivers' salaries for violations
   Object.values(S.drvAdj || {}).forEach(a => { if(a.kind !== "penalty" || a.date < S.from || a.date > S.to) return; const m = `Violation deduction – ${dName(a.driverId)}${a.reason ? " – " + a.reason : ""}`; add("2100", num(a.amount), 0, m, a.date); add("4210", 0, num(a.amount), m, a.date); });
   return L;
@@ -1103,17 +1105,18 @@ function vVehicles(){
   const today = iso(new Date());
   return `${e ? vehicleForm(e.id, S.vehicles[e.id] || {}) : ""}
   <div class="section"><div class="head"><div><h2>Vehicles</h2><p class="sub">Link each car to its investor and terms. Trips are matched to cars by plate; if the Uber file has no plate, the driver's assigned car is used.</p></div><button class="btn primary" data-edit="vehicle" data-id="">Add vehicle</button></div>
-  ${list.length ? `<div class="tbl"><table><thead><tr><th>Fleet ID</th><th>Plate</th><th>Model</th><th>Driver now</th><th>Mulkiya expiry</th><th>Insurance expiry</th><th>Investor</th><th>Terms</th><th class="num">Trips</th><th class="num">Operating profit</th><th></th></tr></thead><tbody>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Fleet ID</th><th>Plate</th><th>Model</th><th>Driver now</th><th>Mulkiya expiry</th><th>Insurance expiry</th><th>Investor</th><th>Terms</th><th>Bought with</th><th>Bank finance</th><th>Facility no.</th><th class="num">Trips</th><th class="num">Operating profit</th><th></th></tr></thead><tbody>
   ${list.map(v=>{ const c = C.V[v.id] || {}; const vl = termList(v, VEH_TERMS), vc = termAt(vl, iso(new Date())) || {}; const t = !vc.investorId ? (vc.invModel==="none" ? '<span class="pill">Company-owned</span>' : '<span class="pill warn">Set investor</span>') : esc(vehTermText(vc).replace(/^[^:]*: /,"")) + (vl.length > 1 ? ` <span class="pill">${vl.length} versions</span>` : "");
     const drNow = holderOf(vehDrv(v), today);
-    return `<tr><td>${esc(v.fleetId)}</td><td><button class="btn sm ghost mono" data-vehview="${esc(v.id)}" style="padding:2px 6px"><b>${esc(v.plate)}</b></button></td><td>${esc(v.model)}</td><td>${drNow ? esc(dName(drNow)) : '<span class="muted">—</span>'}</td><td>${expiryCell(v.mulkiyaExpiry)}</td><td>${expiryCell(v.insuranceExpiry)}</td><td>${esc(vc.investorId ? iName(vc.investorId) : "—")}</td><td>${t}</td><td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
+    return `<tr><td>${esc(v.fleetId)}</td><td><button class="btn sm ghost mono" data-vehview="${esc(v.id)}" style="padding:2px 6px"><b>${esc(v.plate)}</b></button></td><td>${esc(v.model)}</td><td>${drNow ? esc(dName(drNow)) : '<span class="muted">—</span>'}</td><td>${expiryCell(v.mulkiyaExpiry)}</td><td>${expiryCell(v.insuranceExpiry)}</td><td>${esc(vc.investorId ? iName(vc.investorId) : "—")}</td><td>${t}</td>${(() => { const f = window.FIN ? FIN.of(v) : null; return f ? `<td>${f.funding === "bank" ? '<span class="pill brass">Bank finance</span>' : '<span class="pill">Full payment</span>'}</td><td>${esc(f.funding === "bank" ? f.bank || "" : "—")}</td><td class="mono small">${esc(f.funding === "bank" ? f.facility || "" : "—")}</td>` : '<td><span class="muted small">Not set</span></td><td></td><td></td>'; })()}<td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No vehicles yet</b>Add your cars with their plate numbers, or import an Uber report with plates.</div>`}</div>`;
 }
 /* car page: driver assignment history and the car's ledger */
 function vehicleDetail(id){
   const v = S.vehicles[id], tab = S.vehTab || "assign", today = iso(new Date()), list = vehDrv(v), cur = holderOf(list, today), vc = termAt(termList(v, VEH_TERMS), today) || {};
   let body;
-  if(tab === "assign"){
+  if(tab === "fin") body = window.vehFinTab ? vehFinTab(id) : "";
+  else if(tab === "assign"){
     body = `<form class="form" id="fVehAssign" data-id="${esc(id)}">
       <div class="f"><label for="va_d">Driver</label><select id="va_d" name="driverId">${listOpts(S.drivers, d => d.name || d.id, cur, "No driver")}</select></div>
       <div class="f"><label for="va_f">Effective from</label><input id="va_f" name="from" type="date" required value="${esc(today)}"></div>
@@ -1131,7 +1134,7 @@ function vehicleDetail(id){
   }
   return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p><p class="sub">Mulkiya ${v.mulkiyaNo ? esc(v.mulkiyaNo) + " " : ""}expires ${expiryCell(v.mulkiyaExpiry)} · Insurance${v.insurer ? " (" + esc(v.insurer) + (v.policyNo ? " " + esc(v.policyNo) : "") + ")" : ""} expires ${expiryCell(v.insuranceExpiry)}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
-  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", ledger:"Ledger"})}${body}</div>`;
+  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", ledger:"Ledger", fin:"Purchase & finance"})}${body}</div>`;
 }
 DL.vled = id => { const R = vehLedger(id); return [`car_ledger_${norm(vName(id))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit","Credit","Balance"], ...R.L.map(l => [l.date, l.desc, l.dr ? r2(l.dr) : "", l.cr ? r2(l.cr) : "", r2(l.bal)])]]; };
 DL.vasg = id => [`car_assignments_${norm(vName(id))}.csv`, [["From","Driver","Note","Changed by"], ...vehDrv(S.vehicles[id]).map(a => [a.from === BEGIN ? "start" : a.from, a.driverId ? dName(a.driverId) : "Not assigned", a.note || "", a.by || ""])]];
@@ -1207,7 +1210,7 @@ function vInvestors(){
     <div class="f"><label for="ib">Bank / IBAN note</label><input id="ib" name="bank" value="${esc(x.bank)}"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save investor</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${e.id?`<button class="btn danger" type="button" data-del="investors" data-id="${esc(e.id)}">Delete</button>`:""}</div></form></div>` : ""}
   <div class="section"><div class="head"><div><h2>Investors</h2><p class="sub">Terms are set per car on the Vehicles page, so one investor can hold cars on different terms.</p></div><button class="btn primary" data-edit="investor" data-id="">Add investor</button></div>
-  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td>${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate)).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Investor</th><th>Cars</th><th>Phone</th><th></th></tr></thead><tbody>${list.map(i=>`<tr><td>${esc(i.name)}</td><td style="white-space:normal">${Object.values(S.vehicles).filter(v=>v.investorId===i.id).map(v=>esc(v.fleetId||v.plate) + (window.FIN && FIN.of(v) ? ` <span class="small muted">(${esc(FIN.text(v))})</span>` : "")).join(", ")||"—"}</td><td>${esc(i.phone)}</td><td class="row"><button class="btn sm" data-edit="investor" data-id="${esc(i.id)}">Edit</button><button class="btn sm" data-agreefor="${esc(i.id)}">Agreement</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty"><b>No investors yet</b>Add investors, then link their cars on the Vehicles page.</div>`}</div>`;
 }
 
 /* ---------- driver & car usage ---------- */
@@ -1649,7 +1652,7 @@ function vInvestorPL(){
     ${vs.map(v=>{ const terms = esc(v.termsText || ""); const fees = setting("feeVatRecoverable",false) ? v.fee : v.fee+v.tax; const own = I ? (v.byInv[I.id] || 0) : v.invShare;
       return `<tr><td>${esc(vName(v.id))}</td><td class="small" style="white-space:normal;min-width:220px">${terms}</td><td class="num">${v.n}</td><td class="num">${fmt(v.fareRev)}</td><td class="num">-${fmt(fees)}</td><td class="num">${fmt(v.ref)}</td><td class="num">${aed(-v.drvCost)}</td><td class="num">-${fmt(v.exp)}</td><td class="num">${aed(v.op)}</td><td class="num">${fmt(v.mgmt)}</td><td class="num"><b>${aed(own)}</b></td><td class="num">${aed(v.company)}</td></tr>`;}).join("")}
     </tbody>${vs.length>1?`<tfoot><tr><td colspan="3">Total</td><td class="num">${fmt(sum(vs,v=>v.fareRev))}</td><td></td><td class="num">${fmt(sum(vs,v=>v.ref))}</td><td class="num">${fmt(-sum(vs,v=>v.drvCost))}</td><td class="num">-${fmt(sum(vs,v=>v.exp))}</td><td class="num">${fmt(sum(vs,v=>v.op))}</td><td class="num">${fmt(sum(vs,v=>v.mgmt))}</td><td class="num">${fmt(sum(vs,v=>I ? (v.byInv[I.id]||0) : v.invShare))}</td><td class="num">${fmt(sum(vs,v=>v.company))}</td></tr></tfoot>`:""}</table></div>
-    ${I ? `<div class="row" style="margin-top:10px;gap:18px"><span>Investor share <b class="mono">${fmt(I.share)}</b></span><span>Paid this period <b class="mono">${fmt(I.payouts)}</b></span><span>Balance due <b class="mono ${I.balance<0?"neg":""}">${fmt(I.balance)}</b></span></div>` : ""}</div>`;
+    ${I ? `<div class="row" style="margin-top:10px;gap:18px"><span>Investor share <b class="mono">${fmt(I.share)}</b></span>${I.emi ? `<span>Finance instalments recovered <b class="mono">${fmt(I.emi)}</b></span>` : ""}<span>Paid this period <b class="mono">${fmt(I.payouts)}</b></span><span>Balance due <b class="mono ${I.balance<0?"neg":""}">${fmt(I.balance)}</b></span></div>` : ""}</div>`;
   if(!invs.length && !company.length) return `<div class="empty"><b>No investor results yet</b>Add investors, link their cars on the Vehicles page, and import trips for the period.</div>`;
   return invs.map(I => card(iName(I.id), I.vs, I)).join("") + (company.length ? card("Company-owned cars", company, null) : "")
     + `<p class="small muted">Operating profit = fare revenue − Uber fee${setting("feeVatRecoverable",false)?"":" and its VAT"} + refunds − driver cost (allocated by each driver's net on that car) − car expenses not recovered from drivers. Mgmt fee = fixed monthly (pro-rated by day) + % of fare revenue. Profit-share investors receive their % of operating profit after the mgmt fee; fixed investors receive the pro-rated fixed amount.</p>`;
@@ -1950,9 +1953,10 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=4"></script>
-<script src="books.js?v=9"></script>
+<script src="books.js?v=10"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
+<script src="fleetfin.js?v=1"></script>
 
 </body></html>

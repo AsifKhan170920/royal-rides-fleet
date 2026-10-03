@@ -142,3 +142,13 @@ Drivers → **Bulk salary statements**: choose the dates on which salaries were 
 ## Bulk salary finalisation
 
 Drivers → **Bulk salary finalisation**: every driver's salary for the period at the top, with trips, earlier trips picked, salary due and status (Ready, Finalised, Part finalised, Pay terms needed, No trips). Ready drivers are ticked; **Finalise** (two clicks) finalises them one after the other, exactly as from each driver's Salary tab, using their trip selection. The list downloads as Excel, PDF or CSV.
+
+## Vehicle purchase & finance (fleetfin.js)
+
+Each car (Vehicles → car → **Purchase & finance**) records who owns it (company or investor), purchase date, price and dealer, and whether it was bought with full payment or bank finance. For bank finance it also records the bank, facility ID / number, loan, down payment (and who paid it), flat rate, tenure, monthly instalment (worked out from the flat rate if left blank), first due date and the paying bank account. It shows the instalment schedule (principal, profit, loan balance, paid / next) and downloads as Excel, PDF or CSV. The Vehicles list shows Bought with / Bank finance / Facility no.
+
+Accounting (instalments are taken as paid on their due dates):
+- Company car: Dr 1500 Motor vehicles / Cr bank (full payment), or Cr 2400 Vehicle finance loans + bank (down payment). Each instalment: Dr 2400 principal + Dr 5950 finance cost / Cr bank.
+- Investor car on bank finance: Dr 1190 Investor vehicle finance / Cr 2400. Each instalment: Dr 2400 + Dr 1190 profit / Cr bank, recovered from the investor's earnings (Dr 2200 / Cr 1190). It shows in the Investor P&L as "Finance instalments recovered". A down payment the company made for him is also recoverable.
+- Investor car on full payment: recorded on the car only.
+- Cars bought before the books start bring their outstanding loan (and the investor receivable) in as opening balances.
