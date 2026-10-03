@@ -9,7 +9,7 @@
    the VAT accounts, and the default tax code of each income, expense and asset account. The VAT tab also shows
    each return period: output VAT, input VAT and the net payable / refundable from the books. */
 S.setTab = S.setTab || "biz"; S.ownEdit = S.ownEdit || null;
-const SET_TABS = {biz: "Business information", vat: "VAT", gen: "General"};
+const SET_TABS = {biz: "Business information", vat: "VAT", gen: "General", data: "Backup & reset"};
 const DEFAULT_TAXCODES = [
   {id: "SR", name: "Standard rated 5%", rate: 5, recover: true, box: "1 / 9"},
   {id: "SRN", name: "Standard 5% – not recoverable", rate: 5, recover: false, box: "– (cost)"},
@@ -47,7 +47,7 @@ function setView(){
   const tab = SET_TABS[S.setTab] ? S.setTab : "biz";
   let body = "";
   if(tab === "gen"){ SET.busy = true; try{ body = vSettings(); } finally { SET.busy = false; } }
-  else if(tab === "biz") body = bizTab(); else body = vatTab();
+  else if(tab === "biz") body = bizTab(); else if(tab === "data") body = dataTab(); else body = vatTab();
   return `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>Settings</h2><p class="sub">Business information, VAT and the general rules of the software.</p></div></div>${tabBtns("data-settab", tab, SET_TABS)}</div>${body}`;
 }
 function bizTab(){
@@ -124,6 +124,45 @@ function vatTab(){
     </tbody></table></div><div class="row" style="margin-top:8px"><button class="btn sm primary" type="submit" ${S.canWrite && S.db ? "" : "disabled"}>Save account tax codes</button></div></form></div>`;
 }
 
+/* ---------- backup & reset ----------
+   Backup: every collection of the fleet data as one JSON file. Reset: deletes the data so fresh data can be entered –
+   a backup is downloaded first; business information, VAT settings, the chart of accounts and the platforms with
+   their contracts can be kept. Only the owner should do this; it cannot be undone (except by restoring the backup). */
+const DATA_COLS = ["trips", "tripinfo", "cardtx", "entries", "drivers", "vehicles", "investors", "platforms", "documents", "driverItems", "terminals", "accounts", "customers", "suppliers", "coa", "payroll", "pdcs", "employees", "emppay", "drvAdj", "invpay", "loans", "rtalic", "rtadep", "fines", "reminders", "rcptmeta", "receipts", "payouts", "feeinv", "pladj"];
+async function dataBackup(){
+  const out = {exportedAt: new Date().toISOString(), company: S.settings.company || "", settings: S.settings, data: {}};
+  for(const c of DATA_COLS){ toast("Backing up " + c + "…"); const snap = await S.db.collection(c).get(); out.data[c] = {}; snap.docs.forEach(d => out.data[c][d.id] = d.data()); }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(out)], {type: "application/json"})); a.download = `fleet_backup_${iso(new Date())}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return out;
+}
+function dataTab(){
+  return `<div class="section"><div class="head"><div><h2>Backup</h2><p class="sub">Download all the fleet data (trips, drivers, cars, entries, payroll, settings …) as one file to keep.</p></div><button class="btn primary" data-databackup="1">Download full backup</button></div></div>
+  <div class="section" style="border:1px solid #b3261e"><h2>Delete all data and start fresh</h2><p class="sub">Deletes every trip, driver, car, investor, entry, invoice, payroll, loan, fine and document so you can enter fresh data. A full backup is downloaded first. <b>This cannot be undone</b> except by restoring that backup.</p>
+    <form class="form" id="fReset">
+      <div class="f wide"><label><input type="checkbox" name="keepSettings" checked> Keep business information, VAT settings and general settings</label></div>
+      <div class="f wide"><label><input type="checkbox" name="keepCoa" checked> Keep the chart of accounts (your own accounts and groups)</label></div>
+      <div class="f wide"><label><input type="checkbox" name="keepPlatforms" checked> Keep the platforms with their contracts and API settings</label></div>
+      <div class="f wide"><label><input type="checkbox" name="keepBank"> Keep the bank & cash accounts (names only – their balances came from the deleted entries)</label></div>
+      <div class="f"><label for="rs_c">Type DELETE ALL to confirm</label><input id="rs_c" name="confirm" autocomplete="off"></div>
+      <div class="row wide"><button class="btn danger" type="submit" ${S.canWrite && S.db ? "" : "disabled"}>Delete all data</button></div></form></div>`;
+}
+async function dataReset(f){
+  const d = Object.fromEntries(new FormData(f).entries());
+  if(d.confirm !== "DELETE ALL"){ toast("Type DELETE ALL to confirm."); return; }
+  const btn = f.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "Backing up…";
+  try{ await dataBackup(); }catch(e){ toast("The backup could not be made – nothing was deleted."); btn.disabled = false; btn.textContent = "Delete all data"; return; }
+  const keep = new Set([...(d.keepCoa ? ["coa"] : []), ...(d.keepPlatforms ? ["platforms"] : []), ...(d.keepBank ? ["accounts"] : [])]); let n = 0;
+  for(const c of DATA_COLS.filter(x => !keep.has(x))){
+    btn.textContent = "Deleting " + c + "…"; const snap = await S.db.collection(c).get();
+    for(const x of snap.docs){ await (x.ref ? x.ref.delete() : S.db.doc(c + "/" + x.id).delete()); n++; }
+  }
+  if(d.keepPlatforms){ const snap = await S.db.collection("platforms").get(); for(const x of snap.docs){ const b = {...x.data()}; delete b.sync; delete b.payoutConfirm; await S.db.doc("platforms/" + x.id).set(b); } }
+  // settings: business, VAT and general kept (or all cleared); import logs and filed VAT returns go with the data
+  const st = d.keepSettings ? {...S.settings} : {}; ["importLog", "posLog", "vatFiled"].forEach(k => delete st[k]);
+  await S.db.doc("settings/main").set(st);
+  S.ledger = null; S.navStack = []; await loadPeriod(); toast(`All data deleted (${n} records). The backup file is in your downloads.`); S.setTab = "biz"; render();
+}
+
 /* ---------- events ---------- */
 async function saveSettings(patch, msg){ if(await writeOk(S.db.doc("settings/main").set({...S.settings, ...patch}))){ if(msg) toast(msg); render(); return true; } return false; }
 document.addEventListener("click", async ev => {
@@ -134,6 +173,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.ownrowdel != null){ S.ownEdit.rows.splice(+t.dataset.ownrowdel, 1); if(!S.ownEdit.rows.length) S.ownEdit.rows.push({}); render(); return; }
   if(t.dataset.owndel != null){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; } const V = ownVersions(); V.splice(+t.dataset.owndel, 1); S.ownEdit = null; await saveSettings({ownership: V}, "Version deleted."); return; }
   if(t.dataset.vatfiled){ const m = {...(S.settings.vatFiled || {})}; if(t.dataset.undo) delete m[t.dataset.vatfiled]; else m[t.dataset.vatfiled] = iso(new Date()); await saveSettings({vatFiled: m}, t.dataset.undo ? "Marked as not filed." : "VAT return marked as filed."); return; }
+  if(t.dataset.databackup){ t.disabled = true; t.textContent = "Preparing…"; try{ await dataBackup(); toast("Backup downloaded."); }catch(e){ toast("The backup could not be made."); } t.disabled = false; t.textContent = "Download full backup"; return; }
   if(t.dataset.logodel){ await saveSettings({logo: ""}, "Logo removed."); return; }
   if(t.dataset.tcadd){ const c = [...taxCodes(), {id: "", name: "", rate: 0, recover: false, box: ""}]; S.settings = {...S.settings, taxCodes: c}; render(); return; }
   if(t.dataset.tcdel != null){ const c = taxCodes().slice(); c.splice(+t.dataset.tcdel, 1); S.settings = {...S.settings, taxCodes: c}; render(); return; }
@@ -151,7 +191,8 @@ document.addEventListener("change", async ev => {
   }
 });
 document.addEventListener("submit", async ev => {
-  const f = ev.target; if(!["fBiz", "fVat", "fOwn", "fTaxCodes", "fTaxMap"].includes(f.id)) return; ev.preventDefault(); if(!S.db) return;
+  const f = ev.target; if(!["fBiz", "fVat", "fOwn", "fTaxCodes", "fTaxMap", "fReset"].includes(f.id)) return; ev.preventDefault(); if(!S.db) return;
+  if(f.id === "fReset"){ await dataReset(f); return; }
   const d = Object.fromEntries(new FormData(f).entries());
   if(f.id === "fBiz"){ await saveSettings(d, "Business information saved."); return; }
   if(f.id === "fVat"){ d.vatRegistered = d.vatRegistered === "true"; d.feeVatRecoverable = d.feeVatRecoverable === "true"; d.inputVatRecoverable = d.inputVatRecoverable === "true"; await saveSettings(d, "VAT settings saved."); return; }
