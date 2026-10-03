@@ -27,7 +27,7 @@ const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e", "22
 // balance sheet: these are non-current; every other asset and liability is current (unless a group is chosen)
 const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210"]);
 const COA_GROUPS = {ca: ["Asset", "Current assets"], nca: ["Asset", "Non-current assets"], cl: ["Liability", "Current liabilities"], ncl: ["Liability", "Non-current liabilities"], eq: ["Equity", "Equity"],
-  income: ["Income", "Income"], cos: ["Expense", "Cost of sales"], vrc: ["Expense", "Cost of sales – vehicle running costs"], admin: ["Expense", "Administrative & general expenses"], finance: ["Expense", "Finance costs"], investor: ["Expense", "Investors' profit share"]};
+  income: ["Income", "Income"], cos: ["Expense", "Cost of sales"], vrc: ["Expense", "Vehicle running costs"], admin: ["Expense", "Administrative & general expenses"], finance: ["Expense", "Finance costs"], investor: ["Expense", "Investors' profit share"]};
 const customGroups = () => (S.settings && S.settings.coaGroups) || [];
 function baseGroup(code){
   const n = +code, ty = TYPE_OF(code);
@@ -408,27 +408,36 @@ function coaView(){
   const show = r => !S.coaHide || r.bal || r.open || r.used || (S.coa || {})[r.code];
   const amt = (c, v) => `<button class="btn sm ghost" data-coaview="${esc(c)}" style="padding:1px 6px">${aed(v)}</button>`;
   // headings in the order of the statements; custom groups follow their main group
-  const order = [["Balance Sheet", ["ca", "nca", "cl", "ncl", "eq"]], ["Profit and Loss Statement", ["income", "cos", "vrc", "admin", "finance", "investor"]]];
+  const order = [["Balance Sheet", ["ca", "nca", "cl", "ncl", "eq"]], ["Profit and Loss Statement", ["income", "cos", "admin", "finance", "investor"]]];
   const groupsUnder = base => [base, ...customGroups().filter(x => x.base === base).map(x => x.id)];
   const gName = g => COA_GROUPS[g] ? COA_GROUPS[g][1] : (customGroups().find(x => x.id === g) || {}).name || g;
+  // a main group with its own accounts, then its sub-groups (vehicle running costs inside cost of sales, and your
+  // own groups) each with a subtotal, then the group total including them
+  const subsOf = base => [...(base === "cos" ? ["vrc"] : []), ...customGroups().filter(x => x.base === base || (base === "cos" && x.base === "vrc")).map(x => x.id)];
   const block = (title, bases, bs) => {
     let tot = {}, body = "";
-    bases.forEach(base => groupsUnder(base).forEach(g => {
-      const rs = (bs ? rows : rows.map(r => ({...r, bal: r2(pmv[r.code] || 0), used: r.code in pmv}))).filter(r => coaGroupOf(r.code) === g && show(r));
-      if(!rs.length && !COA_GROUPS[g]) return;
-      const t = sum(rs, r => bs ? val(r) : pval(r.code)); tot[base] = (tot[base] || 0) + t;
-      body += `<tr><td colspan="${bs ? 5 : 4}" style="background:var(--bg)"><b>${esc(gName(g))}</b>${COA_GROUPS[g] ? "" : ` <span class="small muted">(under ${esc(COA_GROUPS[base][1])})</span> <button class="btn sm ghost" data-coagrpdel="${esc(g)}" style="padding:0 6px">Remove group</button>`}</td></tr>`
-        + rs.map(r => `<tr><td class="mono">${esc(r.code)}</td><td><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button></td>${bs ? `<td class="num">${aed(["Asset", "Expense"].includes(r.type) ? r.open : -r.open)}</td>` : ""}<td class="num">${amt(r.code, bs ? val(r) : pval(r.code))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`).join("")
-        + `<tr class="tot"><td></td><td><b>Total ${esc(gName(g).toLowerCase())}</b></td>${bs ? "<td></td>" : ""}<td class="num"><b>${aed(t)}</b></td><td></td></tr>`;
-    }));
+    const R = bs ? rows : rows.map(r => ({...r, bal: r2(pmv[r.code] || 0), used: r.code in pmv})), v = r => bs ? val(r) : pval(r.code), cols = bs ? 5 : 4;
+    const acctRow = (r, ind) => `<tr><td class="mono">${esc(r.code)}</td><td style="padding-left:${ind ? 26 : 8}px"><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button></td>${bs ? `<td class="num">${aed(["Asset", "Expense"].includes(r.type) ? r.open : -r.open)}</td>` : ""}<td class="num">${amt(r.code, v(r))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`;
+    bases.forEach(base => {
+      const own = R.filter(r => coaGroupOf(r.code) === base && show(r)); let t = sum(own, v), subs = "";
+      subsOf(base).forEach(g => {
+        const rs = R.filter(r => coaGroupOf(r.code) === g && show(r)); if(!rs.length && !COA_GROUPS[g]) return;
+        const st = sum(rs, v); t += st;
+        subs += `<tr><td></td><td colspan="${cols - 1}" style="padding-left:14px"><b><i>${esc(gName(g))}</i></b>${COA_GROUPS[g] ? "" : ` <button class="btn sm ghost" data-coagrpdel="${esc(g)}" style="padding:0 6px">Remove group</button>`}</td></tr>`
+          + rs.map(r => acctRow(r, true)).join("") + `<tr><td></td><td style="padding-left:14px"><i>Total ${esc(gName(g).toLowerCase())}</i></td>${bs ? "<td></td>" : ""}<td class="num"><i>${aed(st)}</i></td><td></td></tr>`;
+      });
+      tot[base] = t;
+      body += `<tr><td colspan="${cols}" style="background:var(--bg)"><b>${esc(gName(base))}</b></td></tr>` + own.map(r => acctRow(r, false)).join("") + subs
+        + `<tr class="tot"><td></td><td><b>Total ${esc(gName(base).toLowerCase())}</b></td>${bs ? "<td></td>" : ""}<td class="num"><b>${aed(t)}</b></td><td></td></tr>`;
+    });
     return {body, tot};
   };
   const B = block(...order[0], true), PL = block(...order[1], false);
   const tA = (B.tot.ca || 0) + (B.tot.nca || 0), tL = (B.tot.cl || 0) + (B.tot.ncl || 0), profit = -sum(rows.filter(r => r.type === "Income" || r.type === "Expense"), r => r.bal);
-  const np = (PL.tot.income || 0) - (PL.tot.cos || 0) - (PL.tot.vrc || 0) - (PL.tot.admin || 0) - (PL.tot.finance || 0) - (PL.tot.investor || 0);
+  const np = (PL.tot.income || 0) - (PL.tot.cos || 0) - (PL.tot.admin || 0) - (PL.tot.finance || 0) - (PL.tot.investor || 0);
   return ce + `<div class="section"><div class="head"><div><h2>Chart of accounts</h2><p class="sub">As in Manager.io: Balance Sheet accounts with their balance at ${esc(dmyS(S.to))} (opening at the books start ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}), Profit and Loss accounts with the amount for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}. Click an account or an amount for its ledger. Codes: 1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses.</p></div>
     <div class="row"><label class="small"><input type="checkbox" id="coaAll" ${S.coaHide ? "checked" : ""}> Hide unused accounts</label><button class="btn" data-coagrpnew="1">New group</button><button class="btn primary" data-coanew="1">New account</button></div></div>
-  ${S.coaGrp ? `<form class="form" id="fCoaGrp" style="margin-bottom:10px"><div class="f"><label for="cg_n">Group name</label><input id="cg_n" name="name" required placeholder="e.g. Vehicle running costs"></div><div class="f"><label for="cg_b">Under</label><select id="cg_b" name="base">${opts(Object.fromEntries(Object.entries(COA_GROUPS).map(([k, v]) => [k, (v[0] === "Asset" || v[0] === "Liability" || v[0] === "Equity" ? "Balance Sheet – " : "Profit and Loss – ") + v[1]])), "admin")}</select></div><div class="row wide"><button class="btn primary" type="submit">Add group</button><button class="btn ghost" type="button" data-coagrpnew="">Cancel</button></div></form>` : ""}
+  ${S.coaGrp ? `<form class="form" id="fCoaGrp" style="margin-bottom:10px"><div class="f"><label for="cg_n">Group name</label><input id="cg_n" name="name" required placeholder="e.g. Vehicle running costs"></div><div class="f"><label for="cg_b">Under</label><select id="cg_b" name="base">${opts(Object.fromEntries(Object.entries(COA_GROUPS).map(([k, v]) => [k, (v[0] === "Asset" || v[0] === "Liability" || v[0] === "Equity" ? "Balance Sheet – " : "Profit and Loss – ") + (k === "vrc" ? "Cost of sales – " : "") + v[1]])), "admin")}</select></div><div class="row wide"><button class="btn primary" type="submit">Add group</button><button class="btn ghost" type="button" data-coagrpnew="">Cancel</button></div></form>` : ""}
   <div class="grid2"><div><h3 style="margin:0 0 6px">Balance Sheet</h3><div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Opening</th><th class="num">Balance</th><th></th></tr></thead><tbody>${B.body}
     <tr class="tot"><td></td><td><b>Total assets</b></td><td></td><td class="num"><b>${aed(tA)}</b></td><td></td></tr><tr class="tot"><td></td><td><b>Total liabilities</b></td><td></td><td class="num"><b>${aed(tL)}</b></td><td></td></tr><tr><td></td><td>Profit since ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}</td><td></td><td class="num">${aed(profit)}</td><td></td></tr>
     <tr class="tot"><td></td><td><b>Equity incl. profit</b></td><td></td><td class="num"><b>${aed((B.tot.eq || 0) + profit)}</b></td><td></td></tr></tbody></table></div></div>
