@@ -1,6 +1,6 @@
 /* Bank finance (Accounts → Bank finance): every facility and bank loan in one place.
    - Auto loans: the cars bought on bank finance (Vehicles → car → Purchase & finance) – listed here, edited on the car.
-   - Other loans (collection loans): short-term loans, long-term loans, other auto loans, overdraft / revolving
+   - Business loans (collection loans): short-term loans, long-term loans, overdraft / revolving
      facilities. The form holds the contract terms; the EMI schedule is worked out from them:
        flat rate        – equal principal and equal profit in every instalment (profit = amount × rate × years);
        reducing balance – equal instalments (annuity), profit on the outstanding balance each period.
@@ -12,8 +12,9 @@
 Object.assign(ACCT, {"2410":"Short-term bank loans", "2420":"Long-term bank loans", "2430":"Bank overdraft & facilities"});
 if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"2410":"Short-term bank loans", "2420":"Long-term bank loans", "2430":"Bank overdraft & facilities"});
 S.loans = S.loans || {}; S.loanView = S.loanView || ""; S.loanEdit = S.loanEdit || null;
-const LOAN_TYPES = {short: "Short-term loan", long: "Long-term loan", auto: "Auto loan (not linked to a car)", facility: "Overdraft / revolving facility"};
-const LOAN_ACCT = {short: "2410", long: "2420", auto: "2400", facility: "2430"};
+// business loans only – auto loans are the cars bought on bank finance (Vehicles → car → Purchase & finance)
+const LOAN_TYPES = {short: "Short-term business loan", long: "Long-term business loan", facility: "Overdraft / revolving facility"};
+const LOAN_ACCT = {short: "2410", long: "2420", facility: "2430"};
 const LOAN_FREQ = {1: "Monthly", 3: "Quarterly", 6: "Half-yearly", 12: "Yearly"};
 
 function loanSchedule(l){
@@ -81,11 +82,11 @@ function vBankFinance(){
   const due30 = all.filter(r => r.next && r.next.date <= lim);
   const row = r => `<tr><td>${r.car ? `<button class="btn sm ghost" data-vehview="${esc(r.car)}" data-vehtab="fin" style="padding:2px 6px">${esc(r.type)}</button>` : `<button class="btn sm ghost" data-loanview="${esc(r.id)}" style="padding:2px 6px">${esc(r.type)}</button>`}</td><td>${esc(r.bank || "")}</td><td class="mono small">${esc(r.facility || "")}</td><td class="small">${esc(r.owner || "")}</td><td>${r.date ? esc(dmyS(r.date)) : ""}</td><td class="num">${fmt(r.amount)}</td><td class="small">${esc(r.rate)} · ${r.months} mo</td><td class="num">${fmt(r.emi)}</td><td class="num"><b>${fmt(r.out)}</b></td><td>${r.next ? `${esc(dmyS(r.next.date))} · ${fmt(r.next.emi)}${r.next.date <= lim ? ' <span class="pill warn">30 days</span>' : ""}` : r.out ? "" : '<span class="pill good">Repaid</span>'}</td></tr>`;
   const head = `<thead><tr><th>Loan</th><th>Bank</th><th>Facility no.</th><th>For</th><th>Start</th><th class="num">Amount</th><th>Terms</th><th class="num">Instalment</th><th class="num">Outstanding today</th><th>Next instalment</th></tr></thead>`;
-  return `<div class="section"><div class="head"><div><h2>Bank finance</h2><p class="sub">Facilities and bank loans. Auto loans come from the cars (Vehicles → car → Purchase & finance); other loans are added here with their contract terms, and the instalment schedule is worked out from them.</p></div><div class="row">${dlBtn("loans")}<button class="btn primary" data-loanedit="new">Add loan / facility</button></div></div>
+  return `<div class="section"><div class="head"><div><h2>Bank finance</h2><p class="sub">Auto loans are the cars bought on bank finance (entered on the car: Purchase & finance). Business loans and facilities are added here with their contract terms, and the instalment schedule is worked out from them.</p></div><div class="row">${dlBtn("loans")}<button class="btn primary" data-loanedit="new">Add business loan / facility</button></div></div>
     <div class="kpis"><div class="kpi"><div class="l">Facilities</div><div class="v">${all.length}</div></div><div class="kpi"><div class="l">Outstanding today</div><div class="v">${fmt(sum(all, r => r.out))}</div></div><div class="kpi"><div class="l">Due in the next 30 days</div><div class="v">${fmt(sum(due30, r => r.next.emi))}</div><div class="n">${due30.length} instalment${due30.length === 1 ? "" : "s"}</div></div></div>
-    <h3 style="margin:14px 0 6px">Short / long-term loans & facilities</h3>
-    ${L.length ? `<div class="tbl"><table>${head}<tbody>${L.map(row).join("")}</tbody><tfoot><tr><td colspan="5">Total</td><td class="num">${fmt(sum(L, r => r.amount))}</td><td></td><td></td><td class="num">${fmt(sum(L, r => r.out))}</td><td></td></tr></tfoot></table></div>` : `<div class="empty"><b>No loans yet</b>Add a short-term or long-term loan, or an overdraft facility, with its contract terms.</div>`}
-    <h3 style="margin:14px 0 6px">Auto loans (cars)</h3>
+    <h3 style="margin:14px 0 6px">Business loans & facilities</h3>
+    ${L.length ? `<div class="tbl"><table>${head}<tbody>${L.map(row).join("")}</tbody><tfoot><tr><td colspan="5">Total</td><td class="num">${fmt(sum(L, r => r.amount))}</td><td></td><td></td><td class="num">${fmt(sum(L, r => r.out))}</td><td></td></tr></tfoot></table></div>` : `<div class="empty"><b>No loans yet</b>Add a short-term or long-term business loan, or an overdraft facility, with its contract terms.</div>`}
+    <div class="row" style="justify-content:space-between;margin:14px 0 6px"><h3 style="margin:0">Auto loans (vehicle finance)</h3><select id="autoLoanCar" aria-label="Add auto loan" style="max-width:260px">${opts(Object.fromEntries(Object.values(S.vehicles).filter(v => !(window.FIN && FIN.of(v) && FIN.of(v).funding === "bank")).sort((a, b) => vName(a.id).localeCompare(vName(b.id))).map(v => [v.id, vName(v.id)])), "", "+ Add auto loan – choose the car…")}</select></div>
     ${A.length ? `<div class="tbl"><table>${head}<tbody>${A.map(row).join("")}</tbody><tfoot><tr><td colspan="5">Total</td><td class="num">${fmt(sum(A, r => r.amount))}</td><td></td><td></td><td class="num">${fmt(sum(A, r => r.out))}</td><td></td></tr></tfoot></table></div>` : `<p class="sub">No car is on bank finance. Set it on the car: Vehicles → car → Purchase & finance → Paid by: Bank finance.</p>`}</div>`;
 }
 DL.loans = () => [`bank_finance_${iso(new Date())}.csv`, [["Loan","Bank","Facility no.","For","Start","Amount","Terms","Tenure (months)","Instalment","Outstanding today","Next due","Next instalment"],
@@ -94,9 +95,9 @@ DL.loans = () => [`bank_finance_${iso(new Date())}.csv`, [["Loan","Bank","Facili
 function loanForm(l){
   l = l || {type: "long", method: "reducing", freq: 1, date: iso(new Date()), account: "1100"};
   const f = (n, lab, type = "text", extra = "") => `<div class="f"><label for="ln_${n}">${lab}</label><input id="ln_${n}" name="${n}" type="${type}" ${type === "number" ? 'step="0.01"' : ""} value="${esc(l[n] ?? "")}"${extra}></div>`;
-  return `<div class="section"><div class="head"><div><h2>${l.id ? "Edit loan / facility" : "New loan / facility"}</h2><p class="sub">Enter the terms from the facility letter / contract. Leave the instalment empty to work it out.</p></div><button class="btn ghost" data-back="1">← Back</button></div>
+  return `<div class="section"><div class="head"><div><h2>${l.id ? "Edit business loan / facility" : "New business loan / facility"}</h2><p class="sub">Enter the terms from the facility letter / contract. Leave the instalment empty to work it out.</p></div><button class="btn ghost" data-back="1">← Back</button></div>
   <form class="form" id="fLoan" data-id="${esc(l.id || "")}">
-    <div class="f"><label for="ln_type">Type</label><select id="ln_type" name="type">${opts(LOAN_TYPES, l.type)}</select></div>
+    <div class="f"><label for="ln_type">Type</label><select id="ln_type" name="type">${opts(LOAN_TYPES, LOAN_TYPES[l.type] ? l.type : "long")}</select><span class="small muted">Car finance? Add it on the car (Auto loans below).</span></div>
     ${f("bank", "Bank", "text", " required")}${f("facility", "Facility ID / loan number")}${f("purpose", "Purpose / for")}
     ${f("amount", "Loan / facility amount (AED)", "number", " required")}${f("date", "Disbursement date", "date", " required")}
     <div class="f"><label for="ln_account">Received in / instalments paid from</label><select id="ln_account" name="account">${opts(acctOpts(["bank","cash"]), l.account || "1100")}</select></div>
@@ -142,5 +143,6 @@ document.addEventListener("submit", async ev => {
   d.by = (S.user && (S.user.name || S.user.id)) || ""; d.at = new Date().toISOString();
   if(await writeOk(S.db.doc("loans/" + id).set(d))){ S.loanEdit = null; S.loanView = id; toast("Loan saved – the schedule is worked out from its terms."); render(); }
 });
+document.addEventListener("change", ev => { if(ev.target.id !== "autoLoanCar" || !ev.target.value) return; const id = ev.target.value; S.navStack.push(JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])))); S.view = "vehicles"; S.vehView = id; S.vehTab = "fin"; S.finEdit = id; render(); window.scrollTo(0,0); });
 window.LOANS = {post: postLoans, opening: loansOpening, schedule: loanSchedule};
 Object.assign(window.BOOK_VIEWS = window.BOOK_VIEWS || {}, {bankfin: vBankFinance});
