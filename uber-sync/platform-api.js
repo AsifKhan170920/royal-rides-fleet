@@ -26,6 +26,8 @@ function pick(obj, spec){
   if(parts.length === 1) return one(parts[0]); return parts.reduce((a, p) => a + (+one(p) || 0), 0);
 }
 const keep = (obj, filter) => !filter || String(filter).split('&').every(c => { const [k, v] = c.split('='); return String(v || '').split('|').includes(String(dig(obj, k.trim()))); });
+// too many requests: wait and try again (2 s, 5 s, 15 s, 30 s)
+async function fetchRetry(url, opt) { for (const wait of [0, 2000, 5000, 15000, 30000]) { if (wait) await new Promise(r => setTimeout(r, wait)); const r = await fetch(url, opt); if (r.status !== 429) return r; } return fetch(url, opt); }
 const fill = (s, v) => String(s || '').replace(/\{(\w+)\}/g, (m, k) => (k in v ? v[k] : m));
 
 async function authHeaders(api, P, env, log) {
@@ -69,16 +71,19 @@ export async function syncPlatformApis({ db, UP, env, log, days, only }) {
       const headers = { Accept: 'application/json', ...(await authHeaders(api, P, env, log)) };
       // {companyIds}: the accounts this API key can see (e.g. Bolt getCompanies), fetched first
       if (/{companyIds}/.test((api.body || '') + api.tripsUrl) && api.companiesUrl) {
-        const r = await fetch(api.companiesUrl, { headers }); if (!r.ok) throw new Error('companies request failed: HTTP ' + r.status);
+        const r = await fetchRetry(api.companiesUrl, { headers }); if (!r.ok) throw new Error('companies request failed: HTTP ' + r.status);
         const ids = dig(await r.json(), api.companiesPath || 'data.company_ids'); if (!Array.isArray(ids) || !ids.length) throw new Error('no company ids in the answer'); vars.companyIds = JSON.stringify(ids);
       }
       const size = +api.pageSize || 0, rows = [];
+      // some APIs allow only a few days per request (Bolt: about a fortnight) – the period is fetched in windows
+      const span = (+api.maxDays || 0) * 86400, windows = []; for (let a = vars.fromTs; a <= vars.toTs; a += span || 1e12) windows.push([a, span ? Math.min(vars.toTs, a + span - 1) : vars.toTs]);
+      for (const [wa, wb] of windows)
       for (let page = 0, offset = 0; page < 200; page++) {
-        const v = { ...vars, page: page + (+api.pageStart || 0), offset, limit: size || 100 };
+        const v = { ...vars, fromTs: wa, toTs: wb, page: page + (+api.pageStart || 0), offset, limit: size || 100 };
         const url = fill(api.tripsUrl, v); if (!url) throw new Error('Set the trips / earnings URL on the platform page.');
         const opt = { method: api.method || 'GET', headers: { ...headers } };
         if ((api.method || 'GET') !== 'GET' && api.body) { opt.body = fill(api.body, v); opt.headers['Content-Type'] = 'application/json'; }
-        const r = await fetch(url, opt); if (!r.ok) throw new Error(`HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
+        const r = await fetchRetry(url, opt); if (!r.ok) throw new Error(`HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
         const j = await r.json(), arr = api.listPath ? pick(j, api.listPath) : (Array.isArray(j) ? j : []);
         if (!Array.isArray(arr)) throw new Error(`no list at "${api.listPath || '(top)'}" in the answer`);
         rows.push(...arr.filter(x => keep(x, api.filter))); offset += arr.length;
