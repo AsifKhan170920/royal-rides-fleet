@@ -28,12 +28,25 @@ const fineCat = f => f.kind === "rta" ? "5225" : "5220";
 // unpaid on a day: dated on or before it and not paid by then
 const unpaidAt = (f, day) => f.date && f.date <= day && f.status !== "cancelled" && !(f.paidOn && f.paidOn <= day);
 // who had the car: the assignment on that day, else the driver with the most trips in that car that day
-function fineDriver(vid, date){
-  const v = S.vehicles[vid]; if(!v || !date) return ""; const day = date.slice(0,10);
-  try{ const h = holderOf(vehDrv(v), day); if(h) return h; }catch(e){}
-  const n = {}; S.trips.forEach(t => { if(t.d === day && t.dr && vehicleForTrip(t) === vid) n[t.dr] = (n[t.dr] || 0) + 1; });
-  return Object.entries(n).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+/* Who had the car at a moment (a Salik crossing, a fuel fill, a fine): the driver whose platform trip in that car was
+   going on or had just started (trip start up to 3 hours before), else the next trip in that car within an hour;
+   without a time or a trip, the car's assignment that day, else the driver with most trips in that car that day.
+   driverAt returns {id, how}; fineDriver(vid, date, time) only the driver. */
+const toMin = t => { const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]\.?m\.?)?/i); if(!m) return null; let h = +m[1]; const ap = (m[3] || "").toLowerCase(); if(ap.startsWith("p") && h < 12) h += 12; if(ap.startsWith("a") && h === 12) h = 0; return h * 60 + +m[2]; };
+function driverAt(vid, date, time){
+  const v = S.vehicles[vid]; if(!v || !date) return {id: "", how: ""}; const day = date.slice(0,10), tm = toMin(time);
+  const pool = (S.ledger && S.ledger.trips && !S.ledger.loading ? S.ledger.trips : S.trips), ts = pool.filter(t => t.d === day && t.dr && vehicleForTrip(t) === vid);
+  if(tm != null){
+    const timed = ts.map(t => ({t, m: toMin(t.t)})).filter(x => x.m != null);
+    const before = timed.filter(x => x.m <= tm && tm - x.m <= 180).sort((a, b) => b.m - a.m)[0], after = timed.filter(x => x.m > tm && x.m - tm <= 60).sort((a, b) => a.m - b.m)[0];
+    const hit = before || after; if(hit) return {id: hit.t.dr, how: `trip at ${hit.t.t}`};
+  }
+  try{ const h = holderOf(vehDrv(v), day); if(h) return {id: h, how: "assigned"}; }catch(e){}
+  const n = {}; ts.forEach(t => n[t.dr] = (n[t.dr] || 0) + 1); const top = Object.entries(n).sort((a, b) => b[1] - a[1])[0];
+  return top ? {id: top[0], how: "most trips that day"} : {id: "", how: ""};
 }
+const fineDriver = (vid, date, time) => driverAt(vid, date, time).id;
+window.driverAt = driverAt;
 const checkDays = () => num(setting("finesCheckDays", 7)) || 7;
 const daysSince = d => d ? Math.round((parseD(iso(new Date())) - parseD(d.slice(0,10))) / 86400000) : null;
 
@@ -123,7 +136,7 @@ async function importFines(file, vidOnly){
   if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return; }
   const wb = XLSX.read(await file.arrayBuffer(), {type: "array", cellDates: true}), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false});
   if(!rows.length){ toast("No rows found in the file."); return; }
-  const keys = Object.keys(rows[0]), pick = (...w) => keys.find(k => w.some(x => norm(k).includes(x)));
+  const keys = Object.keys(rows[0]), pick = (...w) => { for(const x of w){ const k = keys.find(k => norm(k).includes(x)); if(k) return k; } return ""; }   // the first word in the list wins ("total amount" before "amount");
   const K = {no: pick("ticketno", "fineno", "finenumber", "ticketnumber", "violationno", "referenceno", "ticket", "number"), date: pick("date"), time: pick("time"), plate: pick("plate"), src: pick("source", "issuer", "authority", "emirate"),
     desc: pick("description", "violation", "offence", "type"), loc: pick("location", "place", "street"), amt: pick("amount", "fine", "value", "aed"), pts: pick("blackpoint", "points")};
   if(!K.no || !K.amt){ toast("Could not find the fine number and amount columns in the file."); return; }
@@ -136,7 +149,7 @@ async function importFines(file, vidOnly){
     if(known.has("road|" + norm(fineNo))){ skipped++; continue; }
     const p = norm(r[K.plate] || ""), vid = vidOnly || byPlate[p] || byPlate[p.replace(/^[a-z]+/, "")] || ""; if(!vid) noCar++;
     const date = toIso(r[K.date]) || iso(new Date()), srcTxt = norm(r[K.src] || "");
-    const f = {kind: "road", fineNo, date, time: K.time ? String(r[K.time] || "").slice(0, 5) : "", vehicleId: vid, driverId: fineDriver(vid, date), desc: String(r[K.desc] || "").trim(), location: K.loc ? String(r[K.loc] || "").trim() : "",
+    const f = {kind: "road", fineNo, date, time: K.time ? String(r[K.time] || "").slice(0, 5) : "", vehicleId: vid, driverId: fineDriver(vid, date, K.time ? String(r[K.time] || "") : ""), desc: String(r[K.desc] || "").trim(), location: K.loc ? String(r[K.loc] || "").trim() : "",
       amount, points: K.pts ? num(r[K.pts]) : 0, source: srcTxt.includes("rta") ? "rta" : srcTxt.includes("abu") ? "auh" : srcTxt.includes("sharjah") ? "shj" : srcTxt.includes("salik") ? "salik" : "dxbpolice", recover: true, status: "unpaid", imported: file.name, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
     if(await writeOk(S.db.doc("fines/f-" + uid()).set(f))){ added++; known.add("road|" + norm(fineNo)); }
   }
@@ -272,7 +285,7 @@ document.addEventListener("submit", async ev => {
   // fines
   const id = f.dataset.id || "f-" + uid(), prev = S.fines[id] || {};
   const rec = {...prev, ...d, kind: f.dataset.kind, amount: num(d.amount), points: num(d.points), recover: d.recover === "true", by, at: new Date().toISOString()};
-  if(!rec.driverId && rec.vehicleId) rec.driverId = fineDriver(rec.vehicleId, rec.date);
+  if(!rec.driverId && rec.vehicleId) rec.driverId = fineDriver(rec.vehicleId, rec.date, rec.time);
   if(rec.status !== "paid" && prev.paidOn && rec.status !== prev.status){ rec.paidOn = ""; }
   if(rec.status === "paid" && !rec.paidOn) rec.paidOn = rec.date;   // marked paid without recording a payment here
   if(await writeOk(S.db.doc("fines/" + id).set(rec))){ S.rtaEdit = null; toast("Fine saved."); render(); }
