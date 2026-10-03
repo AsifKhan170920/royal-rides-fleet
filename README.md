@@ -152,3 +152,9 @@ Accounting (instalments are taken as paid on their due dates):
 - Investor car on bank finance: Dr 1190 Investor vehicle finance / Cr 2400. Each instalment: Dr 2400 + Dr 1190 profit / Cr bank, recovered from the investor's earnings (Dr 2200 / Cr 1190). It shows in the Investor P&L as "Finance instalments recovered". A down payment the company made for him is also recoverable.
 - Investor car on full payment: recorded on the car only.
 - Cars bought before the books start bring their outstanding loan (and the investor receivable) in as opening balances.
+
+## Vehicle profit & loss and depreciation
+
+- Vehicles → car → **Profit & loss**: performance (trips, days in service, km, drivers, revenue per day / km, margin), revenue by platform, direct costs (driver cost and expenses by category), operating profit, the profit split (management fee, investor's share, company's share), the investor settlement (share less finance instalments) or company result (share less finance cost and depreciation), and the asset & finance position. It prints as a PDF with signature lines for the investor and the company, and downloads as Excel, PDF or CSV.
+- **Repairs & maintenance borne by** (vehicle terms, dated): shared before the profit split (default), investor 100%, or company 100%.
+- **Depreciation** applies to company-owned cars only: straight line over the useful life (default 5 years) to the residual value (default 20%), posted Dr 5285 / Cr 1510. Investor-owned cars are not the company's assets, so they are not depreciated even when registered in the company's name. The investor's share is a cost of sales (vehicle owner's share), not a finance cost.

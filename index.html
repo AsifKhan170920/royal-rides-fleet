@@ -442,7 +442,7 @@ function vehicleForTrip(t){
    ([{from:"YYYY-MM-DD", ...terms, note, by, at}]); a term applies from its date until the next one.
    Records without a history use their top-level fields as terms that always applied. */
 const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary","rtaPerDay","expMode"];
-const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct"];
+const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct","rmBy"];
 const BEGIN = "2000-01-01";
 function termList(rec, keys, field = "terms"){
   if(Array.isArray(rec[field]) && rec[field].length) return rec[field].slice().sort((a,b)=>a.from.localeCompare(b.from));
@@ -468,7 +468,7 @@ function drvTermTextFull(t){ return drvTermText(t) + (t && num(t.rtaPerDay) ? " 
 function vehTermText(t){
   if(!t) return "—";
   const inv = !t.investorId ? "Company-owned" : (S.investors[t.investorId] ? S.investors[t.investorId].name : "Investor") + ": " + ((t.invModel||"profit_share")==="fixed" ? "fixed "+fmt(num(t.invFixed))+"/mo" : num(t.invPct)+"% of profit");
-  return inv + (num(t.mgmtFixed) ? " · fee "+fmt(num(t.mgmtFixed))+"/mo" : "") + (num(t.mgmtPct) ? " · "+num(t.mgmtPct)+"% of revenue" : "");
+  return inv + (num(t.mgmtFixed) ? " · fee "+fmt(num(t.mgmtFixed))+"/mo" : "") + (num(t.mgmtPct) ? " · "+num(t.mgmtPct)+"% of revenue" : "") + (t.investorId && t.rmBy && t.rmBy !== "shared" ? " · repairs: " + (t.rmBy === "investor" ? "investor 100%" : "company 100%") : "");
 }
 // the terms in force during [from,to], e.g. "35% commission → 40% commission from 15/09/2026"
 function termsInPeriod(list, from, to, text){
@@ -483,7 +483,7 @@ function compute(){
   const D = {}, V = {}, DT = {};
   const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0, byDay:{}, card:0, rentAmt:0, rta:0, rtaDays:0, other:0, otherShare:0};
   const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set(), seg:{}};
-  const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0};
+  const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0, rm:0};
   const dTerms = id => DT[id] ||= termList(S.drivers[id] || {}, DRV_TERMS);
   for(const t of S.trips){
     const d = dget(t.dr||"unknown"); const vid = vehicleForTrip(t) || "unassigned"; const v = vget(vid);
@@ -546,18 +546,19 @@ function compute(){
   }
   // car expenses, by date
   // the company's part of a car expense (all of it, or what is left after the driver's share)
-  for(const e of S.entries){ if(e.type !== "expense" || !e.vehicleId) continue; const part = 1 - recoverShare(e); if(part <= 0) continue; const cost = (num(e.amount) + (inVatRec ? 0 : num(e.vat))) * part; vday(e.vehicleId, e.date).exp += cost; vget(e.vehicleId).expList.push({...e, amount: num(e.amount) * part, vat: num(e.vat) * part}); }
+  for(const e of S.entries){ if(e.type !== "expense" || !e.vehicleId) continue; const part = 1 - recoverShare(e); if(part <= 0) continue; const cost = (num(e.amount) + (inVatRec ? 0 : num(e.vat))) * part; vday(e.vehicleId, e.date).exp += cost; if(e.category === "5230") vday(e.vehicleId, e.date).rm += cost;   // repairs & maintenance tracked apart for the investor terms
+    vget(e.vehicleId).expList.push({...e, amount: num(e.amount) * part, vat: num(e.vat) * part}); }
   Object.keys(S.vehicles).forEach(id => vget(id));
   // each car: split the period where its terms (investor, shares, fees) change
   for(const v of Object.values(V)){
     const list = termList(S.vehicles[v.id] || {}, VEH_TERMS);
-    v.fareRev = 0; v.op = 0; v.mgmt = 0; v.invShare = 0; v.drvCost = 0; v.exp = 0; v.byInv = {}; v.segments = [];
+    v.fareRev = 0; v.op = 0; v.mgmt = 0; v.invShare = 0; v.drvCost = 0; v.exp = 0; v.rm = 0; v.rmInv = 0; v.byInv = {}; v.segments = [];
     let seg = null;
     for(let day = from; day <= to; day = addDays(day,1)){
       const tm = termAt(list, day);
-      if(!seg || seg.tm !== tm){ seg = {from:day, to:day, tm, fare:0, fee:0, tax:0, ref:0, drv:0, exp:0, mgmtFix:0, invFix:0}; v.segments.push(seg); }
+      if(!seg || seg.tm !== tm){ seg = {from:day, to:day, tm, fare:0, fee:0, tax:0, ref:0, drv:0, exp:0, rm:0, mgmtFix:0, invFix:0}; v.segments.push(seg); }
       seg.to = day;
-      const b = v.seg[day]; if(b){ seg.fare += b.fare; seg.fee += b.fee; seg.tax += b.tax; seg.ref += b.ref; seg.drv += b.drv; seg.exp += b.exp; }
+      const b = v.seg[day]; if(b){ seg.fare += b.fare; seg.fee += b.fee; seg.tax += b.tax; seg.ref += b.ref; seg.drv += b.drv; seg.exp += b.exp; seg.rm += b.rm || 0; }
       const t = tm || {}; seg.mgmtFix += num(t.mgmtFixed) / dim(day); seg.invFix += num(t.invFixed) / dim(day);
     }
     for(const g of v.segments){
@@ -566,7 +567,10 @@ function compute(){
       g.op = fareRev - g.fee - (feeVatRec ? 0 : g.tax) + g.ref - g.drv - g.exp;
       g.mgmt = g.mgmtFix + fareRev * num(t.mgmtPct)/100;
       const model = t.investorId ? (t.invModel || "profit_share") : "none";
-      g.inv = model === "profit_share" ? (g.op - g.mgmt) * num(t.invPct)/100 : model === "fixed" ? g.invFix : 0;
+      // repairs & maintenance: shared before the split (default), or carried 100% by the investor or by the company
+      const rmBy = model === "none" ? "shared" : (t.rmBy || "shared"), back = rmBy === "shared" ? 0 : g.rm, onInv = rmBy === "investor" ? g.rm : 0;
+      g.inv = model === "profit_share" ? (g.op + back - g.mgmt) * num(t.invPct)/100 - onInv : model === "fixed" ? g.invFix - onInv : 0;
+      g.rmBy = rmBy; v.rm += g.rm; v.rmInv += onInv;
       v.fareRev += fareRev; v.op += g.op; v.mgmt += g.mgmt; v.invShare += g.inv; v.drvCost += g.drv; v.exp += g.exp;
       if(t.investorId) v.byInv[t.investorId] = (v.byInv[t.investorId] || 0) + g.inv;
     }
@@ -1116,6 +1120,7 @@ function vehicleDetail(id){
   const v = S.vehicles[id], tab = S.vehTab || "assign", today = iso(new Date()), list = vehDrv(v), cur = holderOf(list, today), vc = termAt(termList(v, VEH_TERMS), today) || {};
   let body;
   if(tab === "fin") body = window.vehFinTab ? vehFinTab(id) : "";
+  else if(tab === "pl") body = window.vehPLTab ? vehPLTab(id) : "";
   else if(tab === "assign"){
     body = `<form class="form" id="fVehAssign" data-id="${esc(id)}">
       <div class="f"><label for="va_d">Driver</label><select id="va_d" name="driverId">${listOpts(S.drivers, d => d.name || d.id, cur, "No driver")}</select></div>
@@ -1134,7 +1139,7 @@ function vehicleDetail(id){
   }
   return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p><p class="sub">Mulkiya ${v.mulkiyaNo ? esc(v.mulkiyaNo) + " " : ""}expires ${expiryCell(v.mulkiyaExpiry)} · Insurance${v.insurer ? " (" + esc(v.insurer) + (v.policyNo ? " " + esc(v.policyNo) : "") + ")" : ""} expires ${expiryCell(v.insuranceExpiry)}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
-  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", ledger:"Ledger", fin:"Purchase & finance"})}${body}</div>`;
+  ${tabBtns("data-vehtab", tab, {assign:"Assignment history", pl:"Profit & loss", ledger:"Ledger", fin:"Purchase & finance"})}${body}</div>`;
 }
 DL.vled = id => { const R = vehLedger(id); return [`car_ledger_${norm(vName(id))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit","Credit","Balance"], ...R.L.map(l => [l.date, l.desc, l.dr ? r2(l.dr) : "", l.cr ? r2(l.cr) : "", r2(l.bal)])]]; };
 DL.vasg = id => [`car_assignments_${norm(vName(id))}.csv`, [["From","Driver","Note","Changed by"], ...vehDrv(S.vehicles[id]).map(a => [a.from === BEGIN ? "start" : a.from, a.driverId ? dName(a.driverId) : "Not assigned", a.note || "", a.by || ""])]];
@@ -1195,6 +1200,7 @@ function vehicleForm(id, v0){
     <div class="f"><label for="vfix">Fixed payment to investor / month</label><input id="vfix" name="invFixed" type="number" step="0.01" value="${esc(v.invFixed ?? "")}"></div>
     <div class="f"><label for="vmf">Management fee fixed / month</label><input id="vmf" name="mgmtFixed" type="number" step="0.01" value="${esc(v.mgmtFixed ?? "")}"></div>
     <div class="f"><label for="vmp">Management fee % of fare revenue</label><input id="vmp" name="mgmtPct" type="number" step="0.01" value="${esc(v.mgmtPct ?? "")}"></div>
+    <div class="f"><label for="vrm">Repairs & maintenance borne by</label><select id="vrm" name="rmBy">${opts({shared:"Shared – before the profit split", investor:"Investor – 100%", company:"Company – 100%"}, v.rmBy || "shared")}</select></div>
     <div class="f"><label for="vtf">Terms effective from</label><input id="vtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
     <div class="f"><label for="vtn">Reason for change (optional)</label><input id="vtn" name="termNote" placeholder="e.g. car sold to a new investor"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save vehicle</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="vehicles" data-id="${esc(id)}">Delete</button>`:""}</div>
@@ -1957,6 +1963,6 @@ boot();
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=4"></script>
-<script src="fleetfin.js?v=1"></script>
+<script src="fleetfin.js?v=2"></script>
 
 </body></html>
