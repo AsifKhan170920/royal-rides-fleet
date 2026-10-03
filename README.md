@@ -104,3 +104,15 @@ When a driver's salary is finalised, the ids of the trip rows it paid are stored
 - **Employee payroll**: a monthly run (`emppay/{YYYY-MM}`) with unpaid days (gross ÷ 30), other deductions and advance recovery. Posting records Dr salaries / Cr 2110 Staff salaries payable at month end; a recovered advance moves from 1180 to 2110. Salaries and advances are paid from Payments with the employee as payee (2110 / 1180).
 - **Visa & EID expiry**: passport, visa, Emirates ID, labour card, licence and medical expiry for drivers and employees. There is no separate menu; the dashboard lists what is expired or due, a banner shows on the other pages within the reminder window (Settings, default 30 days), and an optional browser notification can be switched on.
 - **Employee offer letters**: drafted from the designation and salary breakdown, with UAE Labour Law terms; edited and downloaded as PDF like the driver letters.
+
+## Driver salary statement (sections)
+
+Drivers → driver → Salary shows one statement in sections. The same statement prints as a PDF with signature lines for the driver and the authorised signatory / partner.
+1. **Performance**: trips, days, km, net per day against the fleet, net per trip, cash share, completion, rank.
+2. **Earnings**: net of platform fee and VAT, per platform (Uber, Bolt…), plus other (direct) bookings.
+3. **Direct expenditure**: fare-related costs charged to the driver (fuel, Salik, fines, repairs). Per driver (pay terms) they are either recovered in full after the salary, or deducted before the commission so the company carries its share (`expMode`).
+4. **Salary calculation**: company fee / RTA fee per day, company share, salary + commission, tips, and **violation deductions** as a % of the salary (`drvAdj`, posted Dr 2100 / Cr 4210).
+5. **Entitled to be paid**: salary less loan, advance, visa and other instalments (extra recoveries can be added), then the cash settlement and the balance payable.
+6. **Cash reconciliation**: total receivable, less platform payments, other bookings received by the company, machine payments, cash handed over and cash in hand counted. The difference shows a shortage or excess.
+
+The driver's **Transactions** show cash collected from riders day by day (debit), card payments on the company machine (credit), each finalised salary as "salary entitled" before the cash settlement (credit), and payments and receipts.

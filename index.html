@@ -162,7 +162,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, pdcs:{}, employees:{}, emppay:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -185,7 +185,7 @@ const EXP_CATS = {
 const ACCT = {
   "1100":"Bank","1110":"Cash in hand","1120":"Card machine receipts (not yet in bank)","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1170":"Driver loans & recoverables","1300":"Input VAT",
   "2100":"Driver accounts (payable / receivable)","2150":"Card receipts – terminal not assigned","2200":"Investor payables","2300":"Output VAT",
-  "4000":"Ride fare revenue (platforms)","4010":"Toll & fee recoveries","4020":"Platform other earnings / incentives","4100":"Direct booking revenue",
+  "4000":"Ride fare revenue (platforms)","4010":"Toll & fee recoveries","4020":"Platform other earnings / incentives","4100":"Direct booking revenue","4210":"Deductions from drivers (violations)",
   "5000":"Platform service fee / commission","5010":"Non-recoverable VAT","5100":"Driver earnings share","5900":"Investor profit share",
   ...EXP_CATS
 };
@@ -390,7 +390,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -440,7 +440,7 @@ function vehicleForTrip(t){
 /* Terms change over time. Each driver and car keeps a dated history in rec.terms
    ([{from:"YYYY-MM-DD", ...terms, note, by, at}]); a term applies from its date until the next one.
    Records without a history use their top-level fields as terms that always applied. */
-const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary","rtaPerDay"];
+const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary","rtaPerDay","expMode"];
 const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct"];
 const BEGIN = "2000-01-01";
 function termList(rec, keys, field = "terms"){
@@ -454,6 +454,13 @@ function drvTermText(t){
   if(!t || !t.payModel) return "No terms";
   return t.payModel==="commission" ? num(t.commissionPct)+"% commission" : t.payModel==="rent" ? "Rent "+fmt(num(t.rentPerDay))+"/day"+(t.rentBasis==="calendar"?" (every day)":"")
     : t.payModel==="salary" ? "Salary "+fmt(num(t.salary))+"/mo" : "Salary "+fmt(num(t.salary))+" + "+num(t.commissionPct)+"%";
+}
+function recoverShare(e){
+  if(!e.recover) return 0;
+  const tm = termAt(termList(S.drivers[e.driverId] || {}, DRV_TERMS), e.date) || {};
+  if(tm.expMode !== "before") return 1;
+  const model = tm.payModel || "commission";
+  return model === "commission" || model === "salary_comm" ? num(tm.commissionPct) / 100 : model === "rent" ? 1 : 0;
 }
 function drvTermTextFull(t){ return drvTermText(t) + (t && num(t.rtaPerDay) ? " · RTA fee " + fmt(num(t.rtaPerDay)) + "/day" : "");
 }
@@ -521,7 +528,9 @@ function compute(){
     const cur = termAt(list, to) || {}; d.model = cur.payModel || "commission";
     d.termsText = termsInPeriod(list, from, to, drvTermText);
     const mine = S.entries.filter(e => e.driverId === d.id);
-    d.deduct = sum(mine.filter(e => e.type === "expense" && e.recover), e => num(e.amount) + num(e.vat));
+    d.dexp = sum(mine.filter(e => e.type === "expense" && e.recover), e => num(e.amount) + num(e.vat));   // fare-related costs charged to him (full amount)
+    d.deduct = sum(mine.filter(e => e.type === "expense" && e.recover), e => (num(e.amount) + num(e.vat)) * recoverShare(e));
+    d.penalty = sum(Object.values(S.drvAdj || {}).filter(a => a.driverId === d.id && a.kind === "penalty" && a.date >= from && a.date <= to), a => num(a.amount));
     d.adv = sum(mine.filter(e => e.type === "driver_advance"), e => num(e.amount));
     d.paid = sum(mine.filter(e => e.type === "driver_payment"), e => num(e.amount));
     d.recv = sum(mine.filter(e => e.type === "driver_receipt"), e => num(e.amount));
@@ -531,11 +540,12 @@ function compute(){
     d.loanOut = sum(items, it => itemOutstanding(it, to));
     // company costs the driver paid from his cash (+), company money he collected (−)
     d.viaDriver = sum(mine.filter(e => e.paidFrom === "driver" && e.type === "expense"), e => num(e.amount) + num(e.vat)) - sum(mine.filter(e => e.paidFrom === "driver" && e.type === "income"), e => num(e.amount) + num(e.vat));
-    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver + d.card + (d.books = window.BOOKS ? BOOKS.driverNet(S.entries, d.id) : 0);
+    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver + d.card - d.penalty + (d.books = window.BOOKS ? BOOKS.driverNet(S.entries, d.id) : 0);
     d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) - d.ent;
   }
   // car expenses, by date
-  for(const e of S.entries){ if(e.type !== "expense" || e.recover || !e.vehicleId) continue; const cost = num(e.amount) + (inVatRec ? 0 : num(e.vat)); vday(e.vehicleId, e.date).exp += cost; vget(e.vehicleId).expList.push(e); }
+  // the company's part of a car expense (all of it, or what is left after the driver's share)
+  for(const e of S.entries){ if(e.type !== "expense" || !e.vehicleId) continue; const part = 1 - recoverShare(e); if(part <= 0) continue; const cost = (num(e.amount) + (inVatRec ? 0 : num(e.vat))) * part; vday(e.vehicleId, e.date).exp += cost; vget(e.vehicleId).expList.push({...e, amount: num(e.amount) * part, vat: num(e.vat) * part}); }
   Object.keys(S.vehicles).forEach(id => vget(id));
   // each car: split the period where its terms (investor, shares, fees) change
   for(const v of Object.values(V)){
@@ -609,7 +619,7 @@ function journal(C){
       : `${e.type === "expense" ? (EXP_CATS[e.category] || "Expense") : (ENTRY_TYPES[e.type] || e.type)}${who ? " – " + who : ""}${e.note ? " – " + e.note : ""}`;
     if(e.type === "expense"){
       add(e.category || "5310", a + (inVatRec ? 0 : vat), 0, memo); if(inVatRec) add("1300", vat, 0, memo); add(src, 0, a + vat, memo);
-      if(e.recover){ add("2100", a + vat, 0, "Recovered from driver"); add(e.category || "5310", 0, a + vat, "Recovered from driver"); }
+      if(e.recover){ const rv = (a + vat) * recoverShare(e); add("2100", rv, 0, "Recovered from driver"); add(e.category || "5310", 0, rv, "Recovered from driver"); }
     }
     else if(e.type === "income"){ add(src, a + vat, 0, memo); add("4100", 0, a, memo); add("2300", 0, vat, memo); }
     else if(e.type === "uber_payout"){ add(src, a, 0, memo); add(clearingAcct(e.platformId || "uber"), 0, a, memo); }
@@ -639,6 +649,8 @@ function journal(C){
     p.reps.filter(x => x.date >= S.from && x.date <= S.to).forEach(x => { add(srcAcct(x.paidTo), num(x.amount), 0, "Repayment – " + memo, x.date); add("1170", 0, num(x.amount), "Repayment – " + memo, x.date); });
   }
   if(window.EMP) EMP.post(add);   // employee payroll runs
+  // deductions from drivers' salaries for violations
+  Object.values(S.drvAdj || {}).forEach(a => { if(a.kind !== "penalty" || a.date < S.from || a.date > S.to) return; const m = `Violation deduction – ${dName(a.driverId)}${a.reason ? " – " + a.reason : ""}`; add("2100", num(a.amount), 0, m, a.date); add("4210", 0, num(a.amount), m, a.date); });
   return L;
 }
 
@@ -1014,6 +1026,7 @@ function driverForm(id, d0){
     <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
     <div class="f"><label for="drent">Rent per day (AED)</label><input id="drent" name="rentPerDay" type="number" step="0.01" value="${esc(d.rentPerDay ?? "")}"></div>
     <div class="f"><label for="drb">Rent charged for</label><select id="drb" name="rentBasis">${opts({worked:"Days with trips", calendar:"Every calendar day"}, d.rentBasis||"worked")}</select></div>
+    <div class="f"><label for="dexm">Fare-related expenses (fuel, Salik, fines, repairs) charged to him</label><select id="dexm" name="expMode">${opts({after:"In full, after his salary", before:"Before the commission (shared like the earnings)"}, d.expMode || "after")}</select></div>
     <div class="f"><label for="drta">RTA / permit fee per day worked (AED)</label><input id="drta" name="rtaPerDay" type="number" step="0.01" value="${esc(d.rtaPerDay ?? "")}"></div>
     <div class="f"><label for="dsal">Monthly salary (AED)</label><input id="dsal" name="salary" type="number" step="0.01" value="${esc(d.salary ?? "")}"></div>
     <div class="f"><label for="dtf">Terms effective from</label><input id="dtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
@@ -1837,7 +1850,7 @@ boot();
 </script>
 <script src="docs.js?v=3"></script>
 <script src="books.js?v=7"></script>
-<script src="drivers.js?v=6"></script>
+<script src="drivers.js?v=8"></script>
 <script src="pdc.js?v=1"></script>
 <script src="employees.js?v=2"></script>
 
