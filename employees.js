@@ -11,10 +11,10 @@
    Visa, Emirates ID, passport, labour card and licence expiry of drivers and employees are tracked
    here, with a banner on every page and an optional browser notification. */
 const EMP_ACCTS = {"1180":"Staff advances & loans", "2110":"Staff salaries payable",
-  "6000":"Salaries – administration", "6001":"Salaries – operations", "6002":"Salaries – workshop & other staff",
-  "6010":"Staff visa, Emirates ID & medical", "6020":"End-of-service gratuity", "6030":"Leave salary & air tickets"};
+  "6000":"Staff salaries and wages – administration", "6001":"Staff salaries and wages – operations", "6002":"Staff salaries and wages – workshop",
+  "6010":"Visa, medical and immigration cost", "6020":"End-of-service gratuity", "6030":"Leave salary & air tickets"};
 Object.assign(ACCT, EMP_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, EMP_ACCTS);
-Object.assign(EXP_CATS, {"6010":"Staff visa, Emirates ID & medical", "6020":"End-of-service gratuity", "6030":"Leave salary & air tickets"});
+Object.assign(EXP_CATS, {"6010":"Visa, medical and immigration cost", "6020":"End-of-service gratuity", "6030":"Leave salary & air tickets"});
 if(ACCT["5280"] === "Driver salaries & visas") { ACCT["5280"] = EXP_CATS["5280"] = "Driver visas, permits & benefits"; if(typeof ACCT_BASE !== "undefined") ACCT_BASE["5280"] = ACCT["5280"]; }
 const DEPTS = {admin:"Administration", operations:"Operations", workshop:"Workshop / garage", other:"Other"};
 const DEPT_ACCT = {admin:"6000", operations:"6001", workshop:"6002", other:"6002"};

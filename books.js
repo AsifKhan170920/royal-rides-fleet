@@ -27,7 +27,7 @@ const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e", "22
 // balance sheet: these are non-current; every other asset and liability is current (unless a group is chosen)
 const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210"]);
 const COA_GROUPS = {ca: ["Asset", "Current assets"], nca: ["Asset", "Non-current assets"], cl: ["Liability", "Current liabilities"], ncl: ["Liability", "Non-current liabilities"], eq: ["Equity", "Equity"],
-  income: ["Income", "Income"], cos: ["Expense", "Cost of sales"], admin: ["Expense", "Administrative & general expenses"], finance: ["Expense", "Finance costs"], investor: ["Expense", "Investors' profit share"]};
+  income: ["Income", "Income"], cos: ["Expense", "Cost of sales"], vrc: ["Expense", "Cost of sales – vehicle running costs"], admin: ["Expense", "Administrative & general expenses"], finance: ["Expense", "Finance costs"], investor: ["Expense", "Investors' profit share"]};
 const customGroups = () => (S.settings && S.settings.coaGroups) || [];
 function baseGroup(code){
   const n = +code, ty = TYPE_OF(code);
@@ -35,13 +35,14 @@ function baseGroup(code){
   if(ty === "Liability") return NON_CURRENT.has(String(code)) ? "ncl" : "cl";
   if(ty === "Equity") return "eq"; if(ty === "Income") return "income";
   if(n === 5900) return "investor"; if(n >= 5950 && n < 5970) return "finance";
+  if((n >= 5200 && n < 5280) || n === 5285) return "vrc";   // fuel, Salik, fines, repairs, insurance, registration, trackers, lease, recovery, parking, depreciation
   return n >= 5000 && n < 5290 ? "cos" : "admin";
 }
 // the group an account is shown in (a chosen group, a custom group, or by its code) and the main group behind it
 const coaGroupOf = code => { const g = ((S.coa || {})[code] || {}).group; return g && (COA_GROUPS[g] || customGroups().some(x => x.id === g)) ? g : baseGroup(code); };
 const mainGroup = code => { const g = coaGroupOf(code); if(COA_GROUPS[g]) return g; const c = customGroups().find(x => x.id === g); return c ? c.base : baseGroup(code); };
 function plGroup(code){
-  if(String(code)[0] !== "4" && TYPE_OF(code) === "Expense"){ const g = mainGroup(code); if(["cos", "admin", "finance", "investor"].includes(g)) return g; }
+  if(String(code)[0] !== "4" && TYPE_OF(code) === "Expense"){ const g = mainGroup(code); if(g === "vrc") return "cos"; if(["cos", "admin", "finance", "investor"].includes(g)) return g; }
   const n = +code; if(String(code)[0] === "4") return "income";
   if(n === 5900) return "investor";
   if(n >= 5950 && n < 5970) return "finance";   // interest / profit on bank loans and vehicle finance
@@ -404,10 +405,10 @@ function coaView(){
   if(S.coaView) return ce + coaLedger(S.coaView);
   const rows = coaBalances(historyJournal()), pmv = {}; journal(compute()).forEach(l => { pmv[l.acct] = (pmv[l.acct] || 0) + l.dr - l.cr; });
   const val = r => ["Asset", "Expense"].includes(r.type) ? r.bal : -r.bal, pval = c => ["Expense"].includes(TYPE_OF(c)) ? r2(pmv[c] || 0) : -r2(pmv[c] || 0);
-  const show = r => r.bal || r.open || r.used || (S.coa || {})[r.code] || S.coaAll;
+  const show = r => !S.coaHide || r.bal || r.open || r.used || (S.coa || {})[r.code];
   const amt = (c, v) => `<button class="btn sm ghost" data-coaview="${esc(c)}" style="padding:1px 6px">${aed(v)}</button>`;
   // headings in the order of the statements; custom groups follow their main group
-  const order = [["Balance Sheet", ["ca", "nca", "cl", "ncl", "eq"]], ["Profit and Loss Statement", ["income", "cos", "admin", "finance", "investor"]]];
+  const order = [["Balance Sheet", ["ca", "nca", "cl", "ncl", "eq"]], ["Profit and Loss Statement", ["income", "cos", "vrc", "admin", "finance", "investor"]]];
   const groupsUnder = base => [base, ...customGroups().filter(x => x.base === base).map(x => x.id)];
   const gName = g => COA_GROUPS[g] ? COA_GROUPS[g][1] : (customGroups().find(x => x.id === g) || {}).name || g;
   const block = (title, bases, bs) => {
@@ -424,9 +425,9 @@ function coaView(){
   };
   const B = block(...order[0], true), PL = block(...order[1], false);
   const tA = (B.tot.ca || 0) + (B.tot.nca || 0), tL = (B.tot.cl || 0) + (B.tot.ncl || 0), profit = -sum(rows.filter(r => r.type === "Income" || r.type === "Expense"), r => r.bal);
-  const np = (PL.tot.income || 0) - (PL.tot.cos || 0) - (PL.tot.admin || 0) - (PL.tot.finance || 0) - (PL.tot.investor || 0);
+  const np = (PL.tot.income || 0) - (PL.tot.cos || 0) - (PL.tot.vrc || 0) - (PL.tot.admin || 0) - (PL.tot.finance || 0) - (PL.tot.investor || 0);
   return ce + `<div class="section"><div class="head"><div><h2>Chart of accounts</h2><p class="sub">As in Manager.io: Balance Sheet accounts with their balance at ${esc(dmyS(S.to))} (opening at the books start ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}), Profit and Loss accounts with the amount for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}. Click an account or an amount for its ledger. Codes: 1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses.</p></div>
-    <div class="row"><label class="small"><input type="checkbox" id="coaAll" ${S.coaAll ? "checked" : ""}> Show unused accounts</label><button class="btn" data-coagrpnew="1">New group</button><button class="btn primary" data-coanew="1">New account</button></div></div>
+    <div class="row"><label class="small"><input type="checkbox" id="coaAll" ${S.coaHide ? "checked" : ""}> Hide unused accounts</label><button class="btn" data-coagrpnew="1">New group</button><button class="btn primary" data-coanew="1">New account</button></div></div>
   ${S.coaGrp ? `<form class="form" id="fCoaGrp" style="margin-bottom:10px"><div class="f"><label for="cg_n">Group name</label><input id="cg_n" name="name" required placeholder="e.g. Vehicle running costs"></div><div class="f"><label for="cg_b">Under</label><select id="cg_b" name="base">${opts(Object.fromEntries(Object.entries(COA_GROUPS).map(([k, v]) => [k, (v[0] === "Asset" || v[0] === "Liability" || v[0] === "Equity" ? "Balance Sheet – " : "Profit and Loss – ") + v[1]])), "admin")}</select></div><div class="row wide"><button class="btn primary" type="submit">Add group</button><button class="btn ghost" type="button" data-coagrpnew="">Cancel</button></div></form>` : ""}
   <div class="grid2"><div><h3 style="margin:0 0 6px">Balance Sheet</h3><div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Opening</th><th class="num">Balance</th><th></th></tr></thead><tbody>${B.body}
     <tr class="tot"><td></td><td><b>Total assets</b></td><td></td><td class="num"><b>${aed(tA)}</b></td><td></td></tr><tr class="tot"><td></td><td><b>Total liabilities</b></td><td></td><td class="num"><b>${aed(tL)}</b></td><td></td></tr><tr><td></td><td>Profit since ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}</td><td></td><td class="num">${aed(profit)}</td><td></td></tr>
@@ -470,7 +471,7 @@ function statementsView(){
   const head = t => `<tr><td colspan="3"><b>${t}</b></td></tr>`, tot = (t, v) => `<tr class="tot"><td></td><td><b>${t}</b></td><td class="num"><b>${aed(v)}</b></td></tr>`;
   const pl = `<div class="section"><h2>Profit & loss · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
     ${head("Revenue")}${inc.map(c => line(c, -mv[c])).join("")}${tot("Total revenue", tInc)}
-    ${head(PL_GROUPS.cos + " <span class=\"small muted\">(drivers, platform fees, vehicle running costs)</span>")}${cos.map(c => line(c, mv[c])).join("")}${tot("Total cost of sales", tCos)}
+    ${head(PL_GROUPS.cos + " <span class=\"small muted\">(platform fees, drivers, vehicle running costs)</span>")}${cos.filter(c => mainGroup(c) !== "vrc").map(c => line(c, mv[c])).join("")}${cos.some(c => mainGroup(c) === "vrc") ? `<tr><td></td><td><i>Vehicle running costs</i></td><td></td></tr>${cos.filter(c => mainGroup(c) === "vrc").map(c => line(c, mv[c])).join("")}<tr><td></td><td><i>Total vehicle running costs</i></td><td class="num"><i>${aed(sum(cos.filter(c => mainGroup(c) === "vrc"), c => mv[c]))}</i></td></tr>` : ""}${tot("Total cost of sales", tCos)}
     ${tot("Gross profit", gp)}
     ${head(PL_GROUPS.admin + " <span class=\"small muted\">(office, operations & workshop staff, overheads)</span>")}${adm.map(c => line(c, mv[c])).join("")}${tot("Total administrative & general expenses", tAdm)}
     ${tot("Operating profit", op)}
@@ -575,4 +576,4 @@ document.addEventListener("submit", async ev => {
     if(await writeOk(S.db.doc(col + "/" + id).set({...prev, ...fd}))){ S.pe = null; toast("Saved."); render(); }
   }
 });
-document.addEventListener("change", ev => { if(ev.target.id === "coaAll"){ S.coaAll = ev.target.checked; render(); } });
+document.addEventListener("change", ev => { if(ev.target.id === "coaAll"){ S.coaHide = ev.target.checked; render(); } });

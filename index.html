@@ -183,10 +183,17 @@ const VIEWS = [
   ["Documents",null],["offers","Driver offer letters"],["empoffers","Employee offer letters"],["agreements","Investor agreements"],
   ["Setup",null],["settings","Settings"]
 ];
+/* Expense accounts for a limousine company. Cost of sales – vehicle running costs: 5200–5279 (and 5285 depreciation);
+   drivers: 5100 / 5280. Administrative & general expenses: 5290–5310 and 6000+ (staff costs 6000–6030 come with the
+   Employees module). */
 const EXP_CATS = {
-  "5200":"Fuel / EV charging","5210":"Salik / Darb tolls","5220":"RTA & traffic fines","5230":"Maintenance & repairs",
-  "5240":"Insurance","5250":"Registration & permits","5260":"Vehicle lease / rent","5270":"Parking & car wash",
-  "5280":"Driver salaries & visas","5290":"Office & admin","5300":"Bank charges","5310":"Other expenses"
+  "5200":"Fuel / EV charging","5210":"Salik / Darb tolls","5220":"RTA & traffic fines","5230":"Vehicle repairs and maintenance",
+  "5240":"Vehicle insurance","5250":"Vehicle registration, passing and RTA cards","5255":"RMS vehicle trackers","5260":"Vehicle lease / rent",
+  "5265":"Vehicle recovery charges","5270":"Parking & car wash",
+  "5280":"Driver salaries & visas","5290":"Office & admin","5300":"Bank, WPS and POS charges","5310":"Miscellaneous and other expenses",
+  "6100":"Office rent","6105":"General insurance (office, medical, liability)","6110":"Utilities and drinking water","6120":"Printing and stationery","6130":"Travelling and tickets",
+  "6140":"Staff uniforms","6150":"Advertising and marketing","6160":"Software, subscriptions and web hosting","6170":"Office repairs, furniture and mobile phones",
+  "6180":"Entertainment (office)","6190":"Fuel, wash and parking (office vehicles)","6200":"Cleaning and office consumables","6210":"Donation"
 };
 const ACCT = {
   "1100":"Bank","1110":"Cash in hand","1120":"Card machine receipts (not yet in bank)","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1170":"Driver loans & recoverables","1300":"Input VAT",
@@ -2036,10 +2043,10 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=5"></script>
-<script src="books.js?v=19"></script>
+<script src="books.js?v=20"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=2"></script>
-<script src="employees.js?v=9"></script>
+<script src="employees.js?v=10"></script>
 <script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=8"></script>
 <script src="loans.js?v=3"></script>
