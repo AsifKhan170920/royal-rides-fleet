@@ -167,7 +167,7 @@ const S = {
   db:null, user:null, downloads:null, canWrite:true, ready:false,
   view:"dashboard",
   settings:{}, drivers:{}, vehicles:{}, investors:{}, platforms:{}, importPlatform:"uber",
-  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, reminders:{}, rcpt:{}, rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
+  ditems:{}, ledgerDriver:"", ledgerGroup:"week", ledger:null, terminals:{}, cardtx:[], reconDriver:"", posState:null, posQueue:[], posFilter:"", accounts:{}, acctView:"", customers:{}, suppliers:{}, coa:{}, payroll:{}, invpay:{}, loans:{}, rtalic:{}, rtadep:{}, fines:{}, reminders:{}, rcpt:{}, payouts:{}, feeinv:{}, pltView:"", pltTab:"ledger", rtaTab:"lic", rtaEdit:null, loanView:"", loanEdit:null, invView:"", invTab:"trips", pdcs:{}, employees:{}, emppay:{}, drvAdj:{}, drvView:"", drvTab:"trips", coaView:"", ce:null, bk:null, pe:null, pv:null,
   trips:[], entries:[], entryDocs:{},
   from:null, to:null,
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
@@ -403,7 +403,7 @@ async function boot(){
   const sub = (col, key) => S.db.collection(col).onSnapshot(snap => {
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
-  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("payouts","payouts"); sub("feeinv","feeinv"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -616,7 +616,9 @@ function journal(C){
   for(const [pl, ts] of Object.entries(byPl)){
     const P = tot(ts), c = clearingAcct(pl), nm = pName(pl), bank = payAcct(pl);
     add(c, P.f + P.tp + P.rf + P.oe - P.sf - P.tx - P.c, 0, nm + " trips");
-    ts.filter(t => t.po).forEach(t => { add(bank, t.po, 0, nm + " payout to bank", t.d); add(c, 0, t.po, nm + " payout to bank", t.d); });
+    // a payout reconciled with the bank waits in 1158 until it is matched (Platforms → platform → Payouts)
+    const into = window.PLT && PLT.confirm(pl) ? "1158" : bank;
+    ts.filter(t => t.po).forEach(t => { add(into, t.po, 0, nm + " payout to bank", t.d); add(c, 0, t.po, nm + " payout to bank", t.d); });
   }
   add("4020", 0, T.oe, "Platform other earnings");
   add("1160", T.c, 0, memoT);
@@ -674,6 +676,7 @@ function journal(C){
   if(window.FIN) FIN.post(add);   // vehicle purchases and finance instalments
   if(window.LOANS) LOANS.post(add);   // other bank loans and facilities
   if(window.RTA) RTA.post(add);   // RTA deposits and unpaid fines
+  if(window.PLT) PLT.post(add);   // platform payouts matched with the bank
   // deductions from drivers' salaries for violations
   Object.values(S.drvAdj || {}).forEach(a => { if(a.kind !== "penalty" || a.date < S.from || a.date > S.to) return; const m = `Violation deduction – ${dName(a.driverId)}${a.reason ? " – " + a.reason : ""}`; add("2100", num(a.amount), 0, m, a.date); add("4210", 0, num(a.amount), m, a.date); });
   return L;
@@ -792,8 +795,8 @@ document.addEventListener("click", ev => {
   if(t.dataset.dl && DL[t.dataset.dl]){ const out = DL[t.dataset.dl](t.dataset.id); if(out) saveCsv(out[0], out[1]); }
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
-const NAV_KEYS = ["view","slipShow","slipEdit","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","slipshow","slipedit","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_KEYS = ["view","pltView","pltTab","slipShow","slipEdit","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","pltview","plttab","slipshow","slipedit","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
@@ -805,7 +808,7 @@ document.addEventListener("click", ev => {
   ev.stopImmediatePropagation();
   const prev = S.navStack.pop();
   if(prev) Object.assign(S, JSON.parse(prev));
-  else { S.invView = ""; S.slipShow = null; S.loanView = ""; S.loanEdit = null; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
+  else { S.invView = ""; S.pltView = ""; S.slipShow = null; S.loanView = ""; S.loanEdit = null; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
   S.edit = null; S.bk = null; S.pe = null; S.tripEdit = null; S.docEdit = null; S.empEdit = null; S.pdcEdit = null; S.ce = null;
   render(); window.scrollTo(0, 0);
 }, true);
@@ -911,8 +914,8 @@ function vImport(){
   <div class="form" style="margin-bottom:10px"><div class="f"><label for="impPl">Platform of these files</label><select id="impPl">${opts(plList, pl)}</select></div></div>
   ${pl === POS ? `<p class="sub">Download the statement of a card terminal (payment machine) from the bank / provider portal as CSV. Each payment is credited to the driver the terminal was assigned to on that date. Several terminals in one file are fine if it has a terminal ID column. Rows already imported are skipped.</p>`
   : pl === "uber" ? `<p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report</b> and download two reports for the same dates: <b>Payments Transaction</b> (the money) and <b>Trip activity</b> (car, distance and status of each trip). Drop both CSV files below – each is recognised automatically. Rows already imported are skipped, so overlapping files are safe.</p>`
-  : `<p class="sub">Download the trips / earnings report from the <b>${esc(pName(pl))}</b> fleet portal as CSV (open an Excel file and <i>Save as CSV</i> first). After you drop it, match its columns to the fields once – the mapping is remembered for ${esc(pName(pl))}'s files. Rows already imported are skipped.</p>`}
-  <label class="drop" id="drop" for="file"><b>Drop ${esc(pl === POS ? "card terminal statement" : pName(pl))} CSV files here</b><br>or click to choose files<input type="file" id="file" accept=".csv,text/csv" multiple hidden></label></div>`;
+  : `<p class="sub">Download the trips / earnings report from the <b>${esc(pName(pl))}</b> fleet portal as CSV or Excel. After you drop it, match its columns to the fields once – the mapping is remembered for ${esc(pName(pl))}'s files. Rows already imported are skipped.</p>`}
+  <label class="drop" id="drop" for="file"><b>Drop ${esc(pl === POS ? "card terminal statement" : pName(pl))} files here (CSV or Excel)</b><br>or click to choose files<input type="file" id="file" accept=".csv,text/csv,.xlsx,.xls" multiple hidden></label></div>`;
   if(st && st.kind === "activity"){
     const a = UberParse.activityRows(st.rows, st.headers), days = [...new Set(a.map(x=>x.d))].sort();
     const by = k => a.reduce((o,x) => (o[x[k]||"—"] = (o[x[k]||"—"]||0) + 1, o), {});
@@ -957,9 +960,13 @@ function vImport(){
   return body;
 }
 function handleFiles(files){
-  const list = [...files].filter(f => /\.csv$/i.test(f.name) || f.type.includes("csv")); if(!list.length){ toast("Choose a .csv file exported from Uber Fleet Hub."); return; }
+  const list = [...files].filter(f => /\.(csv|xlsx|xls)$/i.test(f.name) || f.type.includes("csv")); if(!list.length){ toast("Choose the trips / earnings file (CSV or Excel) exported from the platform."); return; }
   S.importQueue = []; let done = 0; const pl = S.importPlatform || "uber";
-  list.forEach(file => Papa.parse(file, {header:true, skipEmptyLines:true, transformHeader: h => h.replace(/^\ufeff/,""), complete: res => {
+  // Excel files are read with SheetJS into the same rows as a CSV (first sheet, first row = headers)
+  const parse = (file, cb) => { if(!/\.xlsx?$/i.test(file.name)) return Papa.parse(file, {header:true, skipEmptyLines:true, transformHeader: h => h.replace(/^\ufeff/,""), complete: cb, error: () => toast(`Couldn't read ${file.name}.`)});
+    if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return; }
+    file.arrayBuffer().then(buf => { const wb = XLSX.read(buf, {type: "array", cellDates: true}), data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false}); cb({data, meta: {fields: Object.keys(data[0] || {})}}); }).catch(() => toast(`Couldn't read ${file.name}.`)); };
+  list.forEach(file => parse(file, res => {
     // only Uber has the separate Trip activity report; other platforms' files are read as money rows
     const headers = res.meta.fields || [], kind = pl === POS ? "pos" : pl === "uber" ? UberParse.detect(headers) : "payments", sig = (pl === "uber" ? "" : pl + "|") + headers.join("|");
     const saved = kind !== "activity" ? (S.settings.mappings||{})[norm(sig).slice(0,180)] : null;
@@ -968,7 +975,7 @@ function handleFiles(files){
       // trip details first, so the payments find their car straight away
       S.importQueue.sort((a,b) => (a.kind === "activity" ? 0 : 1) - (b.kind === "activity" ? 0 : 1));
       S.importState = S.importQueue.shift(); render();
-    }}, error: () => toast(`Couldn't read ${file.name}. Make sure it is the CSV from Fleet Hub.`)}));
+    }}));
 }
 function posPreview(st){
   const rows = posRows(st), tot = sum(rows, x => x.amt), fee = sum(rows, x => x.fee), days = [...new Set(rows.map(x => x.d))].sort();
@@ -1307,6 +1314,7 @@ function contractAlerts(){
 }
 function vPlatforms(){
   const e = S.edit && S.edit.kind === "platform" ? S.edit : null;
+  if(S.pltView && window.platformDetail) return (e ? platformForm(e.id, S.platforms[e.id] || {}) : "") + platformDetail(S.pltView);
   const list = Object.values(S.platforms).sort((a,b) => (a.acct||"").localeCompare(b.acct||"") || (a.name||"").localeCompare(b.name||""));
   const by = {}; S.trips.forEach(t => { const b = by[plOf(t)] ||= {f:0, n:new Set()}; b.f += t.f||0; if(t.tr || t.f) b.n.add(t.tr||t.id); });
   const missing = STD_PLATFORMS.filter(x => !S.platforms[x[0]]);
@@ -1315,7 +1323,7 @@ function vPlatforms(){
     <div class="row">${missing.length && S.canWrite ? `<button class="btn" data-seedpl="1">Add ${esc(missing.map(x=>x[1]).join(", "))}</button>` : ""}<button class="btn primary" data-edit="platform" data-id="">Add platform / party</button></div></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Name</th><th>Type</th><th>Account</th><th>Contract</th><th>Terms</th><th class="num">Trips</th><th class="num">Fares</th><th></th></tr></thead><tbody>
   ${list.map(p => { const [cls, txt] = contractState(p), tl = termList(p, PLT_TERMS), cur = termAt(tl, iso(new Date())); const b = by[p.id] || {f:0, n:new Set()};
-    return `<tr><td>${esc(p.name)}${p.legalName ? `<div class="small muted">${esc(p.legalName)}</div>` : ""}</td><td class="small">${esc(PLT_TYPES[p.type]||"")}</td><td class="mono small">${esc(p.acct||"")}</td>
+    return `<tr><td><button class="btn sm ghost" data-pltview="${esc(p.id)}" style="padding:2px 6px"><b>${esc(p.name)}</b></button>${p.legalName ? `<div class="small muted">${esc(p.legalName)}</div>` : ""}</td><td class="small">${esc(PLT_TYPES[p.type]||"")}</td><td class="mono small">${esc(p.acct||"")}</td>
     <td><span class="pill ${cls}">${esc(txt)}</span>${p.contractRef ? ` <a class="small" href="${esc(p.contractRef)}" target="_blank" rel="noopener">Contract file</a>` : ""}</td>
     <td class="small" style="white-space:normal">${esc(pltTermText(cur))}${tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : ""}</td><td class="num">${b.n.size}</td><td class="num">${fmt(b.f)}</td>
     <td><button class="btn sm" data-edit="platform" data-id="${esc(p.id)}">Edit</button></td></tr>`; }).join("")}
@@ -1761,7 +1769,7 @@ function vSettings(){
 /* ============ events ============ */
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t) return;
-  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.loanView = ""; S.loanEdit = null; S.rtaEdit = null; S.finePay = null; S.coaView = ""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.pltView = ""; S.loanView = ""; S.loanEdit = null; S.rtaEdit = null; S.finePay = null; S.coaView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
   if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
   if(t.dataset.del){
@@ -2053,5 +2061,6 @@ boot();
 <script src="rta.js?v=2"></script>
 <script src="reminders.js?v=2"></script>
 <script src="purchases.js?v=3"></script>
+<script src="platforms.js?v=1"></script>
 
 </body></html>
