@@ -783,8 +783,8 @@ document.addEventListener("click", ev => {
   if(t.dataset.dl && DL[t.dataset.dl]){ const out = DL[t.dataset.dl](t.dataset.id); if(out) saveCsv(out[0], out[1]); }
 });
 /* Back: every move to another page or detail view is remembered; Back returns to the previous one. */
-const NAV_KEYS = ["view","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","empView","empTab","acctView","coaView","pv"];
-const NAV_ATTRS = ["nav","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
+const NAV_KEYS = ["view","slipShow","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
+const NAV_ATTRS = ["nav","slipshow","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
@@ -796,7 +796,7 @@ document.addEventListener("click", ev => {
   ev.stopImmediatePropagation();
   const prev = S.navStack.pop();
   if(prev) Object.assign(S, JSON.parse(prev));
-  else { S.invView = ""; S.loanView = ""; S.loanEdit = null; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
+  else { S.invView = ""; S.slipShow = null; S.loanView = ""; S.loanEdit = null; S.drvView = S.vehView = S.trmView = S.empView = S.acctView = S.coaView = ""; S.pv = null; }   // nothing to go back to: the list
   S.edit = null; S.bk = null; S.pe = null; S.tripEdit = null; S.docEdit = null; S.empEdit = null; S.pdcEdit = null; S.ce = null;
   render(); window.scrollTo(0, 0);
 }, true);
@@ -1992,7 +1992,7 @@ boot();
 <script src="books.js?v=17"></script>
 <script src="drivers.js?v=23"></script>
 <script src="pdc.js?v=2"></script>
-<script src="employees.js?v=7"></script>
+<script src="employees.js?v=8"></script>
 <script src="investors.js?v=3"></script>
 <script src="fleetfin.js?v=8"></script>
 <script src="loans.js?v=3"></script>

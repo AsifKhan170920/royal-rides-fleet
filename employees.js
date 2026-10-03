@@ -88,7 +88,7 @@ function empForm(id){
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-empcancel="1">Cancel</button>${id ? `<button class="btn danger" type="button" data-del="employees" data-id="${esc(id)}">Delete</button>` : ""}</div>
   </form></div>`;
 }
-const EMP_TABS = {details:"Details & documents", pay:"Salary & payments", letters:"Offer letters"};
+const EMP_TABS = {details:"Details & documents", pay:"Ledger", letters:"Offer letters"};
 function empDetail(id){
   const e = S.employees[id], tab = EMP_TABS[S.empTab] ? S.empTab : "details";
   let body;
@@ -103,10 +103,10 @@ function empDetail(id){
     if(wait) body = wait;
     else {
       const st = empStatement(id, histEntries2());
-      body = `<div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Salary payable</th></tr></thead><tbody>
-        <tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(num(e.opening))}</b></td></tr>
-        ${st.lines.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td></tr>`).join("")}
-      </tbody><tfoot><tr><td colspan="4">Salary payable at ${esc(dmyS(S.to))}</td><td class="num"><b>${aed(st.bal)}</b></td></tr></tfoot></table></div>
+      body = `<div class="tbl"><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Salary payable</th><th></th></tr></thead><tbody>
+        <tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(num(e.opening))}</b></td><td></td></tr>
+        ${st.lines.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td>${l.slip ? `<button class="btn sm" data-slipshow="${esc(l.slip.month)}" data-lid="${esc(l.slip.lid)}">Payslip</button>` : ""}</td></tr>`).join("")}
+      </tbody><tfoot><tr><td colspan="4">Salary payable (all posted payroll; payments to ${esc(dmyS(S.to))})</td><td class="num"><b>${aed(st.bal)}</b></td><td></td></tr></tfoot></table></div>
       <div class="row" style="margin-top:10px;gap:18px"><span>Advances & loans outstanding <b class="mono">${fmt(st.adv)}</b></span>${st.bal > 0.005 ? `<button class="btn" data-emppay="${esc(id)}" data-amt="${r2(st.bal)}">Pay AED ${fmt(st.bal)}</button>` : ""}<button class="btn" data-empadv="${esc(id)}">Give an advance / loan</button></div>`;
     }
   } else {
@@ -124,8 +124,9 @@ function empStatement(id, entries){
   const p = "e:" + id, mv = window.BOOKS ? BOOKS.partyMoves(entries, p, "2110") : [], adv = window.BOOKS ? BOOKS.partyMoves(entries, p, "1180") : [];
   const lines = mv.map(m => ({date: m.date, desc: m.desc, dr: m.dr, cr: m.cr}));
   let rec = 0;
-  Object.values(S.emppay).filter(r => r.posted && r.date <= S.to).forEach(r => (r.lines || []).filter(l => l.empId === id).forEach(l => {
-    lines.push({date: r.date, desc: `Salary ${r.month}${num(l.unpaidDays) ? ` (${num(l.unpaidDays)} unpaid days)` : ""}${num(l.addAmt) ? ` + ${l.addNote || "additions"} ${fmt(num(l.addAmt))}` : ""}${num(l.otherDed) ? ` − ${l.dedNote || "deductions"} ${fmt(num(l.otherDed))}` : ""}`, cr: num(l.earned)});
+  ensureLids();
+  Object.values(S.emppay).filter(r => r.posted).forEach(r => (r.lines || []).filter(l => l.empId === id).forEach(l => {
+    lines.push({slip: {month: r.month, lid: l.lid}, date: r.date, desc: `Salary ${r.month}${num(l.unpaidDays) ? ` (${num(l.unpaidDays)} unpaid days)` : ""}${num(l.addAmt) ? ` + ${l.addNote || "additions"} ${fmt(num(l.addAmt))}` : ""}${num(l.otherDed) ? ` − ${l.dedNote || "deductions"} ${fmt(num(l.otherDed))}` : ""}`, cr: num(l.earned)});
     if(num(l.recover)){ lines.push({date: r.date, desc: `Advance recovered – salary ${r.month}`, dr: num(l.recover)}); rec += num(l.recover); }
   }));
   lines.sort((a,b) => a.date.localeCompare(b.date) || (b.cr ? 1 : 0) - (a.cr ? 1 : 0));
@@ -142,6 +143,8 @@ function empStatement(id, entries){
    employee's payslip to a month (e.g. a joiner, a final settlement or a bonus). The employee's advance / loan
    balance and salary payable balance are shown on his row while entering. */
 const lineId = () => "l" + uid();
+// payslips saved before they had an id get one from their position (stable for the run)
+const ensureLids = () => Object.values(S.emppay || {}).forEach(r => (r.lines || []).forEach((l, i) => { if(!l.lid) l.lid = "i" + i; }));
 const upAmt = l => l.unpaidAmt != null ? num(l.unpaidAmt) : r2(num(l.gross) / 30 * num(l.unpaidDays));
 function calcLine(e, d){
   const basic = num(e.basic), housing = num(e.housing), transport = num(e.transport), other = num(e.otherAllow), g = r2(basic + housing + transport + other);
@@ -159,6 +162,7 @@ function payDefaultMonth(){
   let m = iso(new Date()).slice(0,7); while(S.emppay[m] && S.emppay[m].posted) m = addMonths(m + "-01", 1).slice(0,7); return m;
 }
 function vEmpPayroll(){
+  ensureLids();
   if(!S.payMonth) S.payMonth = payDefaultMonth();
   const month = S.payMonth, run = S.emppay[month], posted = run && run.posted;
   if(S.slipEdit) return slipForm();
@@ -239,7 +243,7 @@ function slipShow(){
   const {month, lid} = S.slipShow, run = S.emppay[month], l = run && (run.lines || []).find(x => x.lid === lid);
   if(!l){ S.slipShow = null; return vEmpPayroll(); }
   return `<div class="section"><div class="head"><div><h2>Payslip – ${esc(l.name)} · ${esc(month)}</h2><p class="sub">Net pay AED ${fmt(l.net)} · paid on ${esc(dmyS(run.date || monthEnd(month)))}</p></div>
-    <div class="row"><button class="btn ghost" data-slipclose="1">← Back</button><button class="btn" data-slipprint="${esc(month)}" data-lid="${esc(lid)}">Print</button><button class="btn primary" data-slipview="${esc(month)}" data-lid="${esc(lid)}">Download PDF</button><button class="btn" data-slipedit="${esc(month)}" data-lid="${esc(lid)}">Edit</button></div></div>
+    <div class="row"><button class="btn ghost" data-back="1">← Back</button><button class="btn" data-slipprint="${esc(month)}" data-lid="${esc(lid)}">Print</button><button class="btn primary" data-slipview="${esc(month)}" data-lid="${esc(lid)}">Download PDF</button><button class="btn" data-slipedit="${esc(month)}" data-lid="${esc(lid)}">Edit</button></div></div>
     <div style="overflow:auto;background:#e9ebf0;padding:14px;border-radius:8px"><div style="margin:0 auto;width:210mm;box-shadow:0 2px 10px rgba(0,0,0,.15)"><style>${SAL_CSS}</style>${payslipHtml(run, l)}</div></div></div>`;
 }
 function printSlip(month, lid){
@@ -273,7 +277,7 @@ function postPayroll(add){
 
 /* ---------- events ---------- */
 document.addEventListener("click", async ev => {
-  const t = ev.target.closest("button"); if(!t) return;
+  const t = ev.target.closest("button"); if(!t) return; ensureLids();
   if(t.dataset.nav){ S.empEdit = null; S.empView = ""; return; }
   if(t.dataset.goto){ S.view = t.dataset.goto; S.empView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.empnew){ S.empEdit = {id: ""}; render(); window.scrollTo(0,0); return; }
@@ -306,7 +310,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.slipedit){ S.slipShow = null; S.slipEdit = {month: t.dataset.slipedit, lid: t.dataset.lid}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.slipcancel){ S.slipEdit = null; render(); return; }
   if(t.dataset.slipview){ printSlips(t.dataset.slipview, t.dataset.lid); return; }
-  if(t.dataset.slipshow){ S.slipShow = {month: t.dataset.slipshow, lid: t.dataset.lid}; S.slipEdit = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.slipshow){ S.view = "emppayroll"; S.empView = ""; S.slipShow = {month: t.dataset.slipshow, lid: t.dataset.lid}; S.slipEdit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.slipclose){ S.slipShow = null; render(); return; }
   if(t.dataset.slipprint){ printSlip(t.dataset.slipprint, t.dataset.lid); return; }
   if(t.dataset.slipprintall){ printSlips(t.dataset.slipprintall, ""); return; }
@@ -337,7 +341,7 @@ document.addEventListener("change", ev => {
   if(t.id === "expF"){ S.expFilter = t.value; render(); return; }
 });
 document.addEventListener("submit", async ev => {
-  const f = ev.target; if(f.id !== "fSlip") return; ev.preventDefault(); if(!S.db) return;
+  const f = ev.target; if(f.id !== "fSlip") return; ev.preventDefault(); if(!S.db) return; ensureLids();
   const E = S.slipEdit, d = Object.fromEntries(new FormData(f).entries()), month = E.lid ? E.month : d.month, run0 = S.emppay[month];
   const old = E.lid && run0 ? (run0.lines || []).find(l => l.lid === E.lid) : null, empId = old ? old.empId : d.empId, emp = S.employees[empId];
   if(!emp || !month){ toast("Choose the employee and the month."); return; }
