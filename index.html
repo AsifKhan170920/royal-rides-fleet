@@ -746,7 +746,7 @@ function vDashboard(){
     <div class="kpi"><div class="l">Company profit</div><div class="v ${company<0?"neg":""}">${fmt(company)}</div><div class="n">After drivers & investors</div></div>
     <div class="kpi"><div class="l">Owed to drivers</div><div class="v ${drvDue<0?"neg":""}">${fmt(drvDue)}</div><div class="n">Negative = drivers owe you</div></div>
   </div>
-  ${contractAlerts()}
+  ${contractAlerts()}${vehicleAlerts()}
   ${(()=>{ const by = {}; T.forEach(t => { const b = by[plOf(t)] ||= {f:0, fee:0, n:new Set()}; b.f += t.f||0; b.fee += (t.sf||0)+(t.tx||0); if(t.tr || t.f) b.n.add(t.tr||t.id); });
     const ks = Object.keys(by); if(ks.length < 2 && !Object.keys(S.platforms).length) return "";
     return `<div class="section"><h2>By platform</h2><div class="tbl"><table><thead><tr><th>Platform</th><th class="num">Trips</th><th class="num">Gross fares</th><th class="num">Fee + VAT</th><th class="num">Fee %</th><th>Contract commission</th></tr></thead><tbody>
@@ -1010,10 +1010,10 @@ function vVehicles(){
   const today = iso(new Date());
   return `${e ? vehicleForm(e.id, S.vehicles[e.id] || {}) : ""}
   <div class="section"><div class="head"><div><h2>Vehicles</h2><p class="sub">Link each car to its investor and terms. Trips are matched to cars by plate; if the Uber file has no plate, the driver's assigned car is used.</p></div><button class="btn primary" data-edit="vehicle" data-id="">Add vehicle</button></div>
-  ${list.length ? `<div class="tbl"><table><thead><tr><th>Fleet ID</th><th>Plate</th><th>Model</th><th>Driver now</th><th>Investor</th><th>Terms</th><th class="num">Trips</th><th class="num">Operating profit</th><th></th></tr></thead><tbody>
+  ${list.length ? `<div class="tbl"><table><thead><tr><th>Fleet ID</th><th>Plate</th><th>Model</th><th>Driver now</th><th>Mulkiya expiry</th><th>Insurance expiry</th><th>Investor</th><th>Terms</th><th class="num">Trips</th><th class="num">Operating profit</th><th></th></tr></thead><tbody>
   ${list.map(v=>{ const c = C.V[v.id] || {}; const vl = termList(v, VEH_TERMS), vc = termAt(vl, iso(new Date())) || {}; const t = !vc.investorId ? (vc.invModel==="none" ? '<span class="pill">Company-owned</span>' : '<span class="pill warn">Set investor</span>') : esc(vehTermText(vc).replace(/^[^:]*: /,"")) + (vl.length > 1 ? ` <span class="pill">${vl.length} versions</span>` : "");
     const drNow = holderOf(vehDrv(v), today);
-    return `<tr><td>${esc(v.fleetId)}</td><td><button class="btn sm ghost mono" data-vehview="${esc(v.id)}" style="padding:2px 6px"><b>${esc(v.plate)}</b></button></td><td>${esc(v.model)}</td><td>${drNow ? esc(dName(drNow)) : '<span class="muted">—</span>'}</td><td>${esc(vc.investorId ? iName(vc.investorId) : "—")}</td><td>${t}</td><td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
+    return `<tr><td>${esc(v.fleetId)}</td><td><button class="btn sm ghost mono" data-vehview="${esc(v.id)}" style="padding:2px 6px"><b>${esc(v.plate)}</b></button></td><td>${esc(v.model)}</td><td>${drNow ? esc(dName(drNow)) : '<span class="muted">—</span>'}</td><td>${expiryCell(v.mulkiyaExpiry)}</td><td>${expiryCell(v.insuranceExpiry)}</td><td>${esc(vc.investorId ? iName(vc.investorId) : "—")}</td><td>${t}</td><td class="num">${c.n||0}</td><td class="num">${aed(c.op)}</td><td><button class="btn sm" data-edit="vehicle" data-id="${esc(v.id)}">Edit</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No vehicles yet</b>Add your cars with their plate numbers, or import an Uber report with plates.</div>`}</div>`;
 }
 /* car page: driver assignment history and the car's ledger */
@@ -1036,7 +1036,7 @@ function vehicleDetail(id){
     </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${fmt(sum(R.L, l => l.dr))}</td><td class="num">${fmt(sum(R.L, l => l.cr))}</td><td class="num"><b>${aed(R.close)}</b></td></tr></tfoot></table></div>
     <div class="row" style="margin-top:10px;gap:18px"><span>Operating profit <b class="mono">${fmt(R.v.op)}</b></span><span>Management fee <b class="mono">${fmt(R.v.mgmt)}</b> <span class="small muted">(company's, before the investor split)</span></span><span>Investor share <b class="mono">${fmt(R.v.invShare)}</b></span><span>Company share <b class="mono">${fmt(R.v.company)}</b></span></div>`;
   }
-  return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p></div>
+  return `<div class="section"><div class="head"><div><h2>${esc(vName(id))}${v.model ? ` <span class="small muted">${esc(v.model)}</span>` : ""}</h2><p class="sub">Driver now: <b>${cur ? esc(dName(cur)) : "none"}</b> · ${esc(vehTermText(vc))}</p><p class="sub">Mulkiya ${v.mulkiyaNo ? esc(v.mulkiyaNo) + " " : ""}expires ${expiryCell(v.mulkiyaExpiry)} · Insurance${v.insurer ? " (" + esc(v.insurer) + (v.policyNo ? " " + esc(v.policyNo) : "") + ")" : ""} expires ${expiryCell(v.insuranceExpiry)}</p></div>
     <div class="row"><button class="btn ghost" data-vehview="">← All vehicles</button><button class="btn" data-edit="vehicle" data-id="${esc(id)}">Edit vehicle</button></div></div>
   ${tabBtns("data-vehtab", tab, {assign:"Assignment history", ledger:"Ledger"})}${body}</div>`;
 }
@@ -1062,6 +1062,20 @@ function vehLedger(vid){
   let bal = 0; L.forEach(l => { bal = r2(bal + (l.cr || 0) - (l.dr || 0)); l.bal = bal; });
   return {L, v, close: bal};
 }
+/* Mulkiya and insurance expiry: shown on the Vehicles list, the car page and the dashboard (30 days ahead) */
+function expiryCell(d){
+  if(!d) return '<span class="muted">—</span>';
+  const left = Math.round((parseD(d) - parseD(iso(new Date()))) / 86400000);
+  return `${esc(dmyS(d))}${left < 0 ? ` <span class="pill bad">Expired</span>` : left <= 30 ? ` <span class="pill warn">${left} day${left === 1 ? "" : "s"}</span>` : ""}`;
+}
+function vehicleAlerts(){
+  const lim = addDays(iso(new Date()), 30), due = [];
+  Object.values(S.vehicles).filter(v => v.active !== false).forEach(v => {
+    if(v.mulkiyaExpiry && v.mulkiyaExpiry <= lim) due.push(`${vName(v.id)} Mulkiya ${dmyS(v.mulkiyaExpiry)}`);
+    if(v.insuranceExpiry && v.insuranceExpiry <= lim) due.push(`${vName(v.id)} insurance ${dmyS(v.insuranceExpiry)}`);
+  });
+  return due.length ? `<div class="banner">Renew soon (expired or within 30 days): ${esc(due.join(", "))}. <button class="btn sm" data-nav="vehicles">Vehicles</button></div>` : "";
+}
 function vehicleForm(id, v0){
   const v = {...v0, ...latestTerms(v0, VEH_TERMS)};
   return `<div class="section"><h2>${id ? "Edit vehicle" : "New vehicle"}</h2><p class="sub">Management charges come off first (fixed per month and/or % of fare revenue). The investor then gets either a % of what is left or a fixed monthly payment. The company keeps the rest.</p>
@@ -1070,6 +1084,12 @@ function vehicleForm(id, v0){
     <div class="f"><label for="vp">Plate</label><input id="vp" name="plate" required value="${esc(v.plate)}"></div>
     <div class="f"><label for="vm">Model</label><input id="vm" name="model" value="${esc(v.model)}"></div>
     <div class="f"><label for="vvin">VIN</label><input id="vvin" name="vin" value="${esc(v.vin)}"></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Mulkiya & insurance</b> <span class="small muted">– you are warned 30 days before either expires.</span></div>
+    <div class="f"><label for="vmn">Mulkiya (registration) no.</label><input id="vmn" name="mulkiyaNo" value="${esc(v.mulkiyaNo)}"></div>
+    <div class="f"><label for="vme">Mulkiya expiry</label><input id="vme" name="mulkiyaExpiry" type="date" value="${esc(v.mulkiyaExpiry)}"></div>
+    <div class="f"><label for="vic">Insurance company</label><input id="vic" name="insurer" value="${esc(v.insurer)}"></div>
+    <div class="f"><label for="vip">Policy no.</label><input id="vip" name="policyNo" value="${esc(v.policyNo)}"></div>
+    <div class="f"><label for="vie">Insurance expiry</label><input id="vie" name="insuranceExpiry" type="date" value="${esc(v.insuranceExpiry)}"></div>
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Investor and fee terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="vi">Investor</label><select id="vi" name="investorId">${listOpts(S.investors, i=>i.name||i.id, v.investorId, "None (company-owned)")}</select></div>
     <div class="f"><label for="vim">Investor terms</label><select id="vim" name="invModel">${opts(INV_MODELS, v.invModel || (v.investorId ? "profit_share" : "none"))}</select></div>
@@ -1683,7 +1703,8 @@ document.addEventListener("submit", async ev => {
       const now = termAt(hist, iso(new Date())) || hist[0] || next; keys.forEach(k => fd[k] = now[k]);
       fd.terms = hist;
     }
-    // car and machine are assigned on the Vehicles and Machines pages    if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
+    // car and machine are assigned on the Vehicles and Machines pages
+    if(await writeOk(S.db.doc(col + "/" + id).set({...prevBody, ...fd, createdFromImport:false}))){ S.edit = null; toast("Saved."); render(); }
   }
   if(f.id === "fVehAssign" || f.id === "fTrmAssign"){
     const veh = f.id === "fVehAssign", rec = (veh ? S.vehicles : S.terminals)[f.dataset.id]; if(!rec) return; const {id:_, ...body} = rec;
