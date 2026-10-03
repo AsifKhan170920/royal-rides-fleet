@@ -182,7 +182,9 @@ function salaryModel(id, x, late, lateEff, T){
   const otherGross = r2(sum(S.entries.filter(e => e.driverId === id && e.type === "income"), e => num(e.amount) + num(e.vat)));
   const receivable = r2(x.fare + x.tip + x.ref + otherGross), app = r2(x.fare + x.tip + x.ref - x.cash), otherCo = r2(otherGross - viaInc);
   const expected = r2(x.cash + viaInc - x.card);
-  const handed = r2(x.recv + sum(S.entries.filter(e => e.driverId === id && e.type === "expense" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat)));
+  // cash the driver gave back: "Received from driver" entries, receipts from him (Receipts → driver → cash handed over), and company costs he paid from that cash
+  const fromReceipts = window.BOOKS ? sum(BOOKS.driverLines(S.entries, id).filter(l => l.ref && l.ref.type === "receipt"), l => l.cr || 0) : 0;
+  const handed = r2(x.recv + fromReceipts + sum(S.entries.filter(e => e.driverId === id && e.type === "expense" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat)));
   const decl = Object.values(S.drvAdj || {}).find(a => a.driverId === id && a.kind === "cash" && a.from === S.from && a.to === S.to);
   const inHand = decl ? r2(num(decl.amount)) : null, diff = r2(expected - handed - (inHand == null ? 0 : inHand));
   // performance
