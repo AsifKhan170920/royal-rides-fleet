@@ -20,15 +20,35 @@ const BK = {
 const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e", "2200":"i"};
 /* Profit & loss groups: drivers and the cars are the cost of the service (cost of sales); office,
    operations and workshop staff and general costs are administrative expenses. */
+/* Chart of accounts in groups, as in Manager.io: Balance Sheet (current / non-current assets, current /
+   non-current liabilities, equity) and Profit & Loss (income, cost of sales, administrative & general expenses,
+   finance costs, investors' share). Every account has a group – by its code unless one is chosen on the account;
+   your own groups (Settings → coaGroups) sit under one of these and show as their own heading. */
+// balance sheet: these are non-current; every other asset and liability is current (unless a group is chosen)
+const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210"]);
+const COA_GROUPS = {ca: ["Asset", "Current assets"], nca: ["Asset", "Non-current assets"], cl: ["Liability", "Current liabilities"], ncl: ["Liability", "Non-current liabilities"], eq: ["Equity", "Equity"],
+  income: ["Income", "Income"], cos: ["Expense", "Cost of sales"], admin: ["Expense", "Administrative & general expenses"], finance: ["Expense", "Finance costs"], investor: ["Expense", "Investors' profit share"]};
+const customGroups = () => (S.settings && S.settings.coaGroups) || [];
+function baseGroup(code){
+  const n = +code, ty = TYPE_OF(code);
+  if(ty === "Asset") return NON_CURRENT.has(String(code)) ? "nca" : "ca";
+  if(ty === "Liability") return NON_CURRENT.has(String(code)) ? "ncl" : "cl";
+  if(ty === "Equity") return "eq"; if(ty === "Income") return "income";
+  if(n === 5900) return "investor"; if(n >= 5950 && n < 5970) return "finance";
+  return n >= 5000 && n < 5290 ? "cos" : "admin";
+}
+// the group an account is shown in (a chosen group, a custom group, or by its code) and the main group behind it
+const coaGroupOf = code => { const g = ((S.coa || {})[code] || {}).group; return g && (COA_GROUPS[g] || customGroups().some(x => x.id === g)) ? g : baseGroup(code); };
+const mainGroup = code => { const g = coaGroupOf(code); if(COA_GROUPS[g]) return g; const c = customGroups().find(x => x.id === g); return c ? c.base : baseGroup(code); };
 function plGroup(code){
+  if(String(code)[0] !== "4" && TYPE_OF(code) === "Expense"){ const g = mainGroup(code); if(["cos", "admin", "finance", "investor"].includes(g)) return g; }
   const n = +code; if(String(code)[0] === "4") return "income";
   if(n === 5900) return "investor";
   if(n >= 5950 && n < 5970) return "finance";   // interest / profit on bank loans and vehicle finance
   return n >= 5000 && n < 5290 ? "cos" : "admin";
 }
 const PL_GROUPS = {cos:"Cost of sales", admin:"Administrative & general expenses", finance:"Finance costs", investor:"Investors' profit share"};
-// balance sheet: these are non-current; every other asset and liability is current
-const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210"]);
+
 const VAT_OPTS = {"":"No VAT", "5":"5% VAT"};
 const isInv = k => k === "sale_invoice" || k === "purchase_invoice";
 const lineNet = (k, l) => r2(isInv(k) ? num(l.qty === "" || l.qty == null ? 1 : l.qty) * num(l.price) : num(l.amount));
@@ -382,11 +402,38 @@ function coaView(){
   const ce = S.ce ? coaForm(S.ce.code) : "", wait = needHistory();
   if(wait) return ce + `<div class="section"><h2>Chart of accounts</h2>${wait}</div>`;
   if(S.coaView) return ce + coaLedger(S.coaView);
-  const rows = coaBalances(historyJournal());
-  return ce + `<div class="section"><div class="head"><div><h2>Chart of accounts</h2><p class="sub">Every account with its opening balance (books start ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}) and balance at ${esc(dmyS(S.to))}. Click an account for its ledger. Codes: 1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses.</p></div><button class="btn primary" data-coanew="1">Add account</button></div>
-  <div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th>Type</th><th class="num">Opening</th><th class="num">Balance ${esc(dmyS(S.to))}</th><th></th></tr></thead><tbody>
-  ${TYPE_ORDER.map(ty => { const rs = rows.filter(r => r.type === ty); return `<tr><td colspan="6" style="background:var(--bg)"><b>${ty === "Liability" ? "Liabilities" : ty + "s"}</b></td></tr>` + rs.map(r => `<tr><td class="mono">${esc(r.code)}</td><td><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button>${S.coa[r.code] && !(r.code in ACCT_BASE) && !cashAccounts().some(a => a.id === r.code) ? ' <span class="pill">Custom</span>' : ""}</td><td class="small">${ty}${ty === "Expense" ? ` · <span class="muted">${esc(PL_GROUPS[plGroup(r.code)] || "")}</span>` : ""}</td><td class="num">${r.open ? aed(natural(r.code, r.open)) : ""}</td><td class="num">${aed(natural(r.code, r.bal))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`).join(""); }).join("")}
-  </tbody></table></div><p class="small muted" style="margin-top:6px">Balances are shown the natural way round: assets and expenses as debits, liabilities, equity and income as credits.</p></div>`;
+  const rows = coaBalances(historyJournal()), pmv = {}; journal(compute()).forEach(l => { pmv[l.acct] = (pmv[l.acct] || 0) + l.dr - l.cr; });
+  const val = r => ["Asset", "Expense"].includes(r.type) ? r.bal : -r.bal, pval = c => ["Expense"].includes(TYPE_OF(c)) ? r2(pmv[c] || 0) : -r2(pmv[c] || 0);
+  const show = r => r.bal || r.open || r.used || (S.coa || {})[r.code] || S.coaAll;
+  const amt = (c, v) => `<button class="btn sm ghost" data-coaview="${esc(c)}" style="padding:1px 6px">${aed(v)}</button>`;
+  // headings in the order of the statements; custom groups follow their main group
+  const order = [["Balance Sheet", ["ca", "nca", "cl", "ncl", "eq"]], ["Profit and Loss Statement", ["income", "cos", "admin", "finance", "investor"]]];
+  const groupsUnder = base => [base, ...customGroups().filter(x => x.base === base).map(x => x.id)];
+  const gName = g => COA_GROUPS[g] ? COA_GROUPS[g][1] : (customGroups().find(x => x.id === g) || {}).name || g;
+  const block = (title, bases, bs) => {
+    let tot = {}, body = "";
+    bases.forEach(base => groupsUnder(base).forEach(g => {
+      const rs = (bs ? rows : rows.map(r => ({...r, bal: r2(pmv[r.code] || 0), used: r.code in pmv}))).filter(r => coaGroupOf(r.code) === g && show(r));
+      if(!rs.length && !COA_GROUPS[g]) return;
+      const t = sum(rs, r => bs ? val(r) : pval(r.code)); tot[base] = (tot[base] || 0) + t;
+      body += `<tr><td colspan="${bs ? 5 : 4}" style="background:var(--bg)"><b>${esc(gName(g))}</b>${COA_GROUPS[g] ? "" : ` <span class="small muted">(under ${esc(COA_GROUPS[base][1])})</span> <button class="btn sm ghost" data-coagrpdel="${esc(g)}" style="padding:0 6px">Remove group</button>`}</td></tr>`
+        + rs.map(r => `<tr><td class="mono">${esc(r.code)}</td><td><button class="btn sm ghost" data-coaview="${esc(r.code)}" style="padding:2px 6px">${esc(r.name)}</button></td>${bs ? `<td class="num">${aed(["Asset", "Expense"].includes(r.type) ? r.open : -r.open)}</td>` : ""}<td class="num">${amt(r.code, bs ? val(r) : pval(r.code))}</td><td><button class="btn sm" data-coaedit="${esc(r.code)}">Edit</button></td></tr>`).join("")
+        + `<tr class="tot"><td></td><td><b>Total ${esc(gName(g).toLowerCase())}</b></td>${bs ? "<td></td>" : ""}<td class="num"><b>${aed(t)}</b></td><td></td></tr>`;
+    }));
+    return {body, tot};
+  };
+  const B = block(...order[0], true), PL = block(...order[1], false);
+  const tA = (B.tot.ca || 0) + (B.tot.nca || 0), tL = (B.tot.cl || 0) + (B.tot.ncl || 0), profit = -sum(rows.filter(r => r.type === "Income" || r.type === "Expense"), r => r.bal);
+  const np = (PL.tot.income || 0) - (PL.tot.cos || 0) - (PL.tot.admin || 0) - (PL.tot.finance || 0) - (PL.tot.investor || 0);
+  return ce + `<div class="section"><div class="head"><div><h2>Chart of accounts</h2><p class="sub">As in Manager.io: Balance Sheet accounts with their balance at ${esc(dmyS(S.to))} (opening at the books start ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}), Profit and Loss accounts with the amount for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}. Click an account or an amount for its ledger. Codes: 1 assets, 2 liabilities, 3 equity, 4 income, 5 expenses.</p></div>
+    <div class="row"><label class="small"><input type="checkbox" id="coaAll" ${S.coaAll ? "checked" : ""}> Show unused accounts</label><button class="btn" data-coagrpnew="1">New group</button><button class="btn primary" data-coanew="1">New account</button></div></div>
+  ${S.coaGrp ? `<form class="form" id="fCoaGrp" style="margin-bottom:10px"><div class="f"><label for="cg_n">Group name</label><input id="cg_n" name="name" required placeholder="e.g. Vehicle running costs"></div><div class="f"><label for="cg_b">Under</label><select id="cg_b" name="base">${opts(Object.fromEntries(Object.entries(COA_GROUPS).map(([k, v]) => [k, (v[0] === "Asset" || v[0] === "Liability" || v[0] === "Equity" ? "Balance Sheet – " : "Profit and Loss – ") + v[1]])), "admin")}</select></div><div class="row wide"><button class="btn primary" type="submit">Add group</button><button class="btn ghost" type="button" data-coagrpnew="">Cancel</button></div></form>` : ""}
+  <div class="grid2"><div><h3 style="margin:0 0 6px">Balance Sheet</h3><div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">Opening</th><th class="num">Balance</th><th></th></tr></thead><tbody>${B.body}
+    <tr class="tot"><td></td><td><b>Total assets</b></td><td></td><td class="num"><b>${aed(tA)}</b></td><td></td></tr><tr class="tot"><td></td><td><b>Total liabilities</b></td><td></td><td class="num"><b>${aed(tL)}</b></td><td></td></tr><tr><td></td><td>Profit since ${esc(dmyS(setting("ledgerStart", "2026-09-01")))}</td><td></td><td class="num">${aed(profit)}</td><td></td></tr>
+    <tr class="tot"><td></td><td><b>Equity incl. profit</b></td><td></td><td class="num"><b>${aed((B.tot.eq || 0) + profit)}</b></td><td></td></tr></tbody></table></div></div>
+  <div><h3 style="margin:0 0 6px">Profit and Loss Statement</h3><div class="tbl"><table><thead><tr><th>Code</th><th>Account</th><th class="num">${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</th><th></th></tr></thead><tbody>${PL.body}
+    <tr class="tot"><td></td><td><b>${np >= 0 ? "Net profit" : "Net loss"}</b></td><td class="num"><b>${aed(np)}</b></td><td></td></tr></tbody></table></div></div></div>
+  <p class="small muted" style="margin-top:6px">Balances the natural way round: assets and expenses as debits, liabilities, equity and income as credits. Choose an account's group with Edit; add your own groups with New group.</p></div>`;
 }
 function coaForm(code){
   const a = S.coa[code] || {}, isCash = cashAccounts().some(x => x.id === code), builtIn = code && (code in ACCT_BASE);
@@ -394,6 +441,7 @@ function coaForm(code){
   ${isCash ? `<p class="sub">This is a bank / cash account: edit it on the Bank & cash accounts page.</p><button class="btn ghost" data-coacancel="1">Close</button>` : `<form class="form" id="fCoa" data-code="${esc(code || "")}">
     <div class="f"><label for="ca_c">Code (4 digits: 1 asset, 2 liability, 3 equity, 4 income, 5 expense)</label><input id="ca_c" name="code" required pattern="[1-9][0-9]{3}" value="${esc(code || "")}" ${code ? "readonly" : ""}></div>
     <div class="f"><label for="ca_n">Name</label><input id="ca_n" name="name" required value="${esc(a.name || (code ? acctName(code) : ""))}"></div>
+    <div class="f"><label for="ca_g">Group</label><select id="ca_g" name="group">${opts(Object.fromEntries([...Object.entries(COA_GROUPS).map(([k, v]) => [k, v[1]]), ...customGroups().map(x => [x.id, x.name + " (" + COA_GROUPS[x.base][1] + ")"])]), a.group || (code ? coaGroupOf(code) : ""), "By its code")}</select></div>
     <div class="f"><label for="ca_o">Opening balance (debit +, credit −)</label><input id="ca_o" name="opening" type="number" step="0.01" value="${esc(a.opening ?? "")}"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button><button class="btn ghost" type="button" data-coacancel="1">Cancel</button>${code && !builtIn && S.coa[code] ? `<button class="btn danger" type="button" data-del="coa" data-id="${esc(code)}">Delete</button>` : ""}</div>
   </form>${["1200","2000","2100"].includes(code) ? `<p class="small muted">Opening balances of customers, suppliers and drivers are entered on their own forms and added to this account.</p>` : ""}`}</div>`;
@@ -439,7 +487,7 @@ function statementsView(){
   const tA = sum(grp("Asset"), val), tL = sum(grp("Liability"), val), tE = sum(grp("Equity"), val) + profit, diff = r2(tA - tL - tE), gap = Math.abs(diff) > 0.01;
   const bl = r => `<tr><td class="mono small">${esc(r.code)}</td><td>${esc(r.name)}</td><td class="num">${amtBtn(r.code, val(r))}</td></tr>`;
   // current and non-current, each with its subtotal
-  const split = (ty, nc, title) => { const rs = grp(ty).filter(r => NON_CURRENT.has(r.code) === nc); return rs.length ? `<tr><td></td><td><i>${title}</i></td><td></td></tr>${rs.map(bl).join("")}<tr><td></td><td><i>Total ${title.toLowerCase()}</i></td><td class="num"><i>${aed(sum(rs, val))}</i></td></tr>` : ""; };
+  const split = (ty, nc, title) => { const rs = grp(ty).filter(r => ["nca", "ncl"].includes(mainGroup(r.code)) === nc); return rs.length ? `<tr><td></td><td><i>${title}</i></td><td></td></tr>${rs.map(bl).join("")}<tr><td></td><td><i>Total ${title.toLowerCase()}</i></td><td class="num"><i>${aed(sum(rs, val))}</i></td></tr>` : ""; };
   const bs = `<div class="section"><h2>Balance sheet at ${esc(dmyS(S.to))}</h2><div class="tbl"><table><tbody>
     <tr><td colspan="3"><b>Assets</b></td></tr>${split("Asset", true, "Non-current assets")}${split("Asset", false, "Current assets")}<tr class="tot"><td></td><td><b>Total assets</b></td><td class="num"><b>${aed(tA)}</b></td></tr>
     <tr><td colspan="3"><b>Liabilities</b></td></tr>${split("Liability", false, "Current liabilities")}${split("Liability", true, "Non-current liabilities")}<tr class="tot"><td></td><td><b>Total liabilities</b></td><td class="num"><b>${aed(tL)}</b></td></tr>
@@ -468,6 +516,9 @@ document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
   if(t.dataset.nav){ S.bk = null; S.pe = null; S.pv = null; S.ce = null; return; }
   if(t.dataset.coanew){ S.ce = {code: ""}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.coagrpnew != null){ S.coaGrp = !!t.dataset.coagrpnew; render(); return; }
+  if(t.dataset.coagrpdel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
+    if(await writeOk(S.db.doc("settings/main").set({...S.settings, coaGroups: customGroups().filter(x => x.id !== t.dataset.coagrpdel)}))){ toast("Group removed – its accounts go back to their main group."); render(); } return; }
   if(t.dataset.coaedit){ S.ce = {code: t.dataset.coaedit}; render(); window.scrollTo(0,0); return; }
   if(t.dataset.coacancel){ S.ce = null; render(); return; }
   if(t.dataset.coaview != null){ if(t.dataset.tocoa) S.view = "coa"; S.coaView = t.dataset.coaview; S.ce = null; render(); window.scrollTo(0,0); return; }
@@ -506,7 +557,14 @@ document.addEventListener("submit", async ev => {
     const fd = Object.fromEntries(new FormData(f).entries()), code = f.dataset.code || fd.code;
     if(!/^[1-9][0-9]{3}$/.test(code)){ toast("The code must be 4 digits."); return; }
     if(!f.dataset.code && (allCodes().includes(code))){ toast("Account " + code + " already exists."); return; }
-    if(await writeOk(S.db.doc("coa/" + code).set({name: (fd.name || "").trim(), opening: num(fd.opening)}))){ S.ce = null; toast("Account saved."); render(); }
+    const grp = fd.group && fd.group !== baseGroup(code) ? fd.group : "";   // only a group that differs from the code's is kept
+    if(await writeOk(S.db.doc("coa/" + code).set({name: (fd.name || "").trim(), opening: num(fd.opening), group: grp}))){ S.ce = null; toast("Account saved."); render(); }
+    return;
+  }
+  if(f.id === "fCoaGrp"){
+    ev.preventDefault(); if(!S.db) return; const fd = Object.fromEntries(new FormData(f).entries());
+    const list = [...customGroups(), {id: "g-" + uid(), name: fd.name.trim(), base: fd.base}];
+    if(await writeOk(S.db.doc("settings/main").set({...S.settings, coaGroups: list}))){ S.coaGrp = false; toast("Group added – choose it on an account with Edit."); render(); }
     return;
   }
   if(f.id === "fParty"){
@@ -517,3 +575,4 @@ document.addEventListener("submit", async ev => {
     if(await writeOk(S.db.doc(col + "/" + id).set({...prev, ...fd}))){ S.pe = null; toast("Saved."); render(); }
   }
 });
+document.addEventListener("change", ev => { if(ev.target.id === "coaAll"){ S.coaAll = ev.target.checked; render(); } });
