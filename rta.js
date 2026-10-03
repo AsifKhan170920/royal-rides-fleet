@@ -134,7 +134,7 @@ function fineForm(f, kind, vid){
 /* ---------- importing a fines statement (Excel / CSV from RTA / Dubai Police) ---------- */
 async function importFines(file, vidOnly){
   if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return; }
-  const wb = XLSX.read(await file.arrayBuffer(), {type: "array", cellDates: true}), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false});
+  const wb = /\.csv$/i.test(file.name) ? XLSX.read(await file.text(), {type: "string", raw: true}) : XLSX.read(await file.arrayBuffer(), {type: "array", cellDates: true}), rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false, dateNF: "yyyy-mm-dd hh:mm:ss"});
   if(!rows.length){ toast("No rows found in the file."); return; }
   const keys = Object.keys(rows[0]), pick = (...w) => { for(const x of w){ const k = keys.find(k => norm(k).includes(x)); if(k) return k; } return ""; }   // the first word in the list wins ("total amount" before "amount");
   const K = {no: pick("ticketno", "fineno", "finenumber", "ticketnumber", "violationno", "referenceno", "ticket", "number"), date: pick("date"), time: pick("time"), plate: pick("plate"), src: pick("source", "issuer", "authority", "emirate"),

@@ -996,7 +996,7 @@ function handleFiles(files){
   // Excel files are read with SheetJS into the same rows as a CSV (first sheet, first row = headers)
   const parse = (file, cb) => { if(!/\.xlsx?$/i.test(file.name)) return Papa.parse(file, {header:true, skipEmptyLines:true, transformHeader: h => h.replace(/^\ufeff/,""), complete: cb, error: () => toast(`Couldn't read ${file.name}.`)});
     if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return; }
-    file.arrayBuffer().then(buf => { const wb = XLSX.read(buf, {type: "array", cellDates: true}), data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false}); cb({data, meta: {fields: Object.keys(data[0] || {})}}); }).catch(() => toast(`Couldn't read ${file.name}.`)); };
+    file.arrayBuffer().then(buf => { const wb = XLSX.read(buf, {type: "array", cellDates: true}), data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false, dateNF: "yyyy-mm-dd hh:mm:ss"}); cb({data, meta: {fields: Object.keys(data[0] || {})}}); }).catch(() => toast(`Couldn't read ${file.name}.`)); };
   list.forEach(file => parse(file, res => {
     // only Uber has the separate Trip activity report; other platforms' files are read as money rows
     const headers = res.meta.fields || [], kind = pl === POS ? "pos" : pl === "uber" ? UberParse.detect(headers) : "payments", sig = (pl === "uber" ? "" : pl + "|") + headers.join("|");
@@ -2083,9 +2083,9 @@ boot();
 <script src="investors.js?v=4"></script>
 <script src="fleetfin.js?v=10"></script>
 <script src="loans.js?v=4"></script>
-<script src="rta.js?v=5"></script>
+<script src="rta.js?v=6"></script>
 <script src="reminders.js?v=3"></script>
-<script src="purchases.js?v=6"></script>
+<script src="purchases.js?v=8"></script>
 <script src="platforms.js?v=7"></script>
 <script src="settings.js?v=2"></script>
 

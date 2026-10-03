@@ -61,15 +61,16 @@ const rcptCell = e => S.rcpt[e.id] ? `<button class="btn sm" data-rcptopen="${es
 /* ---------- statement import ---------- */
 function impGuess(keys, src){
   const pick = (...w) => { for(const x of w){ const k = keys.find(k => norm(k).includes(x)); if(k) return k; } return ""; }   // the first word in the list wins ("total amount" before "amount")
-  return {txn: pick("transactionid", "transactionno", "transid", "referenceno", "receiptno", "tripid", "sessionid", "invoiceno", "reference"), date: pick("transactiondate", "tripdate", "date", "starttime"), time: pick("time"),
+  return {txn: pick("transactionid", "transactionno", "transid", "referenceno", "receiptno", "tripid", "sessionid", "invoiceno", "reference"), date: pick("transactiondate", "tripdate", "startdate", "sessionstart", "starttime", "date"), time: pick("transactiontime", "triptime", "starttime", "time"),
     plate: pick("plate", "vehicleno", "vehicle", "registration"), amount: pick("totalamount", "amountincl", "grossamount", "total", "amount", "charge", "fare", "cost", "value"), vat: pick("vat", "tax"),
     qty: src === "fuel" ? pick("litre", "liter", "volume", "quantity", "qty") : src === "ev" ? pick("kwh", "energy", "consumption") : "", place: pick("station", "site", "location", "gate", "charger", "merchant", "toll")};
 }
 async function readSheet(file){
   if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return null; }
-  const wb = XLSX.read(await file.arrayBuffer(), {type: "array", cellDates: true});
+  // CSV as plain text (dates and times exactly as written); Excel dates with their time
+  const wb = /\.csv$/i.test(file.name) ? XLSX.read(await file.text(), {type: "string", raw: true}) : XLSX.read(await file.arrayBuffer(), {type: "array", cellDates: true});
   // the header row may not be the first: take the first row that has a date-like and an amount-like header
-  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header: 1, defval: "", raw: false});
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header: 1, defval: "", raw: false, dateNF: "yyyy-mm-dd hh:mm:ss"});
   let h = aoa.findIndex(r => r.some(c => /date/i.test(c)) && r.some(c => /amount|total|charge|fare|value|cost/i.test(c))); if(h < 0) h = 0;
   const head = aoa[h].map((c, i) => String(c || "").trim() || "Column " + (i + 1));
   return aoa.slice(h + 1).filter(r => r.some(c => String(c).trim())).map(r => Object.fromEntries(head.map((k, i) => [k, r[i] ?? ""])));
@@ -86,7 +87,8 @@ function impRows(){
     if(M.vat && I.vatMode === "excl") gross = gross + vat;   // amount column is before VAT
     const net = r2(gross - (I.vatMode === "none" ? 0 : vat));
     const ref = M.txn && String(r[M.txn]).trim() ? I.src + ":" + norm(r[M.txn]) : I.src + ":" + norm([date, r[M.time], p, gross, r[M.place]].join("|"));
-    const time = M.time ? String(r[M.time]).trim() : "", who = vid && window.driverAt ? driverAt(vid, date, time) : {id: "", how: ""};
+    // the time from its own column, else from the date column ("14/09/2026 08:10", "2026-09-14T08:10:00")
+    const time = M.time ? String(r[M.time]).trim() : ((String(r[M.date] || "").match(/\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]\.?M\.?)?/i) || [""])[0]), who = vid && window.driverAt ? driverAt(vid, date, time) : {id: "", how: ""};
     return {i, date, time, plate: r[M.plate], vid, drv: who.id, how: who.how, net, vat: I.vatMode === "none" ? 0 : r2(vat), qty: M.qty ? num(r[M.qty]) : 0, place: M.place ? String(r[M.place]).trim() : "", ref, dup: seen.has(ref), ok: !!date && !!gross};
   });
   return out;
