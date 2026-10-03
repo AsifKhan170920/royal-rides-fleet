@@ -166,61 +166,99 @@ function salaryModel(id, x, late, lateEff, T){
   return {id, x, tm, mode, platforms, earnings, byCat, expenditure, netEarn, rentAmt, rta, base, coShare, pens, salary, items, viaInc, viaExp, entitled, due, paidIn, payable, late, lateEff, T,
     receivable, app, otherCo, expected, handed, inHand, diff, perf};
 }
+// the statement as sections of rows – shared by the screen and the printed copy
+function salaryRows(M){
+  const x = M.x, tm = M.tm, L = (label, v, kind = "") => ({label, v, kind});
+  const model = tm.payModel || "commission", pct = num(tm.commissionPct);
+  const payLabel = model === "rent" ? "Driver earnings after company fee" : model === "salary" ? "Salary" : model === "salary_comm" ? `Salary + commission (${pct}%)` : `Commission (${pct}%)`;
+  const S2 = M.platforms.map(p => L(`${esc(p.name)} <span class="sub">${p.n} trips · fares ${fmt(p.fares)} − fee & VAT ${fmt(p.fee)}</span>`, p.net));
+  if(num(x.other)) S2.push(L("Other bookings (direct)", x.other));
+  S2.push(L("Total earnings", M.earnings, "t"));
+  const S3 = Object.entries(M.byCat).map(([c, v]) => L(esc(EXP_CATS[c] || "Expense"), -v));
+  if(!S3.length) S3.push(L('<span class="sub">No direct expenditure this period</span>', null));
+  S3.push(L("Total direct expenditure", -M.expenditure, "t"));
+  if(M.mode === "before") S3.push(L("Net earnings", M.netEarn, "t"));
+  const S4 = [];
+  if(M.rentAmt) S4.push(L(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -M.rentAmt));
+  if(M.rta) S4.push(L(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta));
+  S4.push(L(payLabel, M.base, "t"));
+  if(x.tipsDue) S4.push(L("Tips from platforms", x.tipsDue));
+  M.pens.forEach(a => S4.push({...L(`Violation deduction ${num(a.pct)}%${a.reason ? " – " + esc(a.reason) : ""}`, -num(a.amount)), pen: a.id}));
+  S4.push(L("Salary for the period", M.salary, "g"));
+  const S5 = [L("Salary for the period", M.salary)];
+  M.items.forEach(o => S5.push(L(`Less ${esc((ITEM_KINDS[o.it.kind] || "recovery").toLowerCase())}${o.it.desc ? " – " + esc(o.it.desc) : ""}`, -o.amt)));
+  if(x.adv) S5.push(L("Less advances", -x.adv));
+  if(M.mode === "after" && M.expenditure) S5.push(L("Less direct expenditure", -x.deduct));
+  if(M.viaExp) S5.push(L("Add company costs paid from the driver's cash", M.viaExp));
+  S5.push(L("Less cash collected from riders", -x.cash));
+  if(M.viaInc) S5.push(L("Less cash from direct bookings", -M.viaInc));
+  if(x.card) S5.push(L("Add card payments on the company machine", x.card));
+  if(M.late.length) S5.push(L(`Unsettled trips from earlier periods (${M.late.length})`, M.lateEff));
+  S5.push(L("Net payable for the period", M.due, "t"));
+  if(M.paidIn) S5.push(L("Paid to / received from the driver in the period", M.paidIn));
+  if(M.T){ S5.push(L("Balance brought forward", M.T.before)); S5.push(L(M.payable >= 0 ? "Balance payable to the driver" : "Balance the driver owes", M.payable, "g")); }
+  const S6 = [L("Total receivable (fares, tips & tolls + other bookings)", M.receivable, "t"), L("Less platform payments (paid in the app)", -M.app)];
+  if(M.otherCo > 0.004) S6.push(L("Less other bookings received by the company", -M.otherCo));
+  S6.push(L("Less machine payments (card)", -x.card), L("Cash that should be with the driver", M.expected, "t"), L("Less handed over / spent for the company", -M.handed),
+    L(M.inHand == null ? "Less cash in hand with the driver (not counted)" : "Less cash in hand with the driver (counted)", M.inHand == null ? null : -M.inHand),
+    L(`Difference – ${M.inHand == null ? "still to be accounted for" : Math.abs(M.diff) < 0.005 ? "fully accounted for" : M.diff > 0 ? "shortage" : "excess"}`, M.diff, "g"));
+  return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6]];
+}
+const perfCells = P => [["Trips", P.n], ["Days worked", P.days], ["Distance", fmt(P.km) + " km"], ["Net per day", fmt(P.perDay)], ["Fleet average / day", fmt(P.fleetDay)], ["Net per trip", fmt(P.perTrip)], ["Cash trips", P.cashPct + "%"],
+  ...(P.completion != null ? [["Completion", P.completion + "%"], ["Cancelled", P.cancelled]] : []), ["Rank", P.rank ? P.rank + " of " + P.of : "—"]];
 function salaryHtml(M, print, locked){
-  const x = M.x, tm = M.tm, ln = (l, v, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><td style="white-space:normal">${l}</td><td class="num">${v == null ? "" : aed(v)}</td></tr>`;
-  const sec = (n, title, sub, rows, extra = "") => `<h3 style="margin:16px 0 6px">${n}. ${title}</h3>${sub ? `<p class="small muted" style="margin:0 0 6px">${sub}</p>` : ""}<div class="tbl"><table><tbody>${rows}</tbody></table></div>${extra}`;
-  const P = M.perf, kp = (l, v) => `<td style="padding:4px 10px 4px 0"><div class="small muted">${l}</div><b>${v}</b></td>`;
-  const perf = `<h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><tbody><tr>${kp("Trips", P.n)}${kp("Days worked", P.days)}${kp("Distance", fmt(P.km) + " km")}${kp("Net per day", fmt(P.perDay) + ` <span class="small muted">(fleet ${fmt(P.fleetDay)})</span>`)}${kp("Net per trip", fmt(P.perTrip))}${kp("Cash trips share", P.cashPct + "%")}${P.completion != null ? kp("Completion", P.completion + "% · " + P.cancelled + " cancelled") : ""}${kp("Rank", P.rank ? P.rank + " of " + P.of : "—")}</tr></tbody></table></div>`;
-  const earn = sec(2, "Earnings", "Net of the platform fee and the VAT on it.",
-    M.platforms.map(p => ln(`${esc(p.name)} <span class="small muted">${p.n} trips · fares ${fmt(p.fares)} − fee & VAT ${fmt(p.fee)}</span>`, p.net)).join("")
-    + (num(x.other) ? ln("Other bookings (direct)", x.other) : "") + ln("<b>Total earnings</b>", M.earnings, "tot"));
-  const catRows = Object.entries(M.byCat).map(([c, v]) => ln(esc(EXP_CATS[c] || "Expense"), -v)).join("");
-  const exp = sec(3, "Direct expenditure", M.mode === "before" ? "Fare-related costs charged to the driver – deducted from the earnings before the commission, so the company carries its share." : "Fare-related costs charged to the driver – recovered in full after the salary (section 5).",
-    (catRows || `<tr><td class="muted">None this period.</td><td></td></tr>`) + ln("<b>Total direct expenditure</b>", -M.expenditure, "tot") + (M.mode === "before" ? ln("<b>Net earnings</b>", M.netEarn, "tot") : ""));
-  const penForm = print || locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penPct" placeholder="%" style="width:70px" aria-label="Deduction %"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct % of salary</button></div>`;
-  const sal = sec(4, "Salary calculation", esc(M.x.termsText || "No pay terms"),
-    (M.rentAmt ? ln(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -M.rentAmt) : "")
-    + (M.rta ? ln(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta) : "")
-    + (Math.abs(M.coShare) > 0.004 ? ln(tm.payModel === "salary" ? "Company share (driver on fixed salary)" : `Company share (${r2(100 - num(tm.commissionPct))}%)`, -M.coShare) : "")
-    + ln("<b>Salary + commission</b>", M.base, "tot") + (x.tipsDue ? ln("Tips from platforms", x.tipsDue) : "")
-    + M.pens.map(a => ln(`Violation deduction ${num(a.pct)}%${a.reason ? " – " + esc(a.reason) : ""}${print || locked ? "" : ` <button class="btn sm ghost" data-pendel="${esc(a.id)}" aria-label="Remove">✕</button>`}`, -num(a.amount))).join("")
-    + ln("<b>Salary for the period</b>", M.salary, "tot"), penForm);
-  const ent = sec(5, "Entitled to be paid this period", "Salary less loans, advances, visa and other recoveries, then the cash settlement.",
-    ln("Salary for the period", M.salary)
-    + M.items.map(o => ln(`${esc(ITEM_KINDS[o.it.kind] || "Recovery")}${o.it.desc ? " – " + esc(o.it.desc) : ""}`, -o.amt)).join("")
-    + (x.adv ? ln("Advances (deducted in full)", -x.adv) : "")
-    + (M.mode === "after" && M.expenditure ? ln("Direct expenditure (section 3)", -x.deduct) : "")
-    + (M.viaExp ? ln("Company costs paid from the driver's cash", M.viaExp) : "")
-    + ln("<b>Entitled to be paid</b>", M.entitled, "tot")
-    + ln("Less cash collected from riders", -x.cash) + (M.viaInc ? ln("Less cash from direct bookings", -M.viaInc) : "") + (x.card ? ln("Add card payments on the company machine", x.card) : "")
-    + (M.late.length ? ln(`Unsettled trips from earlier periods (${M.late.length})`, M.lateEff) : "")
-    + ln("<b>Net payable for the period</b>", M.due, "tot")
-    + (M.paidIn ? ln("Paid to / received from the driver in the period", M.paidIn) : "")
-    + (M.T ? ln("Balance brought forward", M.T.before) + ln(`<b>${M.payable >= 0 ? "Balance payable to the driver" : "Balance the driver owes"} at ${esc(dmyS(S.to))}</b>`, M.payable, "tot") : ""),
-    print ? "" : recovTbl(M.id, locked));
-  const cashForm = print || locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="cashDecl" placeholder="${r2(M.expected - M.handed)}" value="${M.inHand == null ? "" : M.inHand}" style="width:120px" aria-label="Cash in hand"><button class="btn sm" data-cashset="${esc(M.id)}">Save cash in hand (counted)</button></div>`;
-  const rec = sec(6, "Cash reconciliation", "Everything riders paid for this driver's trips, and where the money is.",
-    ln("<b>Total receivable</b> – fares, tips & tolls + other bookings", M.receivable, "tot") + ln("Less platform payments (paid in the app)", -M.app)
-    + (M.otherCo > 0.004 ? ln("Less other bookings received by the company", -M.otherCo) : "") + ln("Less machine payments (card)", -x.card)
-    + ln("<b>Cash that should be with the driver</b>", M.expected, "tot") + ln("Less handed over / spent for the company", -M.handed)
-    + ln(M.inHand == null ? "Less cash in hand with the driver (not counted yet)" : "Less cash in hand with the driver (counted)", M.inHand == null ? null : -M.inHand)
-    + ln(`<b>Difference</b> – ${M.inHand == null ? "cash still to be accounted for" : Math.abs(M.diff) < 0.005 ? "fully accounted for" : M.diff > 0 ? "shortage" : "excess"}`, M.diff, "tot"), cashForm);
-  return perf + earn + exp + sal + ent + rec;
+  const cells = perfCells(M.perf);
+  const perf = `<h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>`;
+  const forms = {
+    "4": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penPct" placeholder="%" style="width:70px" aria-label="Deduction %"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct % of salary</button></div>`,
+    "5": recovTbl(M.id, locked),
+    "6": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="cashDecl" placeholder="${r2(M.expected - M.handed)}" value="${M.inHand == null ? "" : M.inHand}" style="width:120px" aria-label="Cash in hand"><button class="btn sm" data-cashset="${esc(M.id)}">Save cash in hand (counted)</button></div>`};
+  return perf + salaryRows(M).map(([n, title, rows]) => `<h3 style="margin:16px 0 6px">${n}. ${title}</h3><div class="tbl"><table><tbody>
+    ${rows.map(r => `<tr${r.kind ? ' class="tot"' : ""}><td style="white-space:normal">${r.kind ? "<b>" + r.label + "</b>" : r.label}${r.pen && !locked ? ` <button class="btn sm ghost" data-pendel="${esc(r.pen)}" aria-label="Remove">✕</button>` : ""}</td><td class="num">${r.v == null ? "" : r.kind ? "<b>" + aed(r.v) + "</b>" : aed(r.v)}</td></tr>`).join("")}
+  </tbody></table></div>${forms[n] || ""}`).join("");
+}
+// the printed statement: its own clean layout (letterhead, details, bordered sections, signatures)
+const SAL_CSS = `.sp{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;padding:9mm 11mm 8mm;width:210mm;box-sizing:border-box;background:#fff}
+.sp .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:6px;margin-bottom:8px}
+.sp .co{font:700 15pt "Segoe UI",Arial,sans-serif;color:#16213a;line-height:1.1}.sp .co small{display:block;font:400 7.5pt "Segoe UI",Arial;color:#555;margin-top:3px}
+.sp .ttl{text-align:right;color:#16213a}.sp .ttl b{display:block;font-size:11.5pt;letter-spacing:.08em}.sp .ttl span{font-size:8.5pt;color:#444}
+.sp table{width:100%;border-collapse:collapse;margin:0 0 6px;page-break-inside:avoid}
+.sp th,.sp td{white-space:normal;text-transform:none;letter-spacing:0;position:static;font-family:inherit;font-size:inherit;color:inherit;background:none}
+.sp th,.sp td{border:1px solid #c5c9d2;padding:3px 7px;vertical-align:top}
+.sp .info td{padding:3px 7px;font-size:8.5pt}.sp .info td.l{background:#f3f4f7;color:#555;width:15%;font-size:8pt}
+.sp .perf th{background:#f3f4f7;color:#444;font-weight:600;font-size:7.5pt;text-align:center;padding:3px 2px}.sp .perf td{text-align:center;font-weight:700;padding:4px 2px}
+.sp tr.sec th{background:#16213a;color:#fff;text-align:left;font-size:8.5pt;font-weight:600;letter-spacing:.03em}
+.sp td.n{text-align:right;white-space:nowrap;width:26%;font-variant-numeric:tabular-nums}
+.sp tr.t td{font-weight:700;background:#f3f4f7}.sp tr.g td{font-weight:700;background:#e4e8f0;border-top:2px solid #16213a}
+.sp .sub{color:#666;font-size:7.5pt}.sp .neg{color:#111}
+.sp .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:20px;page-break-inside:avoid}
+.sp .sigs .who{font-weight:700;color:#16213a}.sp .sigs .line{border-bottom:1px solid #333;height:40px;margin:4px 0 4px}.sp .sigs .cap{font-size:8pt;color:#555}
+.sp .foot{margin-top:10px;font-size:7pt;color:#888;text-align:center}`;
+function salaryPrintHtml(M, d, fin){
+  const s = S.settings, co = s.company || "Royal Rides Limousine LLC", tm = M.tm, today = iso(new Date());
+  const addr = [s.address, s.licence ? "Trade licence " + s.licence : "", s.trn ? "TRN " + s.trn : "", s.phone, s.email].filter(Boolean).join(" · ");
+  const amt = v => v == null ? "" : (v < 0 ? "-" : "") + fmt(Math.abs(v));
+  const cells = perfCells(M.perf), car = vehAt(M.id, S.to);
+  return `<div class="sp">
+  <div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>DRIVER SALARY STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</span></div></div>
+  <table class="info"><tr><td class="l">Driver</td><td><b>${esc(d.name || "")}</b>${d.code ? " (" + esc(d.code) + ")" : ""}</td><td class="l">Period</td><td>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</td></tr>
+    <tr><td class="l">Pay terms</td><td>${esc(drvTermTextFull(tm))}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Draft – not finalised"}</td></tr>
+    <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
+  <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
+  ${salaryRows(M).map(([n, title, rows]) => `<table><tr class="sec"><th colspan="2">${n}. ${title}</th></tr>${rows.map(r => `<tr${r.kind ? ` class="${r.kind}"` : ""}><td>${r.label}</td><td class="n">${amt(r.v)}</td></tr>`).join("")}</table>`).join("")}
+  <div class="sigs"><div><div class="who">For Driver</div><div class="line"></div><div>${esc(d.name || "")}</div><div class="cap">Signature & date</div></div>
+    <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
+  <div class="foot">Amounts in AED</div></div>`;
 }
 async function printSalary(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
   const x = compute().D[id] || {}, late = lateTrips(id) || [], M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
-  const fin = Object.values(S.payroll).find(p => p.driverId === id && p.from === S.from && p.to === S.to), s = S.settings;
+  const fin = Object.values(S.payroll).find(p => p.driverId === id && p.from === S.from && p.to === S.to);
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
-  box.innerHTML = `<div class="paper salprint">${typeof letterhead === "function" ? letterhead() : ""}
-    <h3 style="text-align:center;margin:4px 0 2px">DRIVER SALARY STATEMENT</h3><p style="text-align:center;margin:0 0 10px">${esc(d.name || "")}${d.code ? " (" + esc(d.code) + ")" : ""} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}${fin ? " · finalised " + esc(new Date(fin.at).toLocaleDateString("en-GB")) : " · draft"}</p>
-    ${salaryHtml(M, true, true)}
-    <div class="sigs"><div><div class="sig-line"></div><b>Driver</b><br>${esc(d.name || "")}<br>Date: ______________</div><div><div class="sig-line"></div><b>For ${esc(s.company || "the company")}</b><br>${esc(s.signatory || "Authorised signatory / partner")}${s.signatoryTitle ? "<br>" + esc(s.signatoryTitle) : ""}<br>Date: ______________</div></div></div>`;
-  const st = document.createElement("style"); st.textContent = ".salprint{font-size:9.5pt}.salprint table{width:100%;border-collapse:collapse}.salprint td{padding:2px 4px;border-bottom:1px solid #eee}.salprint .tot td{font-weight:700;border-top:1px solid #999}.salprint .num{text-align:right}.salprint .tbl{margin-bottom:4px}.salprint h3{font-size:11pt}.salprint .small{font-size:8pt}.salprint .muted{color:#666}.salprint .neg{color:#111}";
-  box.prepend(st); document.body.appendChild(box);
+  box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, d, fin)}`; document.body.appendChild(box);
   const name = `Salary_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
-  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.96}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs", "h3"]}}).from(box.querySelector(".paper")).save(); toast("Downloaded " + name); }
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".sp")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
