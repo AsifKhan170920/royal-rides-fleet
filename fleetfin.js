@@ -227,7 +227,12 @@ function vehStmt(M){
 }
 // memo: the car and its finance at the period end (not part of the profit)
 function vehMemo(M){
-  const f = M.f, out = []; if(!f) return out;
+  const f = M.f, out = [];
+  // fines on the car in the period: those recovered from drivers are not in the P&L
+  const fs_ = Object.values(S.fines || {}).filter(x => x.vehicleId === M.id && x.date >= S.from && x.date <= S.to && x.status !== "cancelled"), rec = fs_.filter(x => x.recover);
+  if(fs_.length) out.push([`Fines on this car this period (${fs_.length})`, r2(sum(fs_, x => num(x.amount)))]);
+  if(rec.length) out.push([`– recovered from drivers (${rec.length}), not a car cost`, -r2(sum(rec, x => num(x.amount)))]);
+  if(!f) return out;
   out.push([`Purchase price${f.purchaseDate ? " – " + dmyS(f.purchaseDate) : ""}${dealerName(f) ? " – " + dealerName(f) : ""}`, num(f.price)]);
   if(inBooks(M.rec)){ const acc = accDepr(M.rec, S.to); out.push(["Accumulated depreciation", -acc], ["Book value", r2(num(f.price) - acc)]); }
   else out.push(["Owner", "Investor – not in the company's books"]);
@@ -242,14 +247,14 @@ const VPL_CSS = `.vst{width:100%;border-collapse:collapse}.vst td{padding:4px 8p
 .vst tr.s td{font-weight:700}.vst tr.s td.n{border-top:1px solid currentColor}.vst tr.g td{font-weight:700}.vst tr.g td.n{border-top:1px solid currentColor;border-bottom:3px double currentColor}
 .vst tr.memo td{font-size:.92em}`;
 const stmtTable = R => `<table class="vst"><tr><td></td><td class="n"><b>AED</b></td></tr>${R.map(r => `<tr class="${r.k}"><td>${esc(r.label)}</td><td class="n">${r.k === "h" ? "" : br(r.k === "i" ? r.a : r.b)}</td></tr>`).join("")}</table>`;
-const memoTable = rows => rows.length ? `<table class="vst"><tr class="h"><td>Vehicle & finance – ${esc(dmyS(S.to))}</td><td class="n"></td></tr>${rows.map(([l, x]) => `<tr class="memo"><td>${esc(l)}</td><td class="n">${br(x)}</td></tr>`).join("")}</table>` : "";
+const memoTable = rows => rows.length ? `<table class="vst"><tr class="h"><td>Vehicle, fines & finance – ${esc(dmyS(S.to))}</td><td class="n"></td></tr>${rows.map(([l, x]) => `<tr class="memo"><td>${esc(l)}</td><td class="n">${br(x)}</td></tr>`).join("")}</table>` : "";
 function vehPLTab(id){
   const M = vehPLModel(id), cells = vehPerf(M);
   return `<style>${VPL_CSS}</style><div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(M.owner === "investor" ? "Investor's car – " + iName(M.v.investorId || M.terms.investorId) : "Company-owned car")}</span>
     <div class="row">${dlBtn("vpl", id)}<button class="btn sm" data-vplprint="${esc(id)}">Print / PDF</button></div></div>
   <div class="tbl" style="margin-bottom:12px"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>
   <div class="tbl" style="max-width:760px;padding:6px 4px"><div style="text-align:center;margin:6px 0 2px"><b>${esc(vName(id))} – Profit & loss statement</b><div class="small muted">For the period ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</div></div>${stmtTable(vehStmt(M))}</div>
-  ${M.f ? `<div class="tbl" style="max-width:760px;padding:6px 4px;margin-top:12px">${memoTable(vehMemo(M))}</div>` : ""}`;
+  ${vehMemo(M).length ? `<div class="tbl" style="max-width:760px;padding:6px 4px;margin-top:12px">${memoTable(vehMemo(M))}</div>` : ""}`;
 }
 async function printVehPL(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
@@ -259,7 +264,7 @@ async function printVehPL(id){
     <table class="info"><tr><td class="l">Vehicle</td><td><b>${esc(vName(id))}</b>${M.rec.model ? " · " + esc(M.rec.model) : ""}</td><td class="l">Owner</td><td>${esc(inv || "Company")}</td></tr>
     <tr><td class="l">Terms</td><td>${esc(vehTermText(M.terms))}</td><td class="l">Bought with</td><td>${esc(M.f ? finText(M.rec) : "—")}</td></tr></table>
     <table class="perf"><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
-    <div class="vbox">${stmtTable(vehStmt(M))}</div>${M.f ? `<div class="vbox">${memoTable(vehMemo(M))}</div>` : ""}
+    <div class="vbox">${stmtTable(vehStmt(M))}</div>${vehMemo(M).length ? `<div class="vbox">${memoTable(vehMemo(M))}</div>` : ""}
     <div class="sigs"><div><div class="who">${inv ? "For Investor" : "Prepared by"}</div><div class="line"></div><div>${esc(inv)}</div><div class="cap">Signature & date</div></div><div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div></div>`;
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
   box.innerHTML = `<style>${SAL_CSS}${VPL_CSS}.sp .vbox{border:1px solid #c5c9d2;padding:4px 6px 8px;margin-top:10px}.sp .vst{font-size:10pt}.sp .vst td{border:0}</style>${html}`; document.body.appendChild(box);

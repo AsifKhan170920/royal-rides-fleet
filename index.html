@@ -560,8 +560,12 @@ function compute(){
   }
   // car expenses, by date
   // the company's part of a car expense (all of it, or what is left after the driver's share)
-  for(const e of S.entries){ if(e.type !== "expense" || !e.vehicleId) continue; const part = 1 - recoverShare(e); if(part <= 0) continue; const cost = (num(e.amount) + (inVatRec ? 0 : num(e.vat))) * part; vday(e.vehicleId, e.date).exp += cost; if(e.category === "5230") vday(e.vehicleId, e.date).rm += cost;   // repairs & maintenance tracked apart for the investor terms
+  for(const e of S.entries){ if(e.type !== "expense" || !e.vehicleId || e.fineId) continue; const part = 1 - recoverShare(e); if(part <= 0) continue; const cost = (num(e.amount) + (inVatRec ? 0 : num(e.vat))) * part; vday(e.vehicleId, e.date).exp += cost; if(e.category === "5230") vday(e.vehicleId, e.date).rm += cost;   // repairs & maintenance tracked apart for the investor terms
     vget(e.vehicleId).expList.push({...e, amount: num(e.amount) * part, vat: num(e.vat) * part}); }
+  // fines on a car count as its cost from the fine date (paid or not; the payment entry is not counted again);
+  // fines recovered from the driver are his cost, not the car's
+  for(const f of Object.values(S.fines || {})){ if(!f.vehicleId || !f.date || f.date < from || f.date > to || f.status === "cancelled" || f.recover || !S.vehicles[f.vehicleId]) continue;
+    const cat = f.kind === "rta" ? "5225" : "5220", a = num(f.amount); vday(f.vehicleId, f.date).exp += a; vget(f.vehicleId).expList.push({type: "expense", category: cat, amount: a, vat: 0, date: f.date, vehicleId: f.vehicleId, note: `Fine ${f.fineNo || ""} – ${f.desc || ""}`, fineId: f.id}); }
   Object.keys(S.vehicles).forEach(id => vget(id));
   // each car: split the period where its terms (investor, shares, fees) change
   for(const v of Object.values(V)){
@@ -2086,7 +2090,7 @@ boot();
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=13"></script>
 <script src="investors.js?v=4"></script>
-<script src="fleetfin.js?v=10"></script>
+<script src="fleetfin.js?v=11"></script>
 <script src="loans.js?v=4"></script>
 <script src="rta.js?v=7"></script>
 <script src="rta-import.js?v=2"></script>
