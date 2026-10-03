@@ -29,8 +29,8 @@ function dTrips(id){
   const multi = new Set(rows.map(plOf)).size > 1, shown = rows.slice(0, 500), net = t => (t.f||0) - (t.sf||0) - (t.tx||0);
   const sm = settledMap(id), runs = Object.values(S.payroll).filter(p => p.driverId === id);
   return `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi ? "<th>Platform</th>" : ""}<th>Car</th><th class="num">Fare</th><th class="num">Fee + VAT</th><th class="num">Tips</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Payment</th><th>Settlement</th></tr></thead><tbody>
-  ${shown.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td>${multi ? `<td>${esc(pName(plOf(t)))}</td>` : ""}<td>${esc(vName(vehicleForTrip(t) || "unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.sf||0) + (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt(net(t))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc((t.st || "").replace(/_/g, " "))}</td><td class="small">${esc(t.pay || (t.c ? "cash" : ""))}</td><td>${moneyRow(t) ? tripSettlement(t, sm, runs) : ""}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.rf))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="2"></td><td class="small">${rows.filter(t => sm[t.id]).length} settled</td></tr></tfoot></table></div>`;
+  ${shown.map(t => `<tr><td>${esc(dmyS(t.d))}</td><td>${esc(t.t || "")}</td>${multi ? `<td>${esc(pName(plOf(t)))}</td>` : ""}<td>${esc(vName(vehicleForTrip(t) || "unassigned"))}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt((t.sf||0) + (t.tx||0))}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt(net(t))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc((t.st || "").replace(/_/g, " "))}</td><td class="small">${esc(t.pay || (t.c ? "cash" : ""))}</td><td>${settleBadge(t)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="${multi ? 4 : 3}">${new Set(rows.map(t => t.tr || t.id)).size} trips${rows.length > 500 ? " – first 500 rows shown" : ""}</td><td class="num">${fmt(sum(rows, t => t.f))}</td><td class="num">${fmt(sum(rows, t => (t.sf||0) + (t.tx||0)))}</td><td class="num">${fmt(sum(rows, t => t.tp))}</td><td class="num">${fmt(sum(rows, t => t.rf))}</td><td class="num">${fmt(sum(rows, t => t.c))}</td><td class="num">${fmt(sum(rows, net))}</td><td class="num">${fmt(sum(rows, t => t.km))}</td><td colspan="2"></td><td class="small">${rows.filter(t => moneyRow(t) && settleStatus(t).ok).length} settled · ${rows.filter(t => moneyRow(t) && !settleStatus(t).ok).length} unsettled</td></tr></tfoot></table></div>`;
 }
 
 /* ---------- transactions (running account) ---------- */
@@ -66,11 +66,25 @@ function lateTrips(id){
   const runs = Object.values(S.payroll).filter(p => p.driverId === id && Array.isArray(p.rows)), sm = settledMap(id);
   return S.ledger.trips.filter(t => t.dr === id && moneyRow(t) && t.d < S.from && !sm[t.id] && runs.some(p => t.d >= p.from && t.d <= p.to)).sort((a,b) => (a.d + a.t).localeCompare(b.d + b.t));
 }
-function tripSettlement(t, sm, runs){
-  const p = sm[t.id]; if(p) return `<span class="pill good">Settled ${esc(dmyS(p.from))}–${esc(dmyS(p.to))}</span>`;
-  const r = runs.find(p => t.d >= p.from && t.d <= p.to && Array.isArray(p.rows));
-  return r ? '<span class="pill warn">Missed – goes to the next salary</span>' : '<span class="pill">Not settled yet</span>';
+// settlement status of a trip row: green when a finalised salary paid it, red when not (yet)
+let _sc = null;
+function settleIndex(){
+  if(_sc && _sc.p === S.payroll) return _sc;
+  const rows = {}, runs = {}; Object.values(S.payroll).forEach(p => { (p.rows || []).forEach(r => rows[r] = p); (runs[p.driverId] ||= []).push(p); });
+  return _sc = {p: S.payroll, rows, runs};
 }
+function settleStatus(t){
+  const I = settleIndex(), p = I.rows[t.id]; if(p) return {ok: true, p};
+  const mine = I.runs[t.dr] || [], old = mine.find(r => !Array.isArray(r.rows) && t.d >= r.from && t.d <= r.to);   // finalised before trips were recorded
+  if(old) return {ok: true, p: old};
+  return {ok: false, missed: mine.some(r => Array.isArray(r.rows) && t.d >= r.from && t.d <= r.to)};
+}
+function settleBadge(t){
+  if(!moneyRow(t)) return ""; const s = settleStatus(t);
+  return s.ok ? `<span class="pill good" title="Paid in the salary for ${dmyS(s.p.from)} – ${dmyS(s.p.to)}">Settled ${esc(dmyS(s.p.from))}–${esc(dmyS(s.p.to))}</span>`
+    : `<span class="pill bad" title="${s.missed ? "Arrived after its period was finalised – goes to the next salary" : "Not in a finalised salary yet"}">Unsettled${s.missed ? " – missed, next salary" : ""}</span>`;
+}
+window.settleBadge = settleBadge; window.settleStatus = settleStatus;
 function dSalary(id){
   const C = compute(), x = C.D[id] || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
   const runs = Object.values(S.payroll).filter(p => p.driverId === id).sort((a,b) => b.from.localeCompare(a.from));
