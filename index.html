@@ -798,6 +798,16 @@ document.addEventListener("click", ev => {
 const NAV_KEYS = ["view","pltView","pltTab","slipShow","slipEdit","empView","empTab","rtaTab","loanView","loanEdit","drvView","drvTab","invView","invTab","vehView","vehTab","trmView","trmTab","acctView","coaView","pv"];
 const NAV_ATTRS = ["nav","pltview","plttab","slipshow","slipedit","rtatab","loanview","loanedit","drvview","drvtab","invview","invtab","invfinview","payinv","recvinv","vehview","vehtab","trmview","trmtab","empview","emptab","acctview","coaview","pview","txview","itemedit","docopen","goto","paysalary","pdcrec","emppay","empadv","empofferfor","offerfor","agreefor"];
 S.navStack = [];
+/* Vouchers opened from another page (Pay salary, Pay investor, Top up, Record PDC, Pay fee, View / Edit from a ledger…)
+   return to that page – the same tab – when they are saved, cancelled or deleted. */
+const VOUCHER_ATTRS = ["paysalary","emppay","empadv","payinv","recvinv","suptop","licpay","rtafee","pdcrec","txview","txedit","puredit","editentry"];
+document.addEventListener("click", ev => {
+  const t = ev.target.closest("button"); if(!t) return;
+  if(t.dataset.nav){ S.voucherReturn = null; return; }
+  // editing an entry from its own list stays on that page; every other voucher remembers where it came from
+  if(VOUCHER_ATTRS.some(a => t.dataset[a] != null) && !t.dataset.puredit && !t.dataset.editentry) S.voucherReturn = navSnap();
+}, true);
+window.voucherDone = () => { const r = S.voucherReturn; if(!r) return false; S.voucherReturn = null; Object.assign(S, JSON.parse(r)); S.bk = null; S.edit = null; return true; };
 const navSnap = () => JSON.stringify(Object.fromEntries(NAV_KEYS.map(k => [k, S[k] ?? null])));
 document.addEventListener("click", ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t || t.dataset.back) return;
@@ -1765,7 +1775,7 @@ document.addEventListener("click", async ev => {
   const t = ev.target.closest("button,[data-nav]"); if(!t) return;
   if(t.dataset.nav){ S.view = t.dataset.nav; S.edit = null; S.pg = {}; S.vehView = ""; S.trmView = ""; S.drvView = ""; S.invView = ""; S.pltView = ""; S.loanView = ""; S.loanEdit = null; S.rtaEdit = null; S.finePay = null; S.coaView = ""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.edit){ S.edit = {kind:t.dataset.edit, id:t.dataset.id}; render(); window.scrollTo(0,0); return; }
-  if(t.hasAttribute("data-cancel")){ S.edit = null; render(); return; }
+  if(t.hasAttribute("data-cancel")){ S.edit = null; voucherDone(); render(); return; }
   if(t.dataset.del){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
     if(await writeOk(S.db.doc(t.dataset.del + "/" + t.dataset.id).delete())){ S.edit = null; toast("Deleted."); render(); } return;
@@ -1793,7 +1803,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.delentry){
     if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; }
     const m = t.dataset.month; const rows = (S.entryDocs[m]||[]).filter(r => r.id !== t.dataset.delentry);
-    if(await writeOk(S.db.doc("entries/"+m).set({month:m, rows}))){ S.edit = null; await loadPeriod(); render(); toast("Entry deleted."); } return;
+    if(await writeOk(S.db.doc("entries/"+m).set({month:m, rows}))){ S.edit = null; await loadPeriod(); voucherDone(); render(); toast("Entry deleted."); } return;
   }
   if(t.id === "impCancel"){ S.importState = (S.importQueue||[]).shift() || null; render(); return; }
   if(t.id === "impGo"){ runImport(); return; }
@@ -1992,7 +2002,7 @@ document.addEventListener("submit", async ev => {
     // keep what the form does not show (imported quantity, statement reference, fine link…)
     const prev = oldId ? (S.entries.find(x => x.id === oldId) || {}) : {};
     const row = {...prev, id: oldId || uid(), ...fd}; rows = rows.filter(r => r.id !== row.id); rows.push(row);
-    if(await writeOk(ref.set({month:m, rows}))){ S.edit = null; await loadPeriod(); render(); toast(oldId ? "Entry updated." : "Entry added."); }
+    if(await writeOk(ref.set({month:m, rows}))){ S.edit = null; await loadPeriod(); voucherDone(); render(); toast(oldId ? "Entry updated." : "Entry added."); }
   }
   if(f.id === "fSettings"){ if(await writeOk(S.db.doc("settings/main").set({...S.settings, ...fd}))) toast("Settings saved."); }
 });
@@ -2046,16 +2056,16 @@ document.addEventListener("click", async ev => {
 boot();
 </script>
 <script src="docs.js?v=6"></script>
-<script src="books.js?v=21"></script>
+<script src="books.js?v=22"></script>
 <script src="drivers.js?v=24"></script>
 <script src="pdc.js?v=2"></script>
-<script src="employees.js?v=11"></script>
+<script src="employees.js?v=12"></script>
 <script src="investors.js?v=4"></script>
 <script src="fleetfin.js?v=9"></script>
 <script src="loans.js?v=3"></script>
 <script src="rta.js?v=2"></script>
 <script src="reminders.js?v=3"></script>
-<script src="purchases.js?v=3"></script>
+<script src="purchases.js?v=4"></script>
 <script src="platforms.js?v=2"></script>
 <script src="settings.js?v=1"></script>
 

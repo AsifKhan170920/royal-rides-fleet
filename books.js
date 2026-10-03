@@ -25,7 +25,7 @@ const CONTROL = {"1200":"c", "2000":"s", "2100":"d", "2110":"e", "1180":"e", "22
    finance costs, investors' share). Every account has a group – by its code unless one is chosen on the account;
    your own groups (Settings → coaGroups) sit under one of these and show as their own heading. */
 // balance sheet: these are non-current; every other asset and liability is current (unless a group is chosen)
-const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210"]);
+const NON_CURRENT = new Set(["1500", "1510", "2400", "2420", "2210", "2120"]);
 const COA_GROUPS = {ca: ["Asset", "Current assets"], nca: ["Asset", "Non-current assets"], cl: ["Liability", "Current liabilities"], ncl: ["Liability", "Non-current liabilities"], eq: ["Equity", "Equity"],
   income: ["Income", "Income"], cos: ["Expense", "Cost of sales"], vrc: ["Expense", "Vehicle running costs"], admin: ["Expense", "Administrative & general expenses"], finance: ["Expense", "Finance costs"], investor: ["Expense", "Investors' profit share"]};
 const customGroups = () => (S.settings && S.settings.coaGroups) || [];
@@ -246,13 +246,13 @@ async function saveBk(){
       if(b.id && S.entries.some(x => x.id === b.id)){ const e = S.entries.find(x => x.id === b.id), m0 = e.date.slice(0,7), s0 = await S.db.doc("entries/" + m0).get(); if(!await writeOk(S.db.doc("entries/" + m0).set({month: m0, rows: (s0.exists ? s0.data().rows || [] : []).filter(r => r.id !== b.id)}))) return; }
       if(!await writeOk(S.db.doc("driverItems/i-" + uid()).set(rec))) return;
       if(d.pdcId && window.PDC) await PDC.cleared(d.pdcId, "", d.date);
-      S.bk = null; await loadPeriod(); render(); toast(`${ITEM_KINDS[p]} recorded for ${dName(drId)}. It is on his Accounts tab.`); return;
+      S.bk = null; await loadPeriod(); if(window.voucherDone) voucherDone(); render(); toast(`${ITEM_KINDS[p]} recorded for ${dName(drId)}. It is on his Accounts tab.`); return;
     }
     if(p === "repay"){
       const it = S.ditems[d.itemId]; if(!it){ toast("Choose the loan or advance."); return; } const {id:_, ...ib} = it;
       if(!await writeOk(S.db.doc("driverItems/" + it.id).set({...ib, repayments: [...(ib.repayments || []), {date: d.date, amount: amt, paidTo: d.paidFrom || "1100", note: d.ref || d.desc || ""}]}))) return;
       if(d.pdcId && window.PDC) await PDC.cleared(d.pdcId, "", d.date);
-      S.bk = null; render(); toast("Repayment recorded."); return;
+      S.bk = null; if(window.voucherDone) voucherDone(); render(); toast("Repayment recorded."); return;
     }
     b.lines = [{account: "2100", desc: d.desc || (k === "payment" ? "Salary / balance payment" : "Cash received from the driver"), amount: String(amt), vat: ""}];
   }
@@ -277,12 +277,12 @@ async function saveBk(){
   if(!await writeOk(S.db.doc("entries/" + m).set({month: m, rows}))) return;
   if(settings) await writeOk(S.db.doc("settings/main").set(settings));
   if(d.pdcId && window.PDC) await PDC.cleared(d.pdcId, rec.id, d.date);
-  S.bk = null; await loadPeriod(); render(); toast(`${BK[k].title}${rec.number ? " " + rec.number : ""} saved.`);
+  S.bk = null; await loadPeriod(); if(window.voucherDone) voucherDone(); render(); toast(`${BK[k].title}${rec.number ? " " + rec.number : ""} saved.`);
 }
 async function deleteBk(){
   const b = S.bk, e = S.entries.find(x => x.id === b.id); if(!e) return;
   const m = e.date.slice(0,7), snap = await S.db.doc("entries/" + m).get(), rows = (snap.exists ? snap.data().rows || [] : []).filter(r => r.id !== b.id);
-  if(await writeOk(S.db.doc("entries/" + m).set({month: m, rows}))){ S.bk = null; await loadPeriod(); render(); toast("Deleted."); }
+  if(await writeOk(S.db.doc("entries/" + m).set({month: m, rows}))){ S.bk = null; await loadPeriod(); if(window.voucherDone) voucherDone(); render(); toast("Deleted."); }
 }
 
 /* ---------- lists ---------- */
@@ -534,7 +534,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.coaview != null){ if(t.dataset.tocoa) S.view = "coa"; S.coaView = t.dataset.coaview; S.ce = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.bknew){ newDoc(t.dataset.bknew); render(); window.scrollTo(0,0); return; }
   if(t.dataset.bkedit){ openDocRow(t.dataset.bkedit); render(); window.scrollTo(0,0); return; }
-  if(t.dataset.bkcancel){ S.bk = null; render(); return; }
+  if(t.dataset.bkcancel){ S.bk = null; if(window.voucherDone) voucherDone(); render(); return; }
   if(t.dataset.bkadd && S.bk){ S.bk.lines.push(blankLine(S.bk.kind)); render(); return; }
   if(t.dataset.bkdel != null && S.bk){ S.bk.lines.splice(+t.dataset.bkdel, 1); if(!S.bk.lines.length) S.bk.lines.push(blankLine(S.bk.kind)); render(); return; }
   if(t.dataset.bkdelete){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again to delete"; return; } deleteBk(); return; }

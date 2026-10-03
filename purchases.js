@@ -149,6 +149,7 @@ function prepaidBox(src){
     <div class="kpi"><div class="l">Account</div><div class="v" style="font-size:14px"><button class="btn sm primary" data-suptop="${esc(id)}" data-src="${src}">Top up</button> <button class="btn sm" data-supstmt="${esc(id)}">Statement</button> <button class="btn sm ghost" data-supchange="${src}">Change supplier</button></div></div></div>`;
 }
 function purView(){
+  if(S.edit && S.edit.kind === "entry") S.purTab = "all";   // an entry opened from anywhere shows in the entry form
   const tab = PUR_TABS[S.purTab] ? S.purTab : "all", head = `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>Purchases & expenses</h2><p class="sub">Every purchase, expense and payment. Fuel, Salik and EV charging are imported from the statements downloaded from their portals; attach the receipt to any expense.</p></div></div>${tabBtns("data-purtab", tab, PUR_TABS)}</div>`;
   if(tab === "all"){ PUR.busy = true; try{ return head + vEntries(); } finally { PUR.busy = false; } }
   if(tab === "invoices") return head + (PUR.invView ? PUR.invView() : "");   // supplier bills (Purchase invoices) live here

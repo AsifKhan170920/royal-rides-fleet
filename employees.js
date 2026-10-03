@@ -10,7 +10,7 @@
    Paying salaries or advances uses Payments with the employee (account 2110 or 1180).
    Visa, Emirates ID, passport, labour card and licence expiry of drivers and employees are tracked
    here, with a banner on every page and an optional browser notification. */
-const EMP_ACCTS = {"1180":"Staff advances & loans", "2110":"Staff salaries payable",
+const EMP_ACCTS = {"1180":"Staff advances & loans", "2110":"Staff salaries payable", "2120":"Provision for end-of-service gratuity",
   "6000":"Staff salaries and wages – administration", "6001":"Staff salaries and wages – operations", "6002":"Staff salaries and wages – workshop",
   "6010":"Visa, medical and immigration cost", "6020":"End-of-service gratuity", "6030":"Leave salary & air tickets"};
 Object.assign(ACCT, EMP_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, EMP_ACCTS);
@@ -107,7 +107,7 @@ function empDetail(id){
         <tr><td></td><td><b>Opening balance</b></td><td></td><td></td><td class="num"><b>${aed(num(e.opening))}</b></td><td></td></tr>
         ${st.lines.map(l => `<tr><td>${esc(dmyS(l.date))}</td><td style="white-space:normal">${esc(l.desc)}</td><td class="num">${l.dr ? fmt(l.dr) : ""}</td><td class="num">${l.cr ? fmt(l.cr) : ""}</td><td class="num">${aed(l.bal)}</td><td style="white-space:nowrap">${l.slip ? `<div class="row" style="flex-wrap:nowrap;gap:4px"><button class="btn sm" data-slipshow="${esc(l.slip.month)}" data-lid="${esc(l.slip.lid)}">Payslip</button><button class="btn sm" data-slipedit="${esc(l.slip.month)}" data-lid="${esc(l.slip.lid)}">Edit</button><button class="btn sm danger" data-slipdel="${esc(l.slip.month)}" data-lid="${esc(l.slip.lid)}">Delete</button></div>` : l.ref && window.txActions ? txActions(l.ref) : ""}</td></tr>`).join("")}
       </tbody><tfoot><tr><td colspan="4">Salary payable (all posted payroll; payments to ${esc(dmyS(S.to))})</td><td class="num"><b>${aed(st.bal)}</b></td><td></td></tr></tfoot></table></div>
-      <div class="row" style="margin-top:10px;gap:18px"><span>Advances & loans outstanding <b class="mono">${fmt(st.adv)}</b></span>${st.bal > 0.005 ? `<button class="btn" data-emppay="${esc(id)}" data-amt="${r2(st.bal)}">Pay AED ${fmt(st.bal)}</button>` : ""}<button class="btn" data-empadv="${esc(id)}">Give an advance / loan</button></div>`;
+      <div class="row" style="margin-top:10px;gap:18px"><span>Advances & loans outstanding <b class="mono">${fmt(st.adv)}</b></span><span>Gratuity accrued <b class="mono">${fmt(gratuityAcc(id, "9999-12-31"))}</b></span>${st.bal > 0.005 ? `<button class="btn" data-emppay="${esc(id)}" data-amt="${r2(st.bal)}">Pay AED ${fmt(st.bal)}</button>` : ""}<button class="btn" data-empadv="${esc(id)}">Give an advance / loan</button></div>`;
     }
   } else {
     const docs = Object.values(S.docs || {}).filter(d => d.kind === "empoffer" && d.refId === id);
@@ -264,11 +264,20 @@ async function printSlips(month, lid){
 }
 async function saveRun(month, run){ const {id: _, ...b} = run; return writeOk(S.db.doc("emppay/" + month).set(b)); }
 // journal: runs whose month ends inside the period
+/* end-of-service gratuity (UAE Labour Law, IAS 19): accrued with each posted month – 21 days' basic salary a year for
+   the first five years of service, 30 days a year after that (daily rate = basic ÷ 30). Dr 6020 / Cr 2120. */
+function gratuityFor(l, r){
+  const e = S.employees[l.empId] || {}; if(!e.joinDate || e.noGratuity) return 0;
+  const years = (parseD(r.date) - parseD(e.joinDate)) / 86400000 / 365.25; if(years < 0) return 0;
+  return r2(num(l.basic) / 30 * (years < 5 ? 21 : 30) / 12 * Math.max(0, 1 - num(l.unpaidDays) / 30));
+}
+const gratuityAcc = (id, day) => r2(sum(Object.values(S.emppay).filter(r => r.posted && r.date <= day), r => sum((r.lines || []).filter(l => l.empId === id), l => gratuityFor(l, r))));
 function postPayroll(add){
   Object.values(S.emppay).forEach(r => {
     if(!r.posted || r.date < S.from || r.date > S.to) return;
     (r.lines || []).forEach(l => {
-      const m = `Salary ${r.month} – ${l.name}`;
+      const m = `Salary ${r.month} – ${l.name}`, g = gratuityFor(l, r);
+      if(g){ add("6020", g, 0, "Gratuity accrued – " + m, r.date); add("2120", 0, g, "Gratuity accrued – " + m, r.date); }
       add(DEPT_ACCT[l.dept] || "6000", l.earned, 0, m, r.date); add("2110", 0, l.earned, m, r.date);
       if(num(l.recover)){ add("2110", l.recover, 0, "Advance recovered – " + m, r.date); add("1180", 0, l.recover, "Advance recovered – " + m, r.date); }
     });
