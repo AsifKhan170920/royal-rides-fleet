@@ -1737,21 +1737,10 @@ function vLedger(){
   </tbody></table></div></div>`;
 }
 function vSettings(){
+  if(window.SET && !SET.busy) return SET.view();   // tabs: Business information · VAT · General
   const s = S.settings;
-  return `<div class="section"><h2>Company & tax settings</h2><p class="sub">These rules drive every calculation. Confirm the VAT position for limousine fares with the firm's tax adviser before filing.</p>
+  return `<div class="section"><h2>General</h2><p class="sub">Books start, driver targets, reminders and tips. Business information and VAT have their own tabs.</p>
   <form class="form" id="fSettings">
-    <div class="f"><label for="sc">Company name</label><input id="sc" name="company" value="${esc(s.company || "Royal Rides Limousine LLC")}"></div>
-    <div class="f"><label for="sfv">Uber fares VAT treatment</label><select id="sfv" name="fareVat">${opts({exempt:"Exempt (local passenger transport)", standard:"Standard 5% (VAT inside fare)"}, s.fareVat || "exempt")}</select></div>
-    <div class="f"><label for="sfr">VAT on Uber service fee</label><select id="sfr" name="feeVatRecoverable">${opts({false:"Not recoverable (cost)", true:"Recoverable input VAT"}, String(!!s.feeVatRecoverable))}</select></div>
-    <div class="f"><label for="sir">VAT on expenses</label><select id="sir" name="inputVatRecoverable">${opts({false:"Not recoverable (cost)", true:"Recoverable input VAT"}, String(!!s.inputVatRecoverable))}</select></div>
-    <div class="f wide" style="margin-top:6px"><b>Letterhead (offer letters and agreements)</b></div>
-    <div class="f"><label for="sad">Address</label><input id="sad" name="address" value="${esc(s.address)}"></div>
-    <div class="f"><label for="sli">Trade licence no.</label><input id="sli" name="licence" value="${esc(s.licence)}"></div>
-    <div class="f"><label for="str">TRN</label><input id="str" name="trn" value="${esc(s.trn)}"></div>
-    <div class="f"><label for="sph">Phone</label><input id="sph" name="phone" value="${esc(s.phone)}"></div>
-    <div class="f"><label for="sem">Email</label><input id="sem" name="email" value="${esc(s.email)}"></div>
-    <div class="f"><label for="ssn">Signatory name</label><input id="ssn" name="signatory" value="${esc(s.signatory)}"></div>
-    <div class="f"><label for="sst">Signatory title</label><input id="sst" name="signatoryTitle" value="${esc(s.signatoryTitle)}" placeholder="e.g. Managing Director"></div>
     <div class="f"><label for="sls">Books start on (driver ledgers, bank & cash opening balances)</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
     <div class="f wide" style="margin-top:6px"><b>Driver performance targets (per month, all drivers)</b> <span class="small muted">– a driver with his own targets uses those instead.</span></div>
     <div class="f"><label for="stt">Trips</label><input id="stt" name="tgTrips" type="number" step="1" value="${esc(s.tgTrips ?? 300)}"></div>
@@ -2056,17 +2045,18 @@ document.addEventListener("click", async ev => {
 
 boot();
 </script>
-<script src="docs.js?v=5"></script>
+<script src="docs.js?v=6"></script>
 <script src="books.js?v=21"></script>
-<script src="drivers.js?v=23"></script>
+<script src="drivers.js?v=24"></script>
 <script src="pdc.js?v=2"></script>
-<script src="employees.js?v=10"></script>
-<script src="investors.js?v=3"></script>
-<script src="fleetfin.js?v=8"></script>
+<script src="employees.js?v=11"></script>
+<script src="investors.js?v=4"></script>
+<script src="fleetfin.js?v=9"></script>
 <script src="loans.js?v=3"></script>
 <script src="rta.js?v=2"></script>
-<script src="reminders.js?v=2"></script>
+<script src="reminders.js?v=3"></script>
 <script src="purchases.js?v=3"></script>
 <script src="platforms.js?v=2"></script>
+<script src="settings.js?v=1"></script>
 
 </body></html>

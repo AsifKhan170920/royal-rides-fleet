@@ -12,7 +12,7 @@
    anything – with how many days before to remind, and repeat monthly / quarterly / yearly ("Done" moves it on).
    Each kind has its own reminder window (days before): set in Settings → remind days (documents), here for the rest. */
 S.reminders = S.reminders || {}; S.remFilter = S.remFilter || {win: "due", cat: ""}; S.remEdit = S.remEdit || null;
-const REM_CATS = {staff: "Visa & staff documents", car: "Cars (Mulkiya, insurance)", rta: "RTA", contract: "Platform contracts", pdc: "PDC cheques", loan: "Bank finance instalments", invoice: "Invoices", payroll: "Payroll", custom: "My reminders"};
+const REM_CATS = {staff: "Visa & staff documents", car: "Cars (Mulkiya, insurance)", rta: "RTA", contract: "Platform contracts", pdc: "PDC cheques", loan: "Bank finance instalments", invoice: "Invoices", payroll: "Payroll", company: "Company licence & VAT", custom: "My reminders"};
 const REM_REPEAT = {"": "Does not repeat", "1": "Monthly", "3": "Quarterly", "6": "Half-yearly", "12": "Yearly"};
 const remLeft = d => Math.round((parseD(d) - parseD(iso(new Date()))) / 86400000);
 const remDays = () => num(setting("remindDays", 30)) || 30;
@@ -45,6 +45,9 @@ function allReminders(){
   if(window.BOOKS && BOOKS.invStatus){ const ents = BOOKS.histEntries();
     ents.filter(e => (e.type === "sale_invoice" || e.type === "purchase_invoice") && e.dueDate).forEach(e => { const st = BOOKS.invStatus(e, ents); if(st.due <= 0.005) return;
       add("invoice", e.dueDate, `${e.type === "sale_invoice" ? "Collect" : "Pay"} invoice ${e.number || ""} – AED ${fmt(st.due)}`, BOOKS.partyName(e.party), "", 7, {view: e.type === "sale_invoice" ? "salesinv" : "purchinv", set: {}}); }); }
+  // company: trade licence expiry, VAT return due dates
+  if(S.settings.licenceExpiry) add("company", S.settings.licenceExpiry, "Trade licence renewal", S.settings.legalName || S.settings.company || "Company", S.settings.licence, 30, {view: "settings", set: {setTab: "biz"}});
+  if(window.SET) SET.vatPeriods().filter(p => !(S.settings.vatFiled || {})[p.to] && (p.to < today || p.due >= today)).forEach(p => { if(p.due >= addDays(today, -60)) add("company", p.due, `VAT return ${dmyS(p.from)} – ${dmyS(p.to)}`, "FTA", S.settings.trn, 14, {view: "settings", set: {setTab: "vat"}}); });
   // employee payroll: last month and this month until posted
   if(Object.values(S.employees || {}).some(e => e.active !== false)){ const cur = today.slice(0,7), prev = addMonths(cur + "-01", -1).slice(0,7);
     [prev, cur].forEach(m => { const run = (S.emppay || {})[m]; if(!(run && run.posted) && m >= setting("ledgerStart", "2026-09-01").slice(0,7)) add("payroll", monthEnd(m), "Post employee payroll " + m, "All employees", "", 5, {view: "emppayroll", set: {payMonth: m, payDraft: null}}); }); }

@@ -372,7 +372,7 @@ function salaryPrintHtml(M, d, fin){
   const amt = v => v == null ? "" : (v < 0 ? "-" : "") + fmt(Math.abs(v));
   const cells = perfCells(M.perf), car = vehAt(M.id, S.to);
   return `<div class="sp">
-  <div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>DRIVER SALARY STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
+  <div class="hd"><div class="co">${typeof coLogo === "function" ? coLogo() : ""}${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>DRIVER SALARY STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
   <table class="info"><tr><td class="l">Driver</td><td><b>${esc(d.name || "")}</b>${d.code ? " (" + esc(d.code) + ")" : ""}</td><td class="l">Period</td><td>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</td></tr>
     <tr><td class="l">Pay terms</td><td>${esc(drvTermTextFull(tm))}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Draft – not finalised"}</td></tr>
     <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>

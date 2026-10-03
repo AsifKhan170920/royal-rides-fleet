@@ -255,7 +255,7 @@ async function printVehPL(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   const M = vehPLModel(id), s = S.settings, co = s.company || "Royal Rides Limousine LLC", cells = vehPerf(M), inv = M.owner === "investor" ? iName(M.v.investorId || M.terms.investorId) : "";
   const addr = [s.address, s.trn ? "TRN " + s.trn : ""].filter(Boolean).join(" · ");
-  const html = `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>PROFIT & LOSS STATEMENT</b><span>${esc(vName(id))} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</span></div></div>
+  const html = `<div class="sp"><div class="hd"><div class="co">${typeof coLogo === "function" ? coLogo() : ""}${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>PROFIT & LOSS STATEMENT</b><span>${esc(vName(id))} · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}</span></div></div>
     <table class="info"><tr><td class="l">Vehicle</td><td><b>${esc(vName(id))}</b>${M.rec.model ? " · " + esc(M.rec.model) : ""}</td><td class="l">Owner</td><td>${esc(inv || "Company")}</td></tr>
     <tr><td class="l">Terms</td><td>${esc(vehTermText(M.terms))}</td><td class="l">Bought with</td><td>${esc(M.f ? finText(M.rec) : "—")}</td></tr></table>
     <table class="perf"><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>

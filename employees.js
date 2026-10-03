@@ -227,7 +227,7 @@ function payslipHtml(run, l){
   const ded = []; if(upAmt(l) || num(l.unpaidDays)) ded.push([`Unpaid leave – ${num(l.unpaidDays)} day${num(l.unpaidDays) === 1 ? "" : "s"}`, upAmt(l) || r2(l.gross / 30 * num(l.unpaidDays))]);
   if(num(l.otherDed)) ded.push([`Other deductions${l.dedNote ? " – " + esc(l.dedNote) : ""}`, l.otherDed]); if(num(l.recover)) ded.push(["Advance / loan recovered", l.recover]);
   const tEarn = sum(earn, x => num(x[1])), tDed = sum(ded, x => num(x[1]));
-  return `<div class="sp"><div class="hd"><div class="co">${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>PAYSLIP</b><span>${esc(monthTxt)} · paid on ${esc(dmyS(run.date || monthEnd(run.month)))}</span></div></div>
+  return `<div class="sp"><div class="hd"><div class="co">${typeof coLogo === "function" ? coLogo() : ""}${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>PAYSLIP</b><span>${esc(monthTxt)} · paid on ${esc(dmyS(run.date || monthEnd(run.month)))}</span></div></div>
     <table class="info"><tr><td class="l">Employee</td><td><b>${esc(l.name)}</b></td><td class="l">Employee code</td><td>${esc(l.code || e.code || "—")}</td></tr>
     <tr><td class="l">Designation</td><td>${esc(l.designation || e.designation || "—")}</td><td class="l">Department</td><td>${esc(DEPTS[l.dept] || "")}</td></tr>
     <tr><td class="l">Joining date</td><td>${e.joinDate ? esc(dmyS(e.joinDate)) : "—"}</td><td class="l">Bank / IBAN</td><td>${esc(e.iban || "—")}</td></tr></table>

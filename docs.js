@@ -166,7 +166,7 @@ function cleanHtml(html) {
 function letterhead() {
   const s = S.settings, line = [s.address, s.licence ? "Licence " + s.licence : "", s.trn ? "TRN " + s.trn : ""].filter(Boolean).join(" · ");
   const line2 = [s.phone, s.email].filter(Boolean).join(" · ");
-  return `<div class="lh"><div class="lh-n">${esc(company())}</div>${line ? `<div class="lh-l">${esc(line)}</div>` : ""}${line2 ? `<div class="lh-l">${esc(line2)}</div>` : ""}</div>`;
+  return `<div class="lh">${typeof coLogo === "function" && S.settings.logo ? `<div style="margin-bottom:6px">${coLogo(54)}</div>` : ""}<div class="lh-n">${esc(company())}</div>${line ? `<div class="lh-l">${esc(line)}</div>` : ""}${line2 ? `<div class="lh-l">${esc(line2)}</div>` : ""}</div>`;
 }
 function signatures(kind, x) {
   const s = S.settings;
