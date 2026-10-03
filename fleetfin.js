@@ -12,10 +12,16 @@
                                  The investor's down payment is recorded on the car (memo).
    - Investor car, full payment: paid by the investor – recorded on the car only.
    Instalments are taken as paid on their due dates (standing order) from the chosen bank account. */
+Object.assign(ACCT, {"2210":"Investor funding of vehicles"}); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"2210":"Investor funding of vehicles"});
 Object.assign(ACCT, {"1500":"Motor vehicles", "1190":"Investor vehicle finance (recoverable)", "2400":"Vehicle finance loans (banks)", "5950":"Vehicle finance cost (profit / interest)"});
 if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"1500":"Motor vehicles", "1190":"Investor vehicle finance (recoverable)", "2400":"Vehicle finance loans (banks)", "5950":"Vehicle finance cost (profit / interest)"});
 
 const finOf = v => v && v.fin && num(v.fin.price) ? v.fin : null;
+/* An investor's car can be carried in the company's books (default: registered in its name, bought on its facility,
+   operated by it) – then it is a motor vehicle with depreciation, and what the investor puts into it (his down payment,
+   a full payment, the instalments recovered from his earnings) is his funding (2210), not a receivable. Choosing
+   "investor's asset" keeps it off the company's balance sheet (no depreciation; finance recoverable 1190). */
+const inBooks = v => { const f = finOf(v); return !!f && (finOwner(v) === "company" || f.bookAsset !== "investor"); };
 const finOwner = v => (finOf(v) || {}).owner || ((termAt(termList(v, VEH_TERMS), iso(new Date())) || {}).investorId ? "investor" : "company");
 const addMonths = (d, n) => { const [y, m, day] = d.split("-").map(Number), t = new Date(y, m - 1 + n, 1), last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate(); return iso(new Date(t.getFullYear(), t.getMonth(), Math.min(day, last))); };
 // the instalment schedule: flat rate – equal principal and equal profit in every instalment
@@ -51,11 +57,13 @@ function postFin(add){
     const owner = finOwner(v), name = vName(v.id), acct = f.payFrom || "1100", price = num(f.price), loan = num(f.loan), dp = num(f.downPayment);
     if(f.purchaseDate && f.purchaseDate >= S.from && f.purchaseDate <= S.to){
       const m = `Purchase of ${name}${dealerName(f) ? " – " + dealerName(f) : ""}`, cred = r2(price - dp);
-      if(owner === "company"){
+      if(inBooks(v)){
+        // the investor's own money in the car is his funding; the company's money comes from the bank account
+        const paidBy = owner === "investor" ? "2210" : acct, dpBy = owner === "investor" && f.downBy !== "company" ? "2210" : acct, who = owner === "investor" ? " – " + iName(v.investorId) : "";
         add("1500", price, 0, m, f.purchaseDate);
-        if(f.funding === "bank"){ add("2400", 0, loan, m + " – " + (f.bank || "bank") + " finance", f.purchaseDate); if(r2(price - loan)) add(acct, 0, price - loan, m + " – down payment", f.purchaseDate); }
-        else if(f.funding === "credit"){ add("2000", 0, cred, m + " – on credit", f.purchaseDate); if(dp) add(acct, 0, dp, m + " – down payment", f.purchaseDate); }
-        else add(acct, 0, price, m, f.purchaseDate);
+        if(f.funding === "bank"){ add("2400", 0, loan, m + " – " + (f.bank || "bank") + " finance", f.purchaseDate); if(r2(price - loan)) add(dpBy, 0, price - loan, m + " – down payment" + (dpBy === "2210" ? who : ""), f.purchaseDate); }
+        else if(f.funding === "credit"){ add("2000", 0, cred, m + " – on credit", f.purchaseDate); if(dp) add(dpBy, 0, dp, m + " – down payment" + (dpBy === "2210" ? who : ""), f.purchaseDate); }
+        else add(paidBy, 0, price, m + (paidBy === "2210" ? " – paid by" + who : ""), f.purchaseDate);
       } else if(f.funding === "credit"){
         // the company owes the supplier for the investor's car – recoverable from the investor
         add("1190", cred, 0, m + " – on credit for " + iName(v.investorId), f.purchaseDate); add("2000", 0, cred, m + " – on credit", f.purchaseDate);
@@ -69,8 +77,14 @@ function postFin(add){
     for(const x of finSchedule(v)){
       if(x.date < S.from || x.date > S.to) continue;
       const m = `${f.bank || "Bank"} instalment ${x.no} – ${name}${f.facility ? " – " + f.facility : ""}`;
-      add("2400", x.principal, 0, m, x.date); add(owner === "company" ? "5950" : "1190", x.profit, 0, m, x.date); add(acct, 0, x.emi, m, x.date);
-      if(owner === "investor"){ add("2200", x.emi, 0, "Recovered from investor – " + m, x.date); add("1190", 0, x.emi, "Recovered from investor – " + m, x.date); }
+      const book = inBooks(v);
+      add("2400", x.principal, 0, m, x.date); add(book ? "5950" : "1190", x.profit, 0, m, x.date); add(acct, 0, x.emi, m, x.date);
+      if(owner === "investor"){
+        add("2200", x.emi, 0, "Recovered from investor – " + m, x.date);
+        // in the books: the principal adds to his funding of the car and the profit is charged on to him
+        if(book){ add("2210", 0, x.principal, "Investor's funding – " + m, x.date); add("5950", 0, x.profit, "Finance cost charged to the investor – " + m, x.date); }
+        else add("1190", 0, x.emi, "Recovered from investor – " + m, x.date);
+      }
     }
   }
 }
@@ -85,9 +99,11 @@ function finOpening(code){
   for(const v of Object.values(S.vehicles)){
     const f = finOf(v); if(!f || !f.purchaseDate || f.purchaseDate >= start) continue;
     const owner = finOwner(v), before = finSchedule(v).filter(x => x.date < start), out = r2(num(f.loan) - sum(before, x => x.principal));
-    if(code === "1500" && owner === "company") o += num(f.price);
+    const book = inBooks(v), invDp = f.downBy !== "company" ? num(f.downPayment) : 0;
+    if(code === "1500" && book) o += num(f.price);
     if(code === "2400" && f.funding === "bank") o -= out;
-    if(code === "1190" && owner === "investor" && f.funding === "bank") o += out;
+    if(code === "1190" && owner === "investor" && !book && f.funding === "bank") o += out;
+    if(code === "2210" && owner === "investor" && book) o -= f.funding === "bank" ? invDp + sum(before, x => x.principal) : f.funding === "credit" ? invDp : num(f.price);
   }
   return r2(o);
 }
@@ -106,7 +122,8 @@ function vehFinTab(id){
     ${fld("bank", "Bank")}${fld("facility", "Facility ID / number")}${fld("loan", "Loan amount", "number")}${fld("downPayment", "Down payment", "number")}
     <div class="f"><label for="vf_downBy">Down payment paid by</label><select id="vf_downBy" name="downBy">${opts({company: "Company", investor: "Investor"}, f.downBy || (owner === "investor" ? "investor" : "company"))}</select></div>
     ${fld("rate", "Flat rate % per year", "number")}${fld("months", "Tenure (months)", "number")}${fld("emi", "Monthly instalment (EMI)", "number")}${fld("firstDue", "First instalment date", "date")}
-    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Depreciation</b> <span class="small muted">– company-owned cars only; investor cars are not the company's assets.</span></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Depreciation</b> <span class="small muted">– for every car carried in the company's books.</span></div>
+    <div class="f"><label for="vf_bookAsset">Investor's car – in the company's books?</label><select id="vf_bookAsset" name="bookAsset">${opts({company: "Yes – motor vehicle, depreciated", investor: "No – investor's asset, no depreciation"}, f.bookAsset || "company")}</select></div>
     ${fld("lifeYears", "Useful life (years, default 5)", "number")}${fld("residualPct", "Residual value % (default 20)", "number")}
     <div class="f wide"><label for="vf_notes">Notes</label><input id="vf_notes" name="notes" value="${esc(f.notes)}"></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button>${finOf(v) ? `<button class="btn ghost" type="button" data-finedit="">Cancel</button>` : ""}</div></form>`;
@@ -114,7 +131,7 @@ function vehFinTab(id){
   const info = [["Owned by", owner === "company" ? "Company" : "Investor – " + iName(v.investorId)], ["Purchased", (f.purchaseDate ? dmyS(f.purchaseDate) : "—")], ["Supplier", dealerName(f)], ["Price", fmt(num(f.price))],
     ["Paid by", f.funding === "bank" ? "Bank finance" : f.funding === "credit" ? `Supplier credit – ${fmt(num(f.price) - num(f.downPayment))} owed to the supplier${num(f.downPayment) ? ", down payment " + fmt(num(f.downPayment)) : ""}` : "Full payment"], ...(f.funding === "bank" ? [["Bank", f.bank], ["Facility no.", f.facility], ["Loan", fmt(num(f.loan))], ["Down payment", fmt(num(f.downPayment)) + " (" + (f.downBy === "investor" ? "investor" : "company") + ")"],
     ["Flat rate / tenure", `${num(f.rate)}% · ${num(f.months)} months`], ["Instalment", fmt(sch[0] ? sch[0].emi : 0) + " from " + (sch[0] ? dmyS(sch[0].date) : "—")], ["Outstanding today", fmt(finOutstanding(v, today))], ["Next instalment", next ? dmyS(next.date) + " · " + fmt(next.emi) : "—"]] : []),
-    ["Paid from", acctName(f.payFrom || "1100")], ...(owner === "company" ? [["Depreciation", `${num(f.lifeYears) || 5} years, residual ${String(f.residualPct ?? "") === "" ? 20 : num(f.residualPct)}% · accumulated ${fmt(deprFor(v, "1900-01-01", today))} · book value ${fmt(num(f.price) - deprFor(v, "1900-01-01", today))}`]] : [["Depreciation", "None – the car is the investor's asset"]])];
+    ["Paid from", acctName(f.payFrom || "1100")], ["In the company's books", inBooks(v) ? "Yes – motor vehicle, depreciated" + (owner === "investor" ? "; the investor's money in it is his funding (2210)" : "") : "No – the investor's asset"], ...(inBooks(v) ? [["Depreciation", `${num(f.lifeYears) || 5} years, residual ${String(f.residualPct ?? "") === "" ? 20 : num(f.residualPct)}% · accumulated ${fmt(deprFor(v, "1900-01-01", today))} · book value ${fmt(num(f.price) - deprFor(v, "1900-01-01", today))}`]] : [["Depreciation", "None – the car is the investor's asset"]])];
   return `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${owner === "investor" && f.funding === "bank" ? "Instalments are recovered from the investor's earnings (Investor P&L)." : owner === "company" && f.funding === "bank" ? "Instalments: principal reduces the loan, the profit is a finance cost." : ""}</span><div class="row">${sch.length ? dlBtn("finsch", id) : ""}<button class="btn sm" data-finedit="${esc(id)}">Edit</button></div></div>
   <div class="tbl"><table><tbody>${info.map(([l, val]) => `<tr><td class="muted" style="width:30%">${l}</td><td>${esc(val || "—")}</td></tr>`).join("")}${f.notes ? `<tr><td class="muted">Notes</td><td>${esc(f.notes)}</td></tr>` : ""}</tbody></table></div>
   ${sch.length ? `<h3 style="margin:14px 0 6px">Instalment schedule <span class="small muted">· ${paid.length} of ${sch.length} paid</span></h3><div class="tbl"><table><thead><tr><th class="num">#</th><th>Due date</th><th class="num">Instalment</th><th class="num">Principal</th><th class="num">Profit / interest</th><th class="num">Loan balance</th><th>Status</th></tr></thead><tbody>
@@ -148,7 +165,7 @@ document.addEventListener("submit", async ev => {
 Object.assign(ACCT, {"1510":"Accumulated depreciation – motor vehicles", "5285":"Depreciation – motor vehicles"});
 if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, {"1510":"Accumulated depreciation – motor vehicles", "5285":"Depreciation – motor vehicles"});
 function deprFor(v, from, to){
-  const f = finOf(v); if(!f || finOwner(v) !== "company" || !f.purchaseDate) return 0;
+  const f = finOf(v); if(!f || !inBooks(v) || !f.purchaseDate) return 0;
   const life = num(f.lifeYears) || 5, resid = num(f.price) * (String(f.residualPct ?? "") === "" ? 20 : num(f.residualPct)) / 100, end = addMonths(f.purchaseDate, Math.round(life * 12));
   const a = from > f.purchaseDate ? from : f.purchaseDate, b = to < end ? to : addDays(end, -1); if(a > b) return 0;
   return r2((num(f.price) - resid) / (life * 365.25) * daysBetween(a, b));
@@ -202,7 +219,7 @@ function vehStmt(M){
   Object.entries(M.byCat).filter(([c]) => !DIRECT.includes(c)).forEach(([c, val]) => X(EXP_CATS[c] || "Other expenses", val));
   if(M.owner === "investor" || v.investorId) X("Management fee – company", v.mgmt);
   X("Finance cost (bank profit / interest)", M.profit);
-  if(M.owner === "company") X("Depreciation", M.depr);
+  X("Depreciation", M.depr);
   if(!r2(ex)) I("No other expenses assigned to this car", 0);
   T("Total expenses", -ex);
   T("Net profit for the period", gross - ex, "g");
@@ -212,8 +229,8 @@ function vehStmt(M){
 function vehMemo(M){
   const f = M.f, out = []; if(!f) return out;
   out.push([`Purchase price${f.purchaseDate ? " – " + dmyS(f.purchaseDate) : ""}${dealerName(f) ? " – " + dealerName(f) : ""}`, num(f.price)]);
-  if(M.owner === "company"){ const acc = accDepr(M.rec, S.to); out.push(["Accumulated depreciation", -acc], ["Book value", r2(num(f.price) - acc)]); }
-  else out.push(["Owner", "Investor – no depreciation in the company's books"]);
+  if(inBooks(M.rec)){ const acc = accDepr(M.rec, S.to); out.push(["Accumulated depreciation", -acc], ["Book value", r2(num(f.price) - acc)]); }
+  else out.push(["Owner", "Investor – not in the company's books"]);
   if(f.funding === "bank") out.push([`Bank loan outstanding – ${f.bank || ""} ${f.facility || ""}`.trim(), finOutstanding(M.rec, S.to)]);
   if(f.funding === "credit" && f.supplierId) out.push([`Owed to ${dealerName(f)} (supplier balance)`, (() => { try{ return r2(num((S.suppliers[f.supplierId] || {}).opening) + sum(BOOKS.partyMoves(histEntries(), "s:" + f.supplierId, "2000"), x => x.cr - x.dr)); }catch(e){ return ""; } })()]);
   return out;
@@ -262,5 +279,5 @@ DL.vpl = id => {
 };
 document.addEventListener("click", ev => { const t = ev.target.closest("button"); if(t && t.dataset.vplprint) printVehPL(t.dataset.vplprint); });
 
-window.FIN = {post: (...a) => postFin(...a), supplierMoves, investorEmi, opening: (...a) => finOpening(...a), text: finText, of: finOf, owner: finOwner, outstanding: finOutstanding, depr: deprFor};
+window.FIN = {inBooks, post: (...a) => postFin(...a), supplierMoves, investorEmi, opening: (...a) => finOpening(...a), text: finText, of: finOf, owner: finOwner, outstanding: finOutstanding, depr: deprFor};
 window.vehFinTab = vehFinTab; window.vehPLTab = vehPLTab;
