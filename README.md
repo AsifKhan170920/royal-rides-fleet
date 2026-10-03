@@ -129,3 +129,8 @@ The driver's **Transactions**: when a salary period is finalised, it adds "salar
 - Drivers → driver → **Trip history**: the period's unsettled trip rows have a tick box, all ticked by default ("Select all / Select none"). Untick a trip to leave it out of this salary; the salary statement and the finalised record use only the ticked trips. Choices are saved in `drvAdj/sel-<driver>-<from>-<to>`.
 - A trip left out (or arriving later) stays unsettled. In a later period it is listed under **Unsettled trips from earlier periods**, unticked. Tick it to pay it in that salary, or leave it.
 - Every trip (Trips page and Trip history) has **View / Edit / Delete**. Editing (with a reason, stored on the trip) and deleting are blocked for trips settled in a finalised salary; reopen that salary first.
+
+## Pages and downloads
+
+- Long lists show 50 rows a page, **newest first**, with Newest / Newer / Older / Oldest buttons. This covers the Trips page, the driver's Trip history and Transactions, a car's ledger, a machine's transactions, card payments and Expenses & payments.
+- Every tab has a **Download CSV** button, oldest first. That includes trips; the driver's trips, transactions, salary statement, performance and accounts; a car's ledger and assignments; and a machine's transactions and assignments.
