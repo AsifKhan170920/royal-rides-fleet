@@ -5,6 +5,7 @@
 //   npm run sync -- --file X import a CSV you already have
 //   npm run sync -- --days 3 how many past days to fetch (default: from SYNC_DAYS, else 2)
 //   npm run apis             fetch the other platforms through their APIs (see platform-api.js)
+//   npm run listen           wait for the "Sync now" button of the Fleet Ledger page and run the sync when it is pressed
 //
 // The Uber window uses its own Chrome profile in ./profile, so the sign-in stays there between runs.
 // Trips go to the Fair Tax portal's Firestore (apps/fleet/store/rr), the same place the
@@ -17,7 +18,7 @@ import Papa from 'papaparse';
 import { chromium } from 'playwright-core';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, collection, getDocs, onSnapshot } from 'firebase/firestore';
 import { syncPlatformApis } from './platform-api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -169,7 +170,35 @@ async function fetchReport(page) {
   return page.waitForEvent('download', { timeout: 15 * 60000 }).catch(() => null);
 }
 
+// "Sync now" on the Fleet Ledger page writes settings/syncRequest {status: "waiting", days, uber}; this listener runs it
+// and writes back running → done / error with what came in. Keep it running on the office PC ("5 - Start sync listener").
+async function listen() {
+  await portal(); let busy = false;
+  log('Listening for "Sync now" from the Fleet Ledger page… (keep this window open)');
+  const reqRef = ref('settings', 'syncRequest');
+  await setDoc(reqRef, { ...((await getDoc(reqRef)).data() || {}), listener: new Date().toISOString() });
+  setInterval(async () => { try { const s = (await getDoc(reqRef)).data() || {}; await setDoc(reqRef, { ...s, listener: new Date().toISOString() }); } catch { /* offline for a moment */ } }, 60000);
+  onSnapshot(reqRef, async snap => {
+    const r = snap.data(); if (!r || r.status !== 'waiting' || busy) return;
+    busy = true; const started = new Date().toISOString(), lines = [], capture = (...a) => { lines.push(a.join(' ')); log(...a); };
+    await setDoc(reqRef, { ...r, status: 'running', startedAt: started });
+    try {
+      if (r.uber) {
+        capture('Uber: opening Fleet Hub…');
+        const ctx = await openUber(); const page = ctx.pages()[0] || await ctx.newPage();
+        await page.goto(UBER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        if (!(await waitForLogin(page, 5))) capture('Uber: not signed in – run "1 - Uber login (once)".');
+        else { const dl = await fetchReport(page); if (dl) { fs.mkdirSync(OUT_DIR, { recursive: true }); const target = path.join(OUT_DIR, `payments_${iso(new Date())}_${Date.now() % 100000}.csv`); await dl.saveAs(target); await ctx.close(); const x = await importCsv(target); capture(`Uber: ${x.added} new rows, ${x.dup} already there.`); } else { await ctx.close(); capture('Uber: no report downloaded.'); } }
+      }
+      await syncPlatformApis({ db, UP, env: ENV, log: capture, days: +r.days || DAYS, only: r.only || null });
+      await setDoc(reqRef, { ...r, status: 'done', startedAt: started, doneAt: new Date().toISOString(), log: lines.slice(-20) });
+    } catch (e) { await setDoc(reqRef, { ...r, status: 'error', startedAt: started, doneAt: new Date().toISOString(), log: [...lines, 'ERROR: ' + (e && e.message ? e.message : e)].slice(-20) }); log('Sync failed:', e && e.message); }
+    busy = false;
+  });
+}
+
 async function main() {
+  if (arg('--listen')) { await listen(); return; }
   if (arg('--apis')) { await portal(); await syncPlatformApis({ db, UP, env: ENV, log, days: DAYS, only: typeof arg('--only') === 'string' ? arg('--only') : null }); process.exit(0); }
   const files = process.argv.flatMap((x, i, a) => x === '--file' && a[i + 1] ? [path.resolve(a[i + 1])] : []);
   if (files.length) {

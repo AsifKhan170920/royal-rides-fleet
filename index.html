@@ -404,6 +404,7 @@ async function boot(){
     const o = {}; snap.docs.forEach(d => o[d.id] = {id:d.id, ...d.data()}); S[key] = o; softRender();
   }, e => console.warn(col, e));
   sub("drivers","drivers"); sub("vehicles","vehicles"); sub("investors","investors"); sub("documents","docs"); sub("platforms","platforms"); sub("driverItems","ditems"); sub("terminals","terminals"); sub("accounts","accounts"); sub("customers","customers"); sub("suppliers","suppliers"); sub("coa","coa"); sub("payroll","payroll"); sub("invpay","invpay"); sub("loans","loans"); sub("rtalic","rtalic"); sub("rtadep","rtadep"); sub("fines","fines"); sub("reminders","reminders"); sub("rcptmeta","rcpt"); sub("payouts","payouts"); sub("feeinv","feeinv"); sub("pladj","pladj"); sub("pdcs","pdcs"); sub("employees","employees"); sub("emppay","emppay"); sub("drvAdj","drvAdj");
+  S.db.doc("settings/syncRequest").onSnapshot(d => { const was = (S.syncReq || {}).status; S.syncReq = d.exists ? d.data() : null; if(S.syncReq && was !== S.syncReq.status && S.syncReq.status === "done"){ loadPeriod().then(() => { S.ledger = null; render(); }); toast("Sync finished – new trips loaded."); } else softRender(); });
   S.db.doc("settings/main").onSnapshot(d => { S.settings = d.exists ? d.data() : {}; applyBrand(); softRender(); }, ()=>{});
   await loadPeriod(); S.ready = true; render();
 }
@@ -920,7 +921,7 @@ const guessMap = UberParse.guessMap;
 function vImport(){
   const st = S.importState;
   const pl = S.importPlatform || "uber", plList = {...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id, p.name||p.id]))};
-  let body = `<div class="section"><h2>Import trip data</h2>
+  let body = (window.PLT ? PLT.syncBox("") : "") + `<div class="section"><h2>Import trip data</h2>
   <div class="form" style="margin-bottom:10px"><div class="f"><label for="impPl">Platform of these files</label><select id="impPl">${opts(plList, pl)}</select></div></div>
   ${pl === POS ? `<p class="sub">Download the statement of a card terminal (payment machine) from the bank / provider portal as CSV. Each payment is credited to the driver the terminal was assigned to on that date. Several terminals in one file are fine if it has a terminal ID column. Rows already imported are skipped.</p>`
   : pl === "uber" ? `<p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report</b> and download two reports for the same dates: <b>Payments Transaction</b> (the money) and <b>Trip activity</b> (car, distance and status of each trip). Drop both CSV files below – each is recognised automatically. Rows already imported are skipped, so overlapping files are safe.</p>`
@@ -2066,7 +2067,7 @@ boot();
 <script src="rta.js?v=2"></script>
 <script src="reminders.js?v=3"></script>
 <script src="purchases.js?v=4"></script>
-<script src="platforms.js?v=4"></script>
+<script src="platforms.js?v=5"></script>
 <script src="settings.js?v=2"></script>
 
 </body></html>

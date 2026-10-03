@@ -146,10 +146,24 @@ function pltApiTab(pl){
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save API settings</button></div></form>`;
 }
 
+/* "Sync now": asks the sync listener on the office PC to fetch the trips now (settings/syncRequest) */
+S.syncReq = S.syncReq || null;
+function syncBox(only){
+  const r = S.syncReq || {}, alive = r.listener && (Date.now() - new Date(r.listener).getTime()) < 3 * 60000, st = r.status;
+  const when = x => x ? new Date(x).toLocaleString("en-GB") : "";
+  return `<div class="section" style="padding:10px 14px"><div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+    <div><b>Sync now</b> <span class="small muted">– fetch the trips from the platform APIs${only ? "" : " (and Uber, if ticked)"} through the office PC.</span>
+      <div class="small" style="margin-top:3px">Office PC listener: ${alive ? '<span class="pill good">Online</span>' : '<span class="pill bad">Offline</span> <span class="muted">– start "5 - Start sync listener" on the office PC</span>'}
+      ${st ? ` · last request ${when(r.at)}: ${st === "done" ? `<span class="pill good">Done</span> ${when(r.doneAt)}` : st === "error" ? '<span class="pill bad">Failed</span>' : st === "running" ? '<span class="pill warn">Running…</span>' : '<span class="pill warn">Waiting for the PC…</span>'}` : ""}</div>
+      ${r.log && r.log.length && (st === "done" || st === "error") ? `<div class="small muted" style="margin-top:3px;white-space:pre-line">${esc(r.log.slice(-6).join("\n"))}</div>` : ""}</div>
+    <div class="row" style="gap:6px;align-items:center">${only ? "" : `<label class="small"><input type="checkbox" id="syncUber"> Uber too</label>`}<label class="small">Days <input id="syncDays" type="number" min="1" max="62" value="2" style="width:56px"></label>
+      <button class="btn primary" data-syncnow="${esc(only || "")}" ${S.canWrite && st !== "waiting" && st !== "running" ? "" : "disabled"}>${st === "waiting" || st === "running" ? "Syncing…" : "Sync now"}</button></div></div></div>`;
+}
+
 /* ---------- the page ---------- */
 function platformDetail(pl){
   const p = S.platforms[pl] || {id: pl, name: pName(pl)}, tab = PLT_TABS[S.pltTab] ? S.pltTab : "ledger";
-  const body = tab === "payouts" ? pltPayoutsTab(pl) : tab === "fees" ? pltFeesTab(pl) : tab === "api" ? pltApiTab(pl) : pltLedgerTab(pl);
+  const body = tab === "payouts" ? pltPayoutsTab(pl) : tab === "fees" ? pltFeesTab(pl) : tab === "api" ? syncBox(pl) + pltApiTab(pl) : pltLedgerTab(pl);
   return `<div class="section"><div class="head"><div><h2>${esc(p.name || pName(pl))}</h2><p class="sub">${esc(p.legalName || "")}${p.legalName ? " · " : ""}account ${esc(clearingAcct(pl))} · payouts to ${esc(acctName(payAcct(pl)))}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button>${S.platforms[pl] ? `<button class="btn" data-edit="platform" data-id="${esc(pl)}">Edit platform</button>` : ""}</div></div>
   ${tabBtns("data-plttab", tab, PLT_TABS)}${body}</div>`;
@@ -161,6 +175,8 @@ document.addEventListener("click", async ev => {
   if(t.dataset.poconfirm){ const p = S.platforms[t.dataset.poconfirm]; if(!p){ toast("Add the platform on Platforms & contracts first."); return; } const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, payoutConfirm: !p.payoutConfirm}))) toast(p.payoutConfirm ? "Payouts are taken as received again." : "Reconciliation on – match each payout with the bank credit."); render(); return; }
   if(t.dataset.pomatch != null){ S.poMatch = t.dataset.pomatch ? {pl: t.dataset.pl, id: t.dataset.pomatch} : null; render(); return; }
+  if(t.dataset.syncnow != null){ const days = Math.max(1, Math.min(62, num(($("#syncDays") || {}).value) || 2)), uber = !!(($("#syncUber") || {}).checked);
+    const prev = S.syncReq || {}; if(await writeOk(S.db.doc("settings/syncRequest").set({...prev, status: "waiting", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", days, uber, only: t.dataset.syncnow || "", log: []}))) toast(prev.listener && (Date.now() - new Date(prev.listener).getTime()) < 180000 ? "Sync requested – the office PC is fetching the trips." : "Sync requested – it runs when the listener on the office PC is started."); return; }
   if(t.dataset.apipreset){ const p = S.platforms[t.dataset.apipreset], pr = PLT_PRESETS[t.dataset.apipreset]; if(!p || !pr) return; const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...(p.api || {}), ...pr.api}}))) toast(`${pName(id)} API settings filled in – the secrets stay in uber-sync/.env.`); render(); return; }
   if(t.dataset.pladjdel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; } if(await writeOk(S.db.doc("pladj/" + t.dataset.pladjdel).delete())){ toast("Adjustment deleted."); render(); } return; }
@@ -185,5 +201,5 @@ document.addEventListener("submit", async ev => {
   if(d.from > d.to){ toast("The period must end after it starts."); return; }
   if(await writeOk(S.db.doc("feeinv/" + id).set({...d, pl: f.dataset.pl, fee: num(d.fee), vat: num(d.vat), by, at: new Date().toISOString()}))){ S.feeEdit = null; toast("Fee invoice saved."); render(); }
 });
-window.PLT = {post: postPlt, confirm: pltConfirm};
+window.PLT = {post: postPlt, confirm: pltConfirm, syncBox};
 window.platformDetail = platformDetail;

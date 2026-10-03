@@ -7,7 +7,8 @@
   "scripts": {
     "sync": "node --env-file-if-exists=.env sync.js",
     "login": "node --env-file-if-exists=.env sync.js --login",
-    "apis": "node --env-file-if-exists=.env sync.js --apis"
+    "apis": "node --env-file-if-exists=.env sync.js --apis",
+    "listen": "node --env-file-if-exists=.env sync.js --listen"
   },
   "dependencies": {
     "firebase": "^11.10.0",
