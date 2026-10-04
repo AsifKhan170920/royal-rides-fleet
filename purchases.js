@@ -165,7 +165,7 @@ async function recheckDrivers(src){
   if(!S.ledger || S.ledger.loading || !S.ledger.trips) await loadLedger();   // every trip of the history, with its car
   return fixEntries(e => { if(e.driverId || !e.vehicleId || entSub(e) !== src) return null; const t = entTimes(e);
     const w = t.length ? t.map(x => driverAt(e.vehicleId, e.date, x)).find(x => x.id) : driverAt(e.vehicleId, e.date, "");
-    return w && w.id ? {driverId: w.id, ...(src === "salik" ? {recover: true} : {})} : null; });
+    return w && w.id ? {driverId: w.id, ...((window.RECOV ? RECOV.def(src, src === "salik") : src === "salik") ? {recover: true} : {})} : null; });
 }
 
 // the prepaid money account for Salik / ENOC / EV: next free code from 1131
@@ -247,12 +247,12 @@ document.addEventListener("change", async ev => {
   const t = ev.target; if(!t.dataset) return;
   if(t.dataset.rcptadd && t.files && t.files[0]){ await attachReceipt(t.dataset.rcptadd, t.files[0]); return; }
   if(t.dataset.purimp && t.files && t.files[0]){ const src = t.dataset.purimp, file = t.files[0], rows = await readSheet(file); t.value = ""; if(!rows) return; if(!rows.length){ toast("No rows found in the file."); return; }
-    S.purImp = {src, name: file.name, rows, map: impGuess(Object.keys(rows[0]), src), vatMode: "incl", paidFrom: preOf(src) || "1100", supplier: preOf(src) ? "" : supOf(src), recover: src === "salik", group: src === "salik"}; render(); return; }
+    S.purImp = {src, name: file.name, rows, map: impGuess(Object.keys(rows[0]), src), vatMode: "incl", paidFrom: preOf(src) || "1100", supplier: preOf(src) ? "" : supOf(src), recover: window.RECOV ? RECOV.def(src, src === "salik") : src === "salik", group: src === "salik"}; render(); return; }
   if(t.dataset.preset && t.value){ await writeOk(S.db.doc("settings/main").set({...S.settings, [preKey(t.dataset.preset)]: t.value, [supKey(t.dataset.preset)]: ""})); render(); return; }
   if(t.dataset.supset && t.value){ await writeOk(S.db.doc("settings/main").set({...S.settings, [supKey(t.dataset.supset)]: t.value})); render(); return; }
   if(t.dataset.impmap && S.purImp){ S.purImp.map[t.dataset.impmap] = t.value; render(); return; }
   if(t.dataset.impopt && S.purImp){ const k = t.dataset.impopt; S.purImp[k] = k === "recover" || k === "group" ? t.value === "true" : t.value; render(); return; }
 });
-window.PUR = {view: purView, busy: false, expand: expandInv, makePrepaid, preOf};
+window.PUR = {view: purView, busy: false, expand: expandInv, makePrepaid, preOf, fix: fixEntries};
 // Purchase invoices open inside Purchases & expenses (their own menu item is replaced by it)
 if(window.BOOK_VIEWS && BOOK_VIEWS.purchinv){ PUR.invView = BOOK_VIEWS.purchinv; BOOK_VIEWS.purchinv = () => { S.purTab = "invoices"; return purView(); }; }

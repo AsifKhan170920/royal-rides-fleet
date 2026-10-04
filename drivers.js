@@ -388,6 +388,7 @@ function salaryHtml(M, print, locked){
   const perf0 = `<h3 style="margin:4px 0 6px">1. Performance</h3><div class="tbl"><table><thead><tr>${cells.map(c => `<th style="text-align:center">${c[0]}</th>`).join("")}</tr></thead><tbody><tr>${cells.map(c => `<td style="text-align:center"><b>${c[1]}</b></td>`).join("")}</tr></tbody></table></div>`;
   const perf = perf0 + perfT;
   const forms = {
+    "3": window.RECOV ? `<div class="row" style="margin-top:6px">${RECOV.btn(M.id)}</div>${S.recOpen === M.id ? RECOV.panel(M.id) : ""}` : "",
     "4": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penAmt" placeholder="AED" style="width:100px" aria-label="Deduction amount (AED)"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct from salary</button></div>`,
     "5": recovTbl(M.id, locked),
     "6": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="cashDecl" placeholder="${r2(M.expected - M.handed)}" value="${M.inHand == null ? "" : M.inHand}" style="width:120px" aria-label="Cash in hand"><button class="btn sm" data-cashset="${esc(M.id)}">Save cash in hand (counted)</button></div>`};

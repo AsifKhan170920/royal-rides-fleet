@@ -123,7 +123,7 @@ function payPanel(){
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Record payment</button><button class="btn ghost" type="button" data-finepaycancel="1">Cancel</button></div></form>`;
 }
 function fineForm(f, kind, vid){
-  f = f || {kind, vehicleId: vid || "", date: iso(new Date()), source: kind === "rta" ? "rta" : "dxbpolice", recover: kind === "road"};
+  f = f || {kind, vehicleId: vid || "", date: iso(new Date()), source: kind === "rta" ? "rta" : "dxbpolice", recover: window.RECOV ? RECOV.def("fines", kind === "road") : kind === "road"};
   const fld = (n, l, type = "text", extra = "") => `<div class="f"><label for="fn_${n}">${l}</label><input id="fn_${n}" name="${n}" type="${type}" ${type === "number" ? 'step="0.01"' : ""} value="${esc(f[n] ?? "")}"${extra}></div>`;
   return `<div class="section"><h2>${f.id ? "Edit" : "Add"} ${f.kind === "rta" ? "RTA fine" : "road fine"}</h2><form class="form" id="fFine" data-id="${esc(f.id || "")}" data-kind="${esc(f.kind)}">
     ${fld("date", "Date", "date", " required")}${fld("time", "Time", "time")}${fld("fineNo", f.kind === "rta" ? "Violation / reference no." : "Fine / ticket no.", "text", " required")}
