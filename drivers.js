@@ -271,7 +271,7 @@ function salaryRows(M){
   const S3 = Object.entries(M.byCat).map(([c, v]) => L(esc(EXP_CATS[c] || "Expense"), -v));
   if(!S3.length) S3.push(L('<span class="sub">No direct expenditure this period</span>', null));
   S3.push(L("Total direct expenditure", -M.expenditure, "t"));
-  S3.push(L("Net earnings", r2(M.earnings - M.expenditure), "g"));   // earnings less direct expenditure
+  S3.push({...L("Net earnings", r2(M.earnings - M.expenditure), "g"), wide: true});   // earnings less direct expenditure
   const S4 = [];
   if(M.rentAmt) S4.push(L(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -M.rentAmt));
   if(M.rta) S4.push(L(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta));
@@ -288,7 +288,7 @@ function salaryRows(M){
   if(M.viaInc) S5.push(L("Less cash from direct bookings", -M.viaInc));
   if(x.card) S5.push(L("Add card payments on the company machine", x.card));
   if(M.late.length) S5.push(L(`Unsettled trips from earlier periods (${M.late.length})`, M.lateEff));
-  S5.push(L("Net payable for the period", M.due, "t"));
+  S5.push(L("Net payable for the period", M.due, "g"));
   if(M.paidIn) S5.push(L("Paid to / received from the driver in the period", M.paidIn));
   if(M.T){ S5.push(L("Balance brought forward", M.T.before)); S5.push(L(M.payable >= 0 ? "Balance payable to the driver" : "Balance the driver owes", M.payable, "g")); }
   const S6 = [L("Total receivable (fares, tips & tolls + other bookings)", M.receivable, "t"), L("Less platform payments (paid in the app)", -M.app)];
@@ -383,17 +383,20 @@ function salaryHtml(M, print, locked){
   const P = salaryPairs(salaryRows(M));
   return perf + P.map(p => `<div class="tbl" style="margin-top:14px"><table style="table-layout:fixed"><colgroup><col style="width:37%"><col style="width:13%"><col style="width:37%"><col style="width:13%"></colgroup><thead><tr>${p.titles.map(t => `<th colspan="2" style="width:50%">${t}</th>`).join("")}</tr></thead><tbody>
     ${p.rows.map(([a, b]) => `<tr${(a && a.kind) || (b && b.kind) ? ' class="tot"' : ""}>${cell(a)}${cell(b)}</tr>`).join("")}
-    ${p.foot.map(f => `<tr class="tot" style="border-top:2px solid var(--ink, #16213a)"><td colspan="3" style="white-space:normal"><b>${f.label}</b></td><td class="num"><b>${val(f)}</b></td></tr>`).join("")}</tbody></table></div>
+    ${p.foot.map((f, k) => `<tr class="tot"${k ? "" : ' style="border-top:2px solid var(--ink, #16213a)"'}>${f.wide ? `<td colspan="3" style="white-space:normal"><b>${f.wide.label}</b></td><td class="num"><b>${val(f.wide)}</b></td>` : f.pair.map(cell).join("")}</tr>`).join("")}</tbody></table></div>
     ${p.ns.map(n => forms[n] || "").join("")}`).join("");
 }
 /* sections two by two: [{titles, rows: [[left, right]], foot: [result rows], ns}] – plain rows first (padded so both sides
    end together), then each side's closing totals on the same lines, then the grand results ("g") across the full width */
+// the results: each under its own section (Salary | Net payable, Difference under the cash), a "wide" one across both (Net earnings)
+function footRows(a, b){ const out = [...a, ...b].filter(x => x.wide).map(x => ({wide: x})); a = a.filter(x => !x.wide); b = b.filter(x => !x.wide);
+  for(let k = 0; k < Math.max(a.length, b.length); k++) out.push({pair: [a[k] || null, b[k] || null]}); return out; }
 function salaryPairs(R){
-  const split = rows => { const body = rows.slice(), g = []; while(body.length && body[body.length - 1].kind === "g") g.unshift(body.pop()); let i = body.length; while(i > 0 && body[i - 1].kind === "t") i--; return {main: body.slice(0, i), tail: body.slice(i), g}; };
+  const split = rows => { let j = rows.findIndex(x => x.kind === "g"); if(j < 0) j = rows.length; const body = rows.slice(0, j), g = rows.slice(j); let i = body.length; while(i > 0 && body[i - 1].kind === "t") i--; return {main: body.slice(0, i), tail: body.slice(i), g}; };
   const out = []; for(let i = 0; i < R.length; i += 2){ const L = split(R[i][2]), Rt = R[i + 1] ? split(R[i + 1][2]) : {main: [], tail: [], g: []}, rows = [];
     for(let k = 0; k < Math.max(L.main.length, Rt.main.length); k++) rows.push([L.main[k] || null, Rt.main[k] || null]);
     for(let k = 0; k < Math.max(L.tail.length, Rt.tail.length); k++) rows.push([L.tail[k] || null, Rt.tail[k] || null]);
-    out.push({titles: [R[i], R[i + 1]].filter(Boolean).map(s => s[0] + ". " + s[1]), rows, foot: [...L.g, ...Rt.g], ns: [R[i][0], R[i + 1] && R[i + 1][0]].filter(Boolean)}); }
+    out.push({titles: [R[i], R[i + 1]].filter(Boolean).map(s => s[0] + ". " + s[1]), rows, foot: footRows(L.g, Rt.g), ns: [R[i][0], R[i + 1] && R[i + 1][0]].filter(Boolean)}); }
   return out;
 }
 // the printed statement: its own clean layout (letterhead, details, bordered sections, signatures)
@@ -429,7 +432,7 @@ function salaryPrintHtml(M, d, fin){
   <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
   ${targetTable(M.id, M.x, M.perf.completion, true)}
   ${salaryPairs(salaryRows(M)).map(p => { const v = r => !r ? '<td></td><td class="n"></td>' : `<td>${r.label}</td><td class="n">${r.num ? (r.v == null ? "" : r.int ? String(r.v) : fmt(r.v)) : amt(r.v)}</td>`;
-    return `<table class="pair"><colgroup><col style="width:37%"><col style="width:13%"><col style="width:37%"><col style="width:13%"></colgroup><tr class="sec">${p.titles.map(t => `<th colspan="2">${t}</th>`).join("")}</tr>${p.rows.map(([a, b]) => `<tr${(a && a.kind) || (b && b.kind) ? ' class="t"' : ""}>${v(a)}${v(b)}</tr>`).join("")}${p.foot.map(f => `<tr class="g"><td colspan="3">${f.label}</td><td class="n">${f.num ? (f.int ? String(f.v) : fmt(f.v)) : amt(f.v)}</td></tr>`).join("")}</table>`; }).join("")}
+    return `<table class="pair"><colgroup><col style="width:37%"><col style="width:13%"><col style="width:37%"><col style="width:13%"></colgroup><tr class="sec">${p.titles.map(t => `<th colspan="2">${t}</th>`).join("")}</tr>${p.rows.map(([a, b]) => `<tr${(a && a.kind) || (b && b.kind) ? ' class="t"' : ""}>${v(a)}${v(b)}</tr>`).join("")}${p.foot.map(f => f.wide ? `<tr class="g"><td colspan="3">${f.wide.label}</td><td class="n">${amt(f.wide.v)}</td></tr>` : `<tr class="${f.pair.some(x => x && x.kind) ? "g" : "t"}">${f.pair.map(v).join("")}</tr>`).join("")}</table>`; }).join("")}
   <div class="sigs"><div><div class="who">For Driver</div><div class="line"></div><div>${esc(d.name || "")}</div><div class="cap">Signature & date</div></div>
     <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
   </div>`;
