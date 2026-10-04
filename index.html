@@ -1185,13 +1185,26 @@ function vDrivers(){
   const e = S.edit && S.edit.kind === "driver" ? S.edit : null; const d = e ? (S.drivers[e.id] || {}) : null;
   if(S.drvView && S.drivers[S.drvView] && window.driverDetail) return (e ? driverForm(e.id, d) : "") + driverDetail(S.drvView);
   const dups = window.driverDupes ? driverDupes().length : 0;
-  return `${e ? driverForm(e.id, d) : ""}${dups && !S.dupOpen ? `<div class="banner">${dups} driver(s) look like duplicates of another (same person, other spelling from Uber / Bolt / Yango / RTA). <button class="btn sm primary" data-dupopen="1">Review &amp; merge</button></div>` : ""}${window.dupesPanel ? dupesPanel() : ""}${window.bulkFinPanel ? bulkFinPanel() : ""}${window.bulkPanel ? bulkPanel() : ""}
+  return `${e ? driverForm(e.id, d) : ""}${dups && !S.dupOpen ? `<div class="banner">${dups} driver(s) look like duplicates of another (same person, other spelling from Uber / Bolt / Yango / RTA). <button class="btn sm primary" data-dupopen="1">Review &amp; merge</button></div>` : ""}${window.dupesPanel ? dupesPanel() : ""}${window.bulkFinPanel ? bulkFinPanel() : ""}${window.bulkPanel ? bulkPanel() : ""}${noTermsBanner()}
   <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><div class="row"><button class="btn" data-bfopen="1">Bulk salary finalisation</button><button class="btn" data-bulkopen="1">Bulk salary statements</button><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th>Targets met</th><th></th></tr></thead><tbody>
   ${list.map(x=>{ const c = C.D[x.id] || {}; const tl = termList(x, DRV_TERMS), cur = termAt(tl, iso(new Date())); const terms = !(cur && cur.payModel) ? `<span class="pill warn">Terms needed</span>` : esc(drvTermText(cur)) + (tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : "");
     return `<tr><td><button class="btn sm ghost" data-drvview="${esc(x.id)}" style="padding:2px 6px"><b>${esc(x.name)}</b></button> ${x.active===false?'<span class="pill">Inactive</span>':""}</td><td class="mono small">${esc(x.code||"")}</td><td>${(() => { const today = iso(new Date()), vid = vehAt(x.id, today), m = machineAt(x.id, today); return (vid ? esc(vName(vid)) : '<span class="muted">—</span>') + (m ? `<div class="small muted">Machine ${esc(m.name || m.tid)}</div>` : ""); })()}</td><td>${terms}</td><td class="num">${c.n||0}</td><td class="num">${fmt(c.net)}</td><td>${window.targetSummary ? targetSummary(x.id, C.D[x.id]) : ""}</td><td class="row"><button class="btn sm" data-edit="driver" data-id="${esc(x.id)}">Edit</button><button class="btn sm" data-offerfor="${esc(x.id)}">Offer letter</button></td></tr>`;}).join("")}
   </tbody></table></div>` : `<div class="empty"><b>No drivers yet</b>Add a driver, or import an Uber report and drivers are created from it.</div>`}</div>`;
 }
+// drivers with no pay model: one click gives them commission by slabs (23% to 7,000 · 25% to 10,000 · 30% above) for all their history
+const noTermsList = () => Object.values(S.drivers).filter(d => d.active !== false && !termList(d, DRV_TERMS).some(t => t.payModel));
+function noTermsBanner(){ const L = noTermsList(); if(!L.length || !S.canWrite) return "";
+  return `<div class="banner">${L.length} driver(s) have no pay model yet, so no commission is worked out for them. <button class="btn sm primary" data-tierall="1">Set commission by slabs for them (${TIER_DEF.tier1Pct}% to ${fmt(TIER_DEF.tier1Upto)} · ${TIER_DEF.tier2Pct}% to ${fmt(TIER_DEF.tier2Upto)} · ${TIER_DEF.tier3Pct}% above)</button> <span class="small">or open a driver and choose the pay model.</span></div>`; }
+document.addEventListener("click", async ev => { const t = ev.target.closest && ev.target.closest("[data-tierall]"); if(!t) return;
+  const L = noTermsList(); if(!L.length) return;
+  if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = `Click again – set slabs for ${L.length} driver(s)`; return; }
+  t.disabled = true; t.textContent = "Saving…"; let n = 0;
+  for(const d of L){ const {id, ...body} = d, by = (S.user && (S.user.name || S.user.id)) || "", at = new Date().toISOString();
+    const keep = k => !(k in TIER_DEF) && k !== "payModel" && k !== "commissionPct";
+    let hist = Array.isArray(d.terms) && d.terms.length ? d.terms.map(x => ({...x, payModel: "tiered", ...TIER_DEF})) : [{from: BEGIN, ...Object.fromEntries(DRV_TERMS.filter(keep).map(k => [k, d[k] ?? ""])), payModel: "tiered", ...TIER_DEF, note: "Commission by slabs", by, at}];
+    if(await writeOk(S.db.doc("drivers/" + id).set({...body, payModel: "tiered", ...TIER_DEF, terms: hist}))) n++; }
+  toast(n + " driver(s) now on commission by slabs."); render(); });
 function driverForm(id, d0){
   const d = {...d0, ...latestTerms(d0, DRV_TERMS)};   // the form shows the latest dated terms
   const today = iso(new Date()), carNow = id ? vehAt(id, today) : "", trmNow = id ? machineAt(id, today) : null;
@@ -1209,7 +1222,7 @@ function driverForm(id, d0){
     <div class="f"><label for="dr_ls">Licence status</label><input id="dr_ls" name="licenceStatus" value="${esc(d.licenceStatus || "")}"></div><div class="f"><label for="dr_lc">Licence categories</label><input id="dr_lc" name="licenceCategories" value="${esc(d.licenceCategories || "")}"></div>
     <div class="f"><label>Car (assigned on the Vehicles page)</label><div style="padding:7px 0;font-weight:600">${carNow ? esc(vName(carNow)) : '<span class="muted">None</span>'}</div></div>
     <div class="f"><label>Payment machine (assigned on the Machines page)</label><div style="padding:7px 0;font-weight:600">${trmNow ? esc((trmNow.name ? trmNow.name + " · " : "") + trmNow.tid) : '<span class="muted">None</span>'}</div></div>    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
-    <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
+    <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel" required>${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
     <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
     ${(() => { const T = tierOf(d); return `<div class="f wide"><b>Commission by slabs</b> <span class="small muted">– with the pay model “Commission by slabs”: his share of each month's net earnings, slab by slab</span></div>
     <div class="f"><label for="dt1u">Slab 1 – up to (AED)</label><input id="dt1u" name="tier1Upto" type="number" step="0.01" value="${T.tier1Upto}"></div><div class="f"><label for="dt1p">Slab 1 – %</label><input id="dt1p" name="tier1Pct" type="number" step="0.01" value="${T.tier1Pct}"></div>
