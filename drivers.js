@@ -47,6 +47,20 @@ function selX(id, x0){
   x.n -= new Set(out.filter(t => t.tr || t.f).map(t => t.tr || t.id)).size; x.excluded = out.length;
   return x;
 }
+/* commission by slabs saved with a later "effective from" date (the form defaults to today) does not reach this period –
+   say so, and offer to start it from the period's first day */
+function tierNote(id){
+  const list = termList(S.drivers[id] || {}, DRV_TERMS), inP = list.some((x, i) => x.payModel === "tiered" && x.from <= S.to && (i === list.length - 1 || list[i + 1].from > S.from));
+  const later = list.find(x => x.payModel === "tiered" && x.from > S.to);
+  if(inP || !later) return "";
+  return `<div class="banner">Commission by slabs is saved for this driver from <b>${esc(dmyS(later.from))}</b>, after this period – this salary still uses the earlier terms (${esc(drvTermText(termAt(list, S.to)))}).${S.canWrite ? ` <button class="btn sm primary" data-tierfrom="${esc(id)}">Apply the slabs from ${esc(dmyS(S.from))}</button>` : ""}</div>`;
+}
+document.addEventListener("click", async ev => { const t = ev.target.closest && ev.target.closest("[data-tierfrom]"); if(!t) return;
+  const id = t.dataset.tierfrom, d = S.drivers[id]; if(!d) return; const {id: _, ...body} = d;
+  const hist0 = termList(d, DRV_TERMS).map(x => ({...x})), k = hist0.findIndex(x => x.payModel === "tiered" && x.from > S.to); if(k < 0) return;
+  const tier = {...hist0[k], from: S.from, note: ((hist0[k].note || "") + " (moved to " + dmyS(S.from) + ")").trim()};
+  const hist = hist0.filter((x, i) => i !== k && !(x.from >= S.from && x.from <= hist0[k].from)).concat(tier).sort((a, b) => a.from.localeCompare(b.from));
+  t.disabled = true; if(await writeOk(S.db.doc("drivers/" + id).set({...body, terms: hist}))){ toast("Commission by slabs now applies from " + dmyS(S.from) + "."); render(); } });
 // earlier unsettled trips the company chose to pay in this salary
 const lateSelected = id => { const L = lateTrips(id); if(!L) return null; const pick = new Set(selDoc(id).late || []); return L.filter(t => pick.has(t.id)); };
 const lockedPeriod = id => Object.values(S.payroll).some(p => p.driverId === id && p.from <= S.to && p.to >= S.from);
@@ -496,7 +510,7 @@ function dSalary(id){
   S.hdrBtns = `${pay}<button class="btn" data-salprint="${esc(id)}">Print / PDF for signing</button>`;
   const finBtn = same || overlap ? "" : `<button class="btn primary" data-finalise="${esc(id)}" ${S.canWrite && S.db && ready ? "" : "disabled"}>Finalise salary</button>`;
   return `<div style="max-width:980px"><h2>Salary statement · ${esc(dmyS(S.from))} to ${esc(dmyS(S.to))}${same ? ' <span class="pill good">Finalised</span>' : ""}</h2>
-    ${same || overlap ? fin : ""}
+    ${same || overlap ? fin : ""}${same ? "" : tierNote(id)}
     ${salaryHtml(M, false, !!same)}${!T ? `<p class="small muted">Loading the history (balance brought forward, unsettled trips)…</p>` : ""}${lateTbl}
     <div class="row" style="margin-top:14px;gap:8px">${finBtn}${dlBtn("dsal", id)}${!same && !overlap && next && next !== S.from ? `<button class="btn ghost" data-setperiod="${next}|${monthEnd(next.slice(0,7))}">Next period to finalise: ${esc(dmyS(next))} – ${esc(dmyS(monthEnd(next.slice(0,7))))}</button>` : ""}</div>
     <p class="small muted" style="margin-top:6px">Finalised salaries are listed in Transactions (View / Edit / Delete).</p></div>`;
