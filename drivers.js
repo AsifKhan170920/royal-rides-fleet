@@ -425,11 +425,14 @@ function salaryPrintHtml(M, d, fin){
   const addr = [s.address, s.licence ? "Trade licence " + s.licence : "", s.trn ? "TRN " + s.trn : "", s.phone, s.email].filter(Boolean).join(" · ");
   const amt = v => v == null ? "" : (v < 0 ? "-" : "") + fmt(Math.abs(v));
   const cells = perfCells(M.perf), car = vehAt(M.id, S.to);
+  // every car he drove in the period (from his trips, in the order first used), else the car assigned to him
+  const cars = [...new Set(S.trips.filter(t => t.dr === M.id && t.d >= S.from && t.d <= S.to).sort((a, b) => String(a.d + (a.ts || a.t || "")).localeCompare(String(b.d + (b.ts || b.t || "")))).map(t => vehicleForTrip(t)).filter(Boolean))];
+  if(!cars.length && car) cars.push(car);
   return `<div class="sp">
   <div class="hd"><div class="co">${typeof coLogo === "function" ? coLogo() : ""}${esc(co)}${addr ? `<small>${esc(addr)}</small>` : ""}</div><div class="ttl"><b>DRIVER SALARY STATEMENT</b><span>${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · amounts in AED</span></div></div>
   <table class="info"><tr><td class="l">Driver</td><td><b>${esc(d.name || "")}</b>${d.code ? " (" + esc(d.code) + ")" : ""}</td><td class="l">Period</td><td>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</td></tr>
     <tr><td class="l">Pay terms</td><td>${esc(drvTermTextFull(tm))}</td><td class="l">Status</td><td>${fin ? "Finalised " + esc(dmyS(fin.at.slice(0,10))) : "Draft – not finalised"}</td></tr>
-    <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
+    <tr><td class="l">${cars.length > 1 ? "Cars" : "Car"}</td><td>${cars.length ? esc(cars.map(vName).join(", ")) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
   <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
   ${targetTable(M.id, M.x, M.perf.completion, true)}
   ${salaryPairs(salaryRows(M)).map(p => { const v = r => !r ? '<td></td><td class="n"></td>' : `<td${r.kind ? ' class="b"' : ""}>${r.label}</td><td class="n${r.kind ? " b" : ""}">${r.num ? (r.v == null ? "" : r.int ? String(r.v) : fmt(r.v)) : amt(r.v)}</td>`;
