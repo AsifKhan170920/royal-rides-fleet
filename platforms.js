@@ -277,7 +277,9 @@ async function browserSync(pl, days){
 /* "Sync now": asks the sync listener on the office PC to fetch the trips now (settings/syncRequest) */
 S.syncReq = S.syncReq || null;
 function syncBox(only){
-  const r = S.syncReq || {}, alive = r.listener && (Date.now() - new Date(r.listener).getTime()) < 3 * 60000, st = r.status;
+  const r = S.syncReq || {}, alive = r.listener && (Date.now() - new Date(r.listener).getTime()) < 3 * 60000, stale = (st0 => (st0 === "waiting" || st0 === "running") && r.at && (Date.now() - new Date(r.at).getTime()) > 30 * 60000)(r.status);
+  // a platform synced straight from here never waits for the office PC; a PC request older than 30 minutes no longer blocks
+  const here = only && S.platforms[only] && S.platforms[only].api && (S.platforms[only].api.direct || S.platforms[only].api.proxyUrl), st = stale ? "" : r.status, busy = !here && (st === "waiting" || st === "running");
   const when = x => x ? new Date(x).toLocaleString("en-GB") : "";
   return `<div class="section" style="padding:10px 14px"><div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
     <div><b>Sync now</b> <span class="small muted">– fetch the trips from the platform APIs${only ? "" : " (and Uber, if ticked)"}${(() => { const px = Object.values(S.platforms).filter(p => p.api && (p.api.direct || p.api.proxyUrl) && (!only || p.id === only)).map(p => p.name || p.id); return px.length ? ` – ${esc(px.join(", "))} straight from here${only ? "" : ", the others"}` : ""; })()}${only && S.platforms[only] && S.platforms[only].api && (S.platforms[only].api.direct || S.platforms[only].api.proxyUrl) ? "" : " through the office PC"}.</span>
@@ -285,7 +287,7 @@ function syncBox(only){
       ${st ? ` · last request ${when(r.at)}: ${st === "done" ? `<span class="pill good">Done</span> ${when(r.doneAt)}` : st === "error" ? '<span class="pill bad">Failed</span>' : st === "running" ? '<span class="pill warn">Running…</span>' : '<span class="pill warn">Waiting for the PC…</span>'}` : ""}</div>
       ${r.log && r.log.length && (st === "done" || st === "error") ? `<div class="small muted" style="margin-top:3px;white-space:pre-line">${esc(r.log.slice(-6).join("\n"))}</div>` : ""}</div>
     <div class="row" style="gap:6px;align-items:center">${only ? "" : `<label class="small"><input type="checkbox" id="syncUber"> Uber too</label>`}<label class="small">Days <input id="syncDays" type="number" min="1" max="62" value="2" style="width:56px"></label>
-      <button class="btn primary" data-syncnow="${esc(only || "")}" ${S.canWrite && st !== "waiting" && st !== "running" ? "" : "disabled"}>${st === "waiting" || st === "running" ? "Syncing…" : "Sync now"}</button></div></div></div>`;
+      <button class="btn primary" data-syncnow="${esc(only || "")}" ${S.canWrite && !busy ? "" : "disabled"}>${busy ? "Syncing…" : "Sync now"}</button></div></div></div>`;
 }
 
 /* ---------- the page ---------- */
