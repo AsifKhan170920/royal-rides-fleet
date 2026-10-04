@@ -725,7 +725,7 @@ document.addEventListener("submit", async ev => {
    The same person can come in from Uber, Bolt, Yango and the RTA file under different spellings. A merge moves every
    reference of the duplicate (trips, trip details, expenses, invoices, payroll, fines, documents, ledger parties "d:<id>")
    to the driver kept, joins their platform ids, and deletes the duplicate. */
-const MERGE_COLS = ["trips", "tripinfo", "entries", "emppay", "payroll", "invpay", "fines", "rtablocks", "rtadep", "rtalic", "documents", "pdcs", "loans", "reminders", "vehicles", "terminals", "cardtx", "payouts", "pladj", "feeinv", "rcptmeta", "employees", "settings"];
+const MERGE_COLS = ["trips", "tripinfo", "drvAdj", "driverItems", "entries", "emppay", "payroll", "invpay", "fines", "rtablocks", "rtadep", "rtalic", "documents", "pdcs", "loans", "reminders", "vehicles", "terminals", "cardtx", "payouts", "pladj", "feeinv", "rcptmeta", "employees", "settings"];
 const drvScore = d => (d.licenceNo ? 100 : 0) + (d.terms && d.terms.length ? 20 : 0) + (d.payModel ? 10 : 0) + nameWordsU(d.name).length + Object.keys(d.platformIds || {}).length;
 function driverDupes(){
   const D = Object.values(S.drivers), out = [], used = new Set();
