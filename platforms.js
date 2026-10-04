@@ -317,6 +317,23 @@ function driverByShortName(name, pl){
   if(c.length > 1) c = c.filter(d => w(d.name)[0] === nw[0]);
   return c.length === 1 ? c[0].id : "";
 }
+// Yango's orders carry no fee: the park transactions do – per order, the service fee and its VAT apart
+const YANGO_FEE = ["platform_ride_fee", "platform_reposition_fee"], YANGO_VAT = ["platform_ride_vat"];
+async function yangoFees(pl, fromTs, toTs){
+  const api = (S.platforms[pl] || {}).api || {}, keys = await loadApiKeys(pl), H = {...apiHeaders(api, "", keys), "Content-Type": "application/json"};
+  const url = String(api.tripsUrl || "").replace(/\/v1\/parks\/orders\/list.*$/, "/v2/parks/transactions/list"), out = {}, span = 7 * 86400;
+  for(let a = fromTs; a <= toTs; a += span){
+    const b = Math.min(toTs + 2 * 86400, a + span - 1); let cursor = "";   // a fee can be booked a little after the trip
+    for(let pg = 0; pg < 100; pg++){
+      const body = {query: {park: {id: keys.parkId, transaction: {event_at: {from: new Date(a * 1000).toISOString(), to: new Date(b * 1000).toISOString()}, category_ids: [...YANGO_FEE, ...YANGO_VAT]}}}, limit: 1000}; if(cursor) body.cursor = cursor;
+      const j = await apiCall(api, url, {method: "POST", headers: H, body: JSON.stringify(body)}), L = (j && j.transactions) || [];
+      L.forEach(x => { if(!x.order_id) return; const o = out[norm(x.order_id)] ||= {sf: 0, tx: 0, ids: {}}; if(o.ids[x.id]) return; o.ids[x.id] = 1;
+        if(YANGO_VAT.includes(x.category_id)) o.tx = r2(o.tx - num(x.amount)); else if(YANGO_FEE.includes(x.category_id)) o.sf = r2(o.sf - num(x.amount)); });
+      cursor = j && j.cursor; if(!cursor || !L.length) break;
+    }
+  }
+  return out;
+}
 async function browserSync(pl, days){
   const p = S.platforms[pl], api = (p || {}).api || {}, F = {end: (((PLT_PRESETS[pl] || {}).api || {}).fields || {}).end, ...(api.fields || {})};
   const to = new Date(), from = new Date(to.getTime() - days * 86400000), fromTs = Math.floor(new Date(iso(from) + "T00:00:00").getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
@@ -329,7 +346,8 @@ async function browserSync(pl, days){
   const trips = rows.map(o => { const dt = preadDate(ppick(o, F.date)); if(!dt) return null; const n = k => num(ppick(o, F[k])); const id = String(ppick(o, F.id) ?? "").trim() || `${dt.date}|${ppick(o, F.driverName)}|${n("fare")}`;
     const de = F.end ? preadDate(ppick(o, F.end)) : null;
     return {id: pl + ":" + norm(id), tr: pl + ":" + norm(id), d: dt.date, t: dt.time, te: de ? de.time : "", name: String(ppick(o, F.driverName) ?? "").trim(), uuid: String(ppick(o, F.driverId) ?? "").trim(), p: String(ppick(o, F.plate) ?? "").trim(),
-      f: n("fare"), sf: Math.abs(n("fee")), tx: Math.abs(n("vat")), tp: n("tip"), rf: n("refund"), c: Math.abs(n("cash")), oe: n("other"), po: Math.abs(n("payout")), km: n("km")}; }).filter(Boolean);
+      f: n("fare"), sf: Math.abs(n("fee")), tx: Math.abs(n("vat")), tp: n("tip"), rf: n("refund"), c: Math.abs(n("cash")), oe: n("other"), po: Math.abs(n("payout")), km: n("km"), oid: norm(id)}; }).filter(Boolean);
+  if(api.authType === "yango" && trips.length){ const fees = await yangoFees(pl, fromTs, toTs); trips.forEach(t => { const x = fees[t.oid]; if(x){ t.sf = x.sf; t.tx = x.tx; } }); }
   // drivers by their id on this platform or their name; cars by plate
   const byId = {}, byName = {}; Object.values(S.drivers).forEach(d => { if((d.platformIds || {})[pl]) byId[d.platformIds[pl]] = d.id; byName[norm(d.name)] = d.id; });
   const plates = {}; Object.values(S.vehicles).forEach(v => plates[norm(v.plate)] = v.id);
@@ -343,7 +361,9 @@ async function browserSync(pl, days){
   const byDay = {}; trips.forEach(t => (byDay[t.d] ||= []).push(t)); let added = 0, dup = 0;
   for(const [day, L] of Object.entries(byDay)){
     const ref = S.db.doc("trips/" + day), snap = await ref.get(), ex = snap.exists ? (snap.data().rows || {}) : {}, merged = {...ex};
-    for(const t of L){ if(ex[t.id]){ dup++; if(t.te && !ex[t.id].te) merged[t.id] = {...ex[t.id], te: t.te}; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, te: t.te, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
+    for(const t of L){ if(ex[t.id]){ dup++; const e = ex[t.id], fix = {};
+        // a row already there gets what it was missing (end time, Yango fee / VAT)
+        if(t.te && !e.te) fix.te = t.te; if(t.sf && !e.sf) fix.sf = t.sf; if(t.tx && !e.tx) fix.tx = t.tx; if(Object.keys(fix).length) merged[t.id] = {...e, ...fix}; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, te: t.te, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
     if(!await writeOk(ref.set({date: day, rows: merged}))) throw new Error("could not save the trips");
   }
   const {id: _, ...b} = S.platforms[pl]; await writeOk(S.db.doc("platforms/" + pl).set({...b, sync: {at: new Date().toISOString(), from: iso(from), to: iso(to), added, dup, error: "", via}}));
