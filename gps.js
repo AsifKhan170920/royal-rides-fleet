@@ -8,9 +8,16 @@ const GPS_PORTAL = "https://sharyoiot.in/VTSV15/Reports?pUserId=1260&pModuleId=3
 const GPS_TABS = {data: "GPS data", suspect: "Suspicious trips", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
 S.susLevel = S.susLevel ?? "high"; S.susStatus = S.susStatus || ""; S.susDrv = S.susDrv || ""; S.gpsReview = S.gpsReview || {};
 const SUS_STATUS = {open: "Open", discussed: "Discussed with driver", explained: "Explained – OK", confirmed: "Confirmed – private ride"};
-S.gpsTab = S.gpsTab || "data"; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
-// a stretch with no trip within this many minutes before / after counts as off the platforms
-const GPS_PRE = 45, GPS_POST = 20;
+S.gpsTab = S.gpsTab || "data"; S.gpsTerm = S.gpsTerm || ""; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
+/* What each stretch was, by ranges set on the GPS data tab (Settings keys gpsPickupMin / gpsPickupKm / gpsParkKm):
+   Trip    – during a platform trip of the car (its start to its end, a few minutes either side)
+   Pickup  – driving to the next trip: ends at most gpsPickupMin minutes before the trip starts and, with the other
+             pickup stretches of that trip, within gpsPickupKm km – shown with that trip's S.No
+   Parking – a short move of at most gpsParkKm km (parking, queueing, moving the car)
+   No trip – anything else: the off-platform km and the stretches checked for private rides */
+const GPS_TOL = 3;
+const gpsRange = () => ({pickMin: num(setting("gpsPickupMin", 30)) || 30, pickKm: num(setting("gpsPickupKm", 8)) || 8, parkKm: num(setting("gpsParkKm", 1.5))});
+const TERM_LABEL = {trip: "Trip", pickup: "Pickup", parking: "Parking", none: "No trip"};
 
 const gDate = s => { const m = String(s || "").match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\D+(\d{1,2}):(\d{2})(?::(\d{2}))?/); if(m) return {d: `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`, t: `${m[4].padStart(2, "0")}:${m[5]}`};
   const n = String(s || "").match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/); return n ? {d: `${n[1]}-${n[2]}-${n[3]}`, t: `${n[4].padStart(2, "0")}:${n[5]}`} : null; };
@@ -69,8 +76,17 @@ function gpsAudit(){
   const gDays = new Set(G.map(g => g.d)), tracked = new Set(G.map(g => g.v).filter(Boolean));
   Object.keys(tripsOf).forEach(k => { const [v, d] = k.split("|"); if(!days[k] && gDays.has(d) && tracked.has(v)) days[k] = {v, d, segs: []}; });
   const out = Object.values(days).map(x => {
-    const ts = tripsOf[x.v + "|" + x.d] || [], win = ts.map(t => { const a = gMin(t.ts || t.t), b = gMin(t.te) ?? (a != null ? a + 30 : null); return a == null ? null : {a: a - GPS_PRE, b: (b < a ? b + 1440 : b) + GPS_POST, dr: t.dr}; }).filter(Boolean);
-    const segs = x.segs.map(g => { const a = gMin(g.s), b0 = gMin(g.e), b = b0 == null ? a : (b0 < a ? b0 + 1440 : b0); const hit = win.find(w => a <= w.b && b >= w.a); return {...g, a, b, on: !!hit, dr: hit ? hit.dr : ""}; });
+    const ts = tripsOf[x.v + "|" + x.d] || [], R = gpsRange(), seen = new Set();
+    // one window per trip (rows of the same trip once): start to end; no end time → about 2 min a km, at least 15 min
+    const win = ts.filter(t => { const k = t.tr || t.id; if(seen.has(k)) return false; seen.add(k); return true; })
+      .map(t => { const a = gMin(t.ts || t.t); if(a == null) return null; let b = gMin(t.te); if(b == null) b = a + Math.max(15, Math.round((t.km || 0) * 2)); if(b < a) b += 1440; return {a, b, dr: t.dr, no: t.no || ""}; }).filter(Boolean).sort((p, q) => p.a - q.a);
+    const segs = x.segs.map(g => { const a = gMin(g.s), b0 = gMin(g.e), b = b0 == null ? a : (b0 < a ? b0 + 1440 : b0); return {...g, a, b, term: "none", on: false, dr: "", no: ""}; }).filter(g => g.a != null).sort((p, q) => p.a - q.a);
+    // a stretch is part of a trip when its middle falls in the trip (the tracker and the platform clocks differ a little)
+    segs.forEach(g => { const mid = (g.a + g.b) / 2, w = win.find(w => mid >= w.a - 1 && mid <= w.b + GPS_TOL); if(w){ g.term = "trip"; g.dr = w.dr; g.no = w.no; } });
+    // driving to the pick-up: the stretches just before each trip, nearest first, while within the ranges
+    win.forEach(w => { let km = 0; segs.filter(g => g.term === "none" && g.b <= w.a + GPS_TOL && g.b >= w.a - R.pickMin).sort((p, q) => q.a - p.a)
+      .forEach(g => { if(km + g.km > R.pickKm) return; km += g.km; g.term = "pickup"; g.dr = w.dr; g.no = w.no; }); });
+    segs.forEach(g => { if(g.term === "none" && g.km <= R.parkKm) g.term = "parking"; g.on = g.term !== "none"; });
     const off = segs.filter(s => !s.on), km = r2(sum(segs, s => s.km)), offKm = r2(sum(off, s => s.km)), tripKm = r2(sum(ts, t => t.km || 0));
     const drivers = [...new Set(ts.map(t => t.dr).filter(Boolean))];
     // who most likely drove the stretches off the platforms: the driver of the nearest trip / the car's assignment
@@ -113,7 +129,7 @@ function gpsCarView(A){
         <td>${x.flags.map(f => `<span class="pill ${/did not move|more than/.test(f) ? "warn" : "bad"}">${esc(f)}</span>`).join(" ") || '<span class="pill good">OK</span>'}</td><td><button class="btn sm" data-gpsopen="${esc(k)}">${open ? "Hide" : "Stretches"}</button></td></tr>
         ${open ? `<tr><td colspan="11"><div class="tbl"><table><thead><tr><th>From</th><th>To</th><th class="num">km</th><th>Start</th><th>End</th><th>On a trip</th></tr></thead><tbody>${x.segs.slice().sort((a, b) => a.s.localeCompare(b.s)).map(s => `<tr${s.on ? "" : ' style="background:var(--bad-bg, #fdecec)"'}><td>${esc(s.s)}</td><td>${esc(s.e)}</td><td class="num">${fmt(s.km)}</td><td class="small">${esc(s.from)}</td><td class="small">${esc(s.to)}</td><td class="small">${s.on ? esc(dName(s.dr)) : "<b>no trip</b>"}</td></tr>`).join("")}</tbody></table></div></td></tr>` : ""}`; }).join("") || `<tr><td colspan="11" class="muted">Nothing to check in this period.</td></tr>`}
     </tbody></table></div>${pg.bar}
-    <p class="small muted" style="margin-top:6px">A stretch counts as on a trip when a platform trip in that car started up to ${GPS_PRE} minutes after it began or ended up to ${GPS_POST} minutes before it ended (driving to the pick-up included). Off-platform km are given to the driver of the nearest trip that day, else to the car's assigned driver.</p></div>`;
+    <p class="small muted" style="margin-top:6px">Each stretch is Trip (during a platform trip), Pickup (driving to the next trip within the ranges on the GPS data tab), Parking (a short move) or No trip. Off-platform km are the No-trip km, given to the driver of the nearest trip that day, else to the car's assigned driver.</p></div>`;
 }
 /* ---------- suspicious trips: rides the driver may have taken off the apps ----------
    A driver can switch the platform app off, agree a fare with a rider and keep the cash – the platforms show nothing,
@@ -128,7 +144,7 @@ function gpsSuspects(A){
   const out = [];
   A.forEach(x => {
     const segs = x.segs.filter(g => g.a != null).sort((p, q) => p.a - q.a); if(!segs.length) return;
-    const on = segs.filter(g => g.on), firstOn = on.length ? on[0].a : null, lastOn = on.length ? Math.max(...on.map(g => g.b ?? g.a)) : null;
+    const on = segs.filter(g => g.term === "trip"), firstOn = on.length ? on[0].a : null, lastOn = on.length ? Math.max(...on.map(g => g.b ?? g.a)) : null;
     const J = []; let cur = null;
     segs.forEach(g => { if(g.on){ cur = null; return; }
       if(cur && g.a - cur.b <= 10){ cur.b = Math.max(cur.b, g.b ?? g.a); cur.km = r2(cur.km + g.km); cur.to = g.to; cur.e = g.e; cur.n++; }
@@ -194,19 +210,26 @@ async function susReport(drId){
 /* every stretch the tracker recorded in the period, with the trip it belongs to (or none) */
 function gpsSegs(A){ return A.flatMap(x => x.segs.map(g => ({...g, v: x.v, d: x.d}))).sort((a, b) => b.d.localeCompare(a.d) || vName(a.v).localeCompare(vName(b.v)) || String(a.s).localeCompare(String(b.s))); }
 function gpsDataView(A){
-  const all = gpsSegs(A), L = all.filter(g => (!S.gpsCar || g.v === S.gpsCar) && (!S.gpsDay || g.d === S.gpsDay) && (!S.gpsOff || !g.on)), pg = paged("gpsdata", L);
+  const all = gpsSegs(A); all.slice().sort((p, q) => (p.d + p.s).localeCompare(q.d + q.s) || vName(p.v).localeCompare(vName(q.v))).forEach((g, i) => g.sn = i + 1);
+  const L = all.filter(g => (!S.gpsCar || g.v === S.gpsCar) && (!S.gpsDay || g.d === S.gpsDay) && (!S.gpsOff || !g.on) && (!S.gpsTerm || g.term === S.gpsTerm)), pg = paged("gpsdata", L);
   const days = [...new Set(all.map(g => g.d))].sort(), byCar = {}; all.forEach(g => { const o = byCar[g.v] ||= {km: 0, off: 0, n: 0, days: new Set()}; o.km += g.km; o.n++; o.days.add(g.d); if(!g.on) o.off += g.km; });
   const dur = g => { const b = g.b == null ? g.a : g.b; return g.a == null ? "" : `${Math.floor((b - g.a) / 60)}:${String((b - g.a) % 60).padStart(2, "0")}`; };
   return `<div class="section"><p class="sub">Every stretch each car moved in ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} (GPS data from ${days.length ? esc(dmyS(days[0])) + " to " + esc(dmyS(days[days.length - 1])) : "—"}), with the platform trip it belongs to.</p>
     <details style="margin-bottom:10px"><summary class="small" style="cursor:pointer"><b>By car</b> – ${Object.keys(byCar).length} cars · ${fmt(sum(all, g => g.km))} km</summary><div class="tbl" style="margin-top:6px"><table><thead><tr><th>Car</th><th class="num">Days</th><th class="num">Stretches</th><th class="num">GPS km</th><th class="num">km without a trip</th></tr></thead><tbody>
       ${Object.entries(byCar).sort((a, b) => b[1].km - a[1].km).map(([v, o]) => `<tr><td>${esc(v ? vName(v) : "Not in Vehicles")}</td><td class="num">${o.days.size}</td><td class="num">${o.n}</td><td class="num">${fmt(o.km)}</td><td class="num">${fmt(o.off)}</td></tr>`).join("")}</tbody></table></div></details>
-    <div class="row" style="justify-content:space-between;margin-bottom:8px"><div class="row" style="gap:6px"><select id="gpsCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.gpsCar, "All cars")}</select><select id="gpsDay" aria-label="Day">${opts(Object.fromEntries(days.map(d => [d, dmyS(d)])), S.gpsDay, "All days")}</select><label class="small"><input type="checkbox" id="gpsOff" ${S.gpsOff ? "checked" : ""}> Only without a trip</label></div>${dlBtn("gpsdata")}</div>
-    <div class="tbl"><table><thead><tr><th>Date</th><th>Car</th><th>Start</th><th>End</th><th>Duration</th><th class="num">km</th><th>From</th><th>To</th><th>Trip</th></tr></thead><tbody>
-    ${pg.rows.map(g => `<tr${g.on ? "" : ' style="background:var(--bad-bg, #fdecec)"'}><td>${esc(dmyS(g.d))}</td><td>${esc(vName(g.v))}</td><td>${esc(g.s)}</td><td>${esc(g.e)}</td><td class="small">${dur(g)}</td><td class="num">${fmt(g.km)}</td><td class="small" style="white-space:normal">${esc(g.from)}</td><td class="small" style="white-space:normal">${esc(g.to)}</td><td class="small">${g.on ? esc(dName(g.dr)) : "<b>no trip</b>"}</td></tr>`).join("") || '<tr><td colspan="9" class="muted">No stretches match.</td></tr>'}
-    </tbody><tfoot><tr><td colspan="5">${L.length} stretch(es)</td><td class="num">${fmt(sum(L, g => g.km))}</td><td colspan="3"></td></tr></tfoot></table></div>${pg.bar}</div>`;
+    ${(() => { const R = gpsRange(), c = k => all.filter(g => g.term === k), t = k => fmt(sum(c(k), g => g.km)); return `<div class="kpis" style="margin-bottom:8px">${Object.entries(TERM_LABEL).map(([k, l]) => `<div class="kpi"><div class="l">${l}</div><div class="v ${k === "none" && c(k).length ? "neg" : ""}">${t(k)} km</div><div class="n">${c(k).length} stretch(es)</div></div>`).join("")}</div>
+      <form class="form" id="fGpsRange" style="margin-bottom:10px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))"><div class="f wide"><b>Ranges</b> <span class="small muted">– driving to a pick-up must end within the minutes before the trip and stay within the km; a move up to the parking km counts as parking.</span></div>
+        <div class="f"><label for="grm">Pickup – minutes before the trip</label><input id="grm" name="gpsPickupMin" type="number" step="1" min="1" value="${R.pickMin}"></div><div class="f"><label for="grk">Pickup – km at most</label><input id="grk" name="gpsPickupKm" type="number" step="0.5" min="0" value="${R.pickKm}"></div>
+        <div class="f"><label for="grp">Parking – km at most</label><input id="grp" name="gpsParkKm" type="number" step="0.5" min="0" value="${R.parkKm}"></div><div class="f" style="align-self:end"><button class="btn" type="submit" ${S.canWrite ? "" : "disabled"}>Save ranges</button></div></form>`; })()}
+    <div class="row" style="justify-content:space-between;margin-bottom:8px"><div class="row" style="gap:6px"><select id="gpsTerm" aria-label="Term">${opts(TERM_LABEL, S.gpsTerm, "All terms")}</select><select id="gpsCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.gpsCar, "All cars")}</select><select id="gpsDay" aria-label="Day">${opts(Object.fromEntries(days.map(d => [d, dmyS(d)])), S.gpsDay, "All days")}</select></div>${dlBtn("gpsdata")}</div>
+    <div class="tbl"><table><thead><tr><th>S.No</th><th>Date</th><th>Car</th><th>Start</th><th>End</th><th>Duration</th><th class="num">km</th><th>From</th><th>To</th><th>Term</th><th>Trip No</th><th>Driver</th></tr></thead><tbody>
+    ${pg.rows.map(g => `<tr${g.term === "none" ? ' style="background:var(--bad-bg, #fdecec)"' : ""}><td class="mono">${g.sn}</td><td>${esc(dmyS(g.d))}</td><td>${esc(vName(g.v))}</td><td>${esc(g.s)}</td><td>${esc(g.e)}</td><td class="small">${dur(g)}</td><td class="num">${fmt(g.km)}</td><td class="small" style="white-space:normal">${esc(g.from)}</td><td class="small" style="white-space:normal">${esc(g.to)}</td>
+      <td><span class="pill ${g.term === "trip" ? "good" : g.term === "pickup" ? "info" : g.term === "parking" ? "" : "bad"}">${TERM_LABEL[g.term]}</span></td><td class="mono">${g.no ? `<button class="btn sm ghost" data-gototrip="${g.no}" style="padding:1px 6px">${g.no}</button>` : ""}</td><td class="small">${g.dr ? esc(dName(g.dr)) : ""}</td></tr>`).join("") || '<tr><td colspan="12" class="muted">No stretches match.</td></tr>'}
+    </tbody><tfoot><tr><td colspan="6">${L.length} stretch(es)</td><td class="num">${fmt(sum(L, g => g.km))}</td><td colspan="5"></td></tr></tfoot></table></div>${pg.bar}</div>`;
 }
-DL.gpsdata = () => { const A = S.gps && S.gps.rows ? gpsAudit() : [], L = gpsSegs(A).filter(g => (!S.gpsCar || g.v === S.gpsCar) && (!S.gpsDay || g.d === S.gpsDay) && (!S.gpsOff || !g.on));
-  return [`gps_data_${S.from}_${S.to}.csv`, [["Date", "Car", "Start", "End", "km", "From", "To", "Trip (driver)"], ...L.map(g => [g.d, vName(g.v), g.s, g.e, g.km, g.from, g.to, g.on ? dName(g.dr) : "no trip"])]]; };
+DL.gpsdata = () => { const A = S.gps && S.gps.rows ? gpsAudit() : [], all = gpsSegs(A); all.slice().sort((p, q) => (p.d + p.s).localeCompare(q.d + q.s) || vName(p.v).localeCompare(vName(q.v))).forEach((g, i) => g.sn = i + 1);
+  const L = all.filter(g => (!S.gpsCar || g.v === S.gpsCar) && (!S.gpsDay || g.d === S.gpsDay) && (!S.gpsTerm || g.term === S.gpsTerm));
+  return [`gps_data_${S.from}_${S.to}.csv`, [["S.No", "Date", "Car", "Start", "End", "km", "From", "To", "Term", "Trip No", "Driver"], ...L.map(g => [g.sn, g.d, vName(g.v), g.s, g.e, g.km, g.from, g.to, TERM_LABEL[g.term], g.no || "", g.dr ? dName(g.dr) : ""])]]; };
 function gpsDriverView(A){
   const by = {}; const add = (d, k, v) => { const o = by[d] ||= {d, days: new Set(), tripKm: 0, offKm: 0, flags: 0}; o[k] += v; };
   A.forEach(x => { x.drivers.forEach(d => { by[d] ||= {d, days: new Set(), tripKm: 0, offKm: 0, flags: 0}; by[d].days.add(x.d); }); const tk = {}; x.segs.filter(s => s.on && s.dr).forEach(s => tk[s.dr] = (tk[s.dr] || 0) + s.km); Object.entries(tk).forEach(([d, km]) => add(d, "tripKm", km));
@@ -235,6 +258,7 @@ DL.gps = () => { const A = S.gps && S.gps.rows ? gpsAudit() : [];
 document.addEventListener("click", async ev => {
   const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
   if(t.dataset.gpstab){ S.gpsTab = t.dataset.gpstab; render(); return; }
+  if(t.dataset.gototrip){ S.view = "trips"; S.tripFilter = {...S.tripFilter, q: "#" + t.dataset.gototrip, driver: "", vehicle: "", platform: "", settle: ""}; render(); window.scrollTo(0, 0); return; }
   if(t.dataset.susrpt != null){ if(!t.dataset.susrpt){ toast("Choose a driver first."); return; } t.disabled = true; await susReport(t.dataset.susrpt); t.disabled = false; return; }
   if(t.dataset.gpsopen){ S.gpsOpen = S.gpsOpen === t.dataset.gpsopen ? "" : t.dataset.gpsopen; render(); return; }
   if(t.dataset.gpscancel){ S.gpsImp = null; render(); return; }
@@ -246,6 +270,7 @@ document.addEventListener("change", ev => {
   if(t.id === "gpsFlag"){ S.gpsFlag = t.checked; render(); }
   if(t.id === "gpsCar"){ S.gpsCar = t.value; render(); }
   if(t.id === "gpsDay"){ S.gpsDay = t.value; render(); }
+  if(t.id === "gpsTerm"){ S.gpsTerm = t.value; render(); }
   if(t.id === "susLevel"){ S.susLevel = t.value === "all" ? "" : t.value; render(); }
   if(t.id === "susStatus"){ S.susStatus = t.value; render(); }
   if(t.id === "susDrv"){ S.susDrv = t.value; render(); }
@@ -253,6 +278,8 @@ document.addEventListener("change", ev => {
   if(t.dataset && t.dataset.susnote){ const x = gpsSuspects(gpsAudit()).find(y => y.id === t.dataset.susnote); susSave(t.dataset.susnote, {note: t.value.trim(), dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Note saved."); }); }
   if(t.id === "gpsOff"){ S.gpsOff = t.checked; render(); }
 });
+document.addEventListener("submit", async ev => { if(ev.target.id !== "fGpsRange") return; ev.preventDefault(); const d = Object.fromEntries(new FormData(ev.target).entries());
+  if(await writeOk(S.db.doc("settings/main").set({...S.settings, gpsPickupMin: num(d.gpsPickupMin), gpsPickupKm: num(d.gpsPickupKm), gpsParkKm: num(d.gpsParkKm)}))){ toast("Ranges saved."); setTimeout(render, 300); } });
 ["dragover", "drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("label[for=gpsFile]"); if(!d) return; ev.preventDefault(); ev.stopPropagation(); if(n === "drop" && ev.dataTransfer.files[0]) gpsRead(ev.dataTransfer.files[0]).catch(e => toast("Could not read the file – " + e.message)); }, true));
 /* one driver's vehicle-usage audit for the period: the car-days he drove (his trips, or off-platform km given to him) */
 function gpsDriver(id){
