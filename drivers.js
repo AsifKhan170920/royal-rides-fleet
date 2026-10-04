@@ -3,7 +3,7 @@
    (one record per driver and period). Finalised periods cannot overlap, so a period is paid once.
    Accounts: loans, salary advances, visa and other amounts recovered from the driver, 100% his share
    unless a lower share is entered (the company bears the rest as an expense). */
-const DRV_TABS = {trips:"Trip history", tx:"Transactions", salary:"Salary", perf:"Performance", accts:"Accounts"};
+const DRV_TABS = {trips:"Trip history", tx:"Transactions", salary:"Salary", perf:"Performance", rms:"RMS (GPS)", accts:"Accounts"};
 const histKey = () => setting("ledgerStart", "2026-09-01") + "|" + S.to;
 function historyReady(){
   if(!S.db) return false;
@@ -15,7 +15,7 @@ function driverDetail(id){
   const d = S.drivers[id], tab = DRV_TABS[S.drvTab] ? S.drvTab : "trips", today = iso(new Date());
   const car = vehAt(id, today), m = machineAt(id, today), tm = termAt(termList(d, DRV_TERMS), today);
   S.ledgerDriver = id; S.hdrBtns = "";
-  const body = tab === "trips" ? dTrips(id) : tab === "tx" ? dTx(id) : tab === "salary" ? dSalary(id) : tab === "perf" ? dPerf(id) : dAccts(id);
+  const body = tab === "trips" ? dTrips(id) : tab === "tx" ? dTx(id) : tab === "salary" ? dSalary(id) : tab === "perf" ? dPerf(id) : tab === "rms" ? dRms(id) : dAccts(id);
   return `<div class="section"><div class="head"><div><h2>${esc(d.name)}${d.code ? ` <span class="mono small muted">${esc(d.code)}</span>` : ""}</h2>
     <p class="sub">${esc(drvTermTextFull(tm))} · Car ${car ? esc(vName(car)) : "—"} · Machine ${m ? esc(m.name || m.tid) : "—"}${d.phone ? " · " + esc(d.phone) : ""}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button>${S.hdrBtns || ""}<button class="btn" data-edit="driver" data-id="${esc(id)}">Edit driver</button><button class="btn" data-offerfor="${esc(id)}">Offer letter</button></div></div>
@@ -296,7 +296,7 @@ function salaryRows(M){
   S6.push(L("Less machine payments (card)", -x.card), L("Cash that should be with the driver", M.expected, "t"), L("Less handed over / spent for the company", -M.handed),
     L(M.inHand == null ? "Less cash in hand with the driver (not counted)" : "Less cash in hand with the driver (counted)", M.inHand == null ? null : -M.inHand),
     L(`Difference – ${M.inHand == null ? "still to be accounted for" : Math.abs(M.diff) < 0.005 ? "fully accounted for" : M.diff > 0 ? "shortage" : "excess"}`, M.diff, "g"));
-  return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6]];
+  return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6], ["7", "Vehicle usage audit (GPS)", auditRows(M.id)]];
 }
 /* Performance targets: per day worked (trips, net earnings, km), days worked per month and completion %.
    The general targets in Settings apply to every driver, unless the driver has his own (driver form → "Own targets").
@@ -376,9 +376,13 @@ function salaryHtml(M, print, locked){
     "4": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="penAmt" placeholder="AED" style="width:100px" aria-label="Deduction amount (AED)"><input id="penWhy" placeholder="Reason (e.g. RTA violation, complaint)" style="flex:1;min-width:160px" aria-label="Reason"><button class="btn sm" data-penadd="${esc(M.id)}">Deduct from salary</button></div>`,
     "5": recovTbl(M.id, locked),
     "6": locked ? "" : `<div class="row" style="gap:6px;margin-top:6px"><input type="number" step="0.01" id="cashDecl" placeholder="${r2(M.expected - M.handed)}" value="${M.inHand == null ? "" : M.inHand}" style="width:120px" aria-label="Cash in hand"><button class="btn sm" data-cashset="${esc(M.id)}">Save cash in hand (counted)</button></div>`};
-  return perf + salaryRows(M).map(([n, title, rows]) => `<h3 style="margin:16px 0 6px">${n}. ${title}</h3><div class="tbl"><table><tbody>
-    ${rows.map(r => `<tr${r.kind ? ' class="tot"' : ""}><td style="white-space:normal">${r.kind ? "<b>" + r.label + "</b>" : r.label}${r.pen && !locked ? ` <button class="btn sm ghost" data-pendel="${esc(r.pen)}" aria-label="Remove">✕</button>` : ""}</td><td class="num">${r.v == null ? "" : r.kind ? "<b>" + aed(r.v) + "</b>" : aed(r.v)}</td></tr>`).join("")}
-  </tbody></table></div>${forms[n] || ""}`).join("");
+  // two sections side by side (Earnings | Direct expenditure, Salary calculation | Payable, Cash | Audit) – half the paper
+  const val = r => r.v == null ? "" : r.int ? String(r.v) : r.num ? (r.kind ? "<b>" + fmt(r.v) + "</b>" : fmt(r.v)) : r.kind ? "<b>" + aed(r.v) + "</b>" : aed(r.v);
+  const sec = ([n, title, rows]) => `<div><h3 style="margin:14px 0 6px">${n}. ${title}</h3><div class="tbl"><table><tbody>
+    ${rows.map(r => `<tr${r.kind ? ' class="tot"' : ""}><td style="white-space:normal">${r.kind ? "<b>" + r.label + "</b>" : r.label}${r.pen && !locked ? ` <button class="btn sm ghost" data-pendel="${esc(r.pen)}" aria-label="Remove">✕</button>` : ""}</td><td class="num">${val(r)}</td></tr>`).join("")}
+  </tbody></table></div>${forms[n] || ""}</div>`;
+  const R = salaryRows(M), pairs = []; for(let i = 0; i < R.length; i += 2) pairs.push(R.slice(i, i + 2));
+  return perf + pairs.map(p => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;align-items:start">${p.map(sec).join("")}</div>`).join("");
 }
 // the printed statement: its own clean layout (letterhead, details, bordered sections, signatures)
 const SAL_CSS = `.sp{font:8.6pt/1.3 "Segoe UI",Arial,sans-serif;color:#111;padding:7mm 11mm 5mm;width:210mm;box-sizing:border-box;background:#fff}
@@ -397,7 +401,8 @@ const SAL_CSS = `.sp{font:8.6pt/1.3 "Segoe UI",Arial,sans-serif;color:#111;paddi
 .sp .sub{color:#666;font-size:7.5pt}.sp .neg{color:#111}
 .sp .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:12px;page-break-inside:avoid}
 .sp .sigs .who{font-weight:700;color:#16213a}.sp .sigs .line{border-bottom:1px solid #333;height:30px;margin:2px 0 3px}.sp .sigs .cap{font-size:8pt;color:#555}
-.sp .foot{margin-top:10px;font-size:7pt;color:#888;text-align:center}`;
+.sp .foot{margin-top:10px;font-size:7pt;color:#888;text-align:center}
+.sp .two{display:grid;grid-template-columns:1fr 1fr;gap:6px;align-items:start;page-break-inside:avoid}.sp .two table{margin:0 0 4px}.sp .two td.n{width:30%}`;
 function salaryPrintHtml(M, d, fin){
   const s = S.settings, co = s.company || "Royal Rides Limousine LLC", tm = M.tm, today = iso(new Date());
   const addr = [s.address, s.licence ? "Trade licence " + s.licence : "", s.trn ? "TRN " + s.trn : "", s.phone, s.email].filter(Boolean).join(" · ");
@@ -410,7 +415,8 @@ function salaryPrintHtml(M, d, fin){
     <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
   <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
   ${targetTable(M.id, M.x, M.perf.completion, true)}
-  ${salaryRows(M).map(([n, title, rows]) => `<table><tr class="sec"><th colspan="2">${n}. ${title}</th></tr>${rows.map(r => `<tr${r.kind ? ` class="${r.kind}"` : ""}><td>${r.label}</td><td class="n">${amt(r.v)}</td></tr>`).join("")}</table>`).join("")}
+  ${(() => { const R = salaryRows(M), tb = ([n, title, rows]) => `<table><tr class="sec"><th colspan="2">${n}. ${title}</th></tr>${rows.map(r => `<tr${r.kind ? ` class="${r.kind}"` : ""}><td>${r.label}</td><td class="n">${r.num ? (r.v == null ? "" : r.int ? String(r.v) : fmt(r.v)) : amt(r.v)}</td></tr>`).join("")}</table>`, out = [];
+    for(let i = 0; i < R.length; i += 2) out.push(`<div class="two">${R.slice(i, i + 2).map(tb).join("")}</div>`); return out.join(""); })()}
   <div class="sigs"><div><div class="who">For Driver</div><div class="line"></div><div>${esc(d.name || "")}</div><div class="cap">Signature & date</div></div>
     <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
   </div>`;
@@ -420,6 +426,7 @@ async function printSalary(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
   const fin = Object.values(S.payroll).find(p => p.driverId === id && p.from === S.from && p.to === S.to);
+  if(window.GPS) await GPS.ensure();   // the vehicle-usage audit on the statement
   const x = selX(id, compute().D[id]) || {}, late = lateFor(id, fin), M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
   box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, d, fin)}`; document.body.appendChild(box);
@@ -720,6 +727,33 @@ document.addEventListener("submit", async ev => {
   }
   S.tripEdit = null; await loadPeriod(); render(); toast("Trip saved.");
 });
+
+/* ---------- RMS: the tracker's data for the driver – vehicle-usage audit ----------
+   The car-days of the period he drove: GPS km on his platform trips, km driven off the platforms that are given to
+   him (nearest trip / car assignment), and the days to check. The same summary goes on the salary statement. */
+function dRms(id){
+  if(!window.GPS) return '<p class="sub">The GPS module is not loaded.</p>';
+  if(!GPS.ready()){ if(!(S.gps && S.gps.loading)) GPS.load(); return '<p class="sub">Loading the GPS data…</p>'; }
+  const A = GPS.driver(id);
+  if(!S.gps.rows.length) return `<div class="empty"><b>No GPS data for this period</b>Import the tracker's Activity report on GPS tracking → Import.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" data-nav="gps">GPS tracking</button></div></div>`;
+  return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Days with the car</div><div class="v">${A.days}</div></div><div class="kpi"><div class="l">GPS km on his trips</div><div class="v">${fmt(A.onKm)}</div></div>
+      <div class="kpi"><div class="l">Off-platform km</div><div class="v ${A.pct >= 35 ? "neg" : ""}">${fmt(A.offKm)}</div><div class="n">${A.pct}% of his km</div></div><div class="kpi"><div class="l">Days to check</div><div class="v">${A.flagged}</div></div></div>
+    <div class="row" style="justify-content:flex-end;margin-bottom:6px">${dlBtn("rms", id)}</div>
+    <div class="tbl"><table><thead><tr><th>Date</th><th>Car</th><th class="num">Trips</th><th class="num">GPS km (car)</th><th class="num">km on his trips</th><th class="num">Off-platform km (his)</th><th>Other drivers in the car</th><th>Check</th></tr></thead><tbody>
+    ${A.rows.map(r => `<tr><td>${esc(dmyS(r.d))}</td><td>${esc(vName(r.v))}</td><td class="num">${r.trips || ""}</td><td class="num">${fmt(r.gpsKm)}</td><td class="num">${fmt(r.onKm)}</td><td class="num ${r.offKm >= 25 ? "neg" : ""}">${fmt(r.offKm)}</td><td class="small">${esc(r.others.map(dName).join(", ") || "—")}</td><td>${r.flags.map(f => `<span class="pill ${/did not move|more than/.test(f) ? "warn" : "bad"}">${esc(f)}</span>`).join(" ") || '<span class="pill good">OK</span>'}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No car-days for this driver in the GPS data of this period.</td></tr>'}
+    </tbody></table></div><p class="small muted" style="margin-top:6px">From the GPS tracking audit: off-platform km are the stretches the car moved with no platform trip going on, given to the driver of the nearest trip that day, else to the car's assigned driver. This summary is printed on the salary statement.</p>`;
+}
+DL.rms = id => { const A = window.GPS && GPS.ready() ? GPS.driver(id) : {rows: []};
+  return [`vehicle_usage_audit_${norm(dName(id))}_${S.from}_${S.to}.csv`, [["Date", "Car", "Trips", "GPS km (car)", "km on his trips", "Off-platform km (his)", "Other drivers in the car", "Check"], ...A.rows.map(r => [r.d, vName(r.v), r.trips, r.gpsKm, r.onKm, r.offKm, r.others.map(dName).join(", "), r.flags.join("; ")])]]; };
+// the audit as a section of the salary statement (rows like the others)
+function auditRows(id){
+  const A = window.GPS && GPS.ready() ? GPS.driver(id) : null, L = (label, v, kind = "") => ({label, v, kind, num: true});
+  if(!A || !S.gps.rows.length) return [{label: '<span class="sub">No GPS data imported for this period</span>', v: null}];
+  const out = [{...L("Days with the car (GPS)", A.days), int: true}, L("GPS km on his platform trips", A.onKm), L(`Off-platform km given to him (${A.pct}%)`, A.offKm, A.pct >= 35 ? "t" : "")];
+  A.rows.filter(r => r.flags.length).slice(0, 6).forEach(r => out.push({label: `<span class="sub">${esc(dmyS(r.d))} · ${esc(vName(r.v))} – ${esc(r.flags.join(", "))}${r.offKm ? " · " + fmt(r.offKm) + " km off-platform" : ""}</span>`, v: null}));
+  if(A.flagged > 6) out.push({label: `<span class="sub">… and ${A.flagged - 6} more day(s) – see RMS (GPS)</span>`, v: null});
+  return out;
+}
 
 /* ---------- duplicate drivers: find and merge ----------
    The same person can come in from Uber, Bolt, Yango and the RTA file under different spellings. A merge moves every

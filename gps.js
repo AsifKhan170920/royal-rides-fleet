@@ -151,5 +151,15 @@ document.addEventListener("change", ev => {
   if(t.id === "gpsCar"){ S.gpsCar = t.value; render(); }
 });
 ["dragover", "drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("label[for=gpsFile]"); if(!d) return; ev.preventDefault(); ev.stopPropagation(); if(n === "drop" && ev.dataTransfer.files[0]) gpsRead(ev.dataTransfer.files[0]).catch(e => toast("Could not read the file – " + e.message)); }, true));
+/* one driver's vehicle-usage audit for the period: the car-days he drove (his trips, or off-platform km given to him) */
+function gpsDriver(id){
+  if(!S.gps || !S.gps.rows) return null;
+  const rows = gpsAudit().map(x => { const on = r2(sum(x.segs.filter(s => s.on && s.dr === id), s => s.km)), off = r2(x.offBy[id] || 0), mine = x.drivers.includes(id) || off > 0;
+    return mine ? {d: x.d, v: x.v, trips: x.drivers.includes(id) ? x.trips : 0, gpsKm: x.km, onKm: on, offKm: off, flags: x.flags.filter(f => f !== "Trip km more than GPS km" || x.drivers.includes(id)), others: x.drivers.filter(d => d !== id)} : null; }).filter(Boolean);
+  const onKm = r2(sum(rows, r => r.onKm)), offKm = r2(sum(rows, r => r.offKm));
+  return {rows, days: rows.length, onKm, offKm, pct: onKm + offKm ? Math.round(100 * offKm / (onKm + offKm)) : 0, flagged: rows.filter(r => r.flags.length).length};
+}
+const gpsReady = () => S.gps && S.gps.rows && S.gps.key === S.from + "|" + S.to;
+async function gpsEnsure(){ if(!gpsReady()) await gpsLoad(); return gpsReady(); }
 Object.assign(window.BOOK_VIEWS = window.BOOK_VIEWS || {}, {gps: vGps});
-window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad};
+window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure};
