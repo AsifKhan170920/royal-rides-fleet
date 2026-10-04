@@ -242,6 +242,13 @@ function preadDate(v){
   if(typeof v === "number" || /^\d{10,13}$/.test(String(v || ""))){ const n = +v, d = new Date(n < 1e12 ? n * 1000 : n); return {date: iso(d), time: d.toTimeString().slice(0, 5)}; }
   return UberParse.parseTripDate(v);
 }
+// platforms send a short name ("Ahsan Khalid"), the RTA record has the full one ("Ahsan Khalid Muhammad Khalid"):
+// same first word, every word of the short name in the full one, only one such driver, not yet linked on this platform
+function driverByShortName(name, pl){
+  const w = x => String(x || "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean), nw = w(name); if(nw.length < 2) return "";
+  const c = Object.values(S.drivers).filter(d => { const dw = w(d.name); return dw[0] === nw[0] && nw.every(x => dw.includes(x)) && !((d.platformIds || {})[pl]); });
+  return c.length === 1 ? c[0].id : "";
+}
 async function browserSync(pl, days){
   const p = S.platforms[pl], api = (p || {}).api || {}, F = api.fields || {};
   const to = new Date(), from = new Date(to.getTime() - days * 86400000), fromTs = Math.floor(new Date(iso(from) + "T00:00:00").getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
@@ -258,7 +265,7 @@ async function browserSync(pl, days){
   const byId = {}, byName = {}; Object.values(S.drivers).forEach(d => { if((d.platformIds || {})[pl]) byId[d.platformIds[pl]] = d.id; byName[norm(d.name)] = d.id; });
   const plates = {}; Object.values(S.vehicles).forEach(v => plates[norm(v.plate)] = v.id);
   for(const t of trips){
-    let id = (t.uuid && byId[t.uuid]) || (t.name && byName[norm(t.name)]);
+    let id = (t.uuid && byId[t.uuid]) || (t.name && byName[norm(t.name)]) || (t.name && driverByShortName(t.name, pl));
     if(!id){ id = "d-" + (norm(t.name).slice(0, 20) || norm(t.uuid).slice(0, 12) || uid()); const rec = {name: t.name || "Unnamed driver", platformIds: t.uuid ? {[pl]: t.uuid} : {}, payModel: "", commissionPct: 0, active: true, createdFromImport: true}; await writeOk(S.db.doc("drivers/" + id).set(rec)); S.drivers[id] = {id, ...rec}; }
     else if(t.uuid && !((S.drivers[id] || {}).platformIds || {})[pl]){ const {id: _, ...b} = S.drivers[id]; const rec = {...b, platformIds: {...(b.platformIds || {}), [pl]: t.uuid}}; await writeOk(S.db.doc("drivers/" + id).set(rec)); S.drivers[id] = {id, ...rec}; }
     byId[t.uuid] = id; byName[norm(t.name)] = id; t.dr = id;
