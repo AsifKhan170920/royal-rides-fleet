@@ -2,7 +2,7 @@
 <title>Royal Rides Fleet Ledger</title>
 <!-- sign-in and cloud data come from the Fair Tax portal (same Firebase project) -->
 <script src="https://asifkhan170920.github.io/audit-desk/shared/cloud.js?v=9"></script>
-<script src="uber-parse.js?v=3"></script>
+<script src="uber-parse.js?v=5"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
@@ -173,7 +173,7 @@ const S = {
   importState:null, tripFilter:{q:"",driver:"",vehicle:"",platform:"",settle:""}, edit:null
 };
 const VIEWS = [
-  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["import","Import trip data"],["reminders","Reminders & expiries"],
+  ["Overview",null],["dashboard","Dashboard"],["trips","Trips"],["reminders","Reminders & expiries"],
   ["People & cars",null],["drivers","Drivers"],["vehicles","Vehicles"],["investors","Investors"],["platforms","Platforms & contracts"],
   ["Employees",null],["employees","Employees"],["emppayroll","Employee payroll"],
   ["Payment machines",null],["posupload","Upload statements"],["terminals","Machines"],
@@ -425,7 +425,7 @@ async function loadPeriod(){
     const is = await S.db.collection("tripinfo").where("date",">=",addDays(S.from,-1)).where("date","<=",addDays(S.to,1)).get();
     const info = {}, acts = [];
     is.docs.forEach(d => { const rows = (d.data()||{}).rows || {}; Object.entries(rows).forEach(([tr,r]) => { info[tr] = r; if(r.d >= S.from && r.d <= S.to) acts.push({tr, ...r}); }); });
-    trips.forEach(t => { const i = t.tr && info[t.tr]; if(i){ t.p = t.p || i.p; t.km = t.km || i.km; t.st = i.st; t.prod = i.prod; t.pay = i.pay; } });
+    trips.forEach(t => { const i = t.tr && info[t.tr]; if(i){ t.p = t.p || i.p; t.km = t.km || i.km; t.st = i.st; t.prod = i.prod; t.pay = i.pay; if(i.t) t.ts = i.t; if(i.te) t.te = t.te || i.te; } });
     S.trips = trips; S.activity = acts;
     const cs = await S.db.collection("cardtx").where("date",">=",S.from).where("date","<=",S.to).get();
     const cards = []; cs.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([id,r]) => cards.push({id, ...r}))); S.cardtx = cards;
@@ -881,7 +881,7 @@ function vDashboard(){
   const needTerms = Object.values(S.drivers).filter(d => !d.payModel || (["commission","salary_comm"].includes(d.payModel) && !num(d.commissionPct) ) ).length;
   const noCar = Object.values(S.vehicles).filter(v => !v.investorId && v.invModel !== "none").length;
   const topV = Object.values(C.V).filter(v=>v.n).sort((a,b)=>b.company-a.company);
-  if(!T.length && !Object.keys(S.drivers).length) return `<div class="empty"><b>No trips for this period yet</b>Download the <i>Payments Transaction</i> report from Uber Fleet Hub, then drop it on the Import page. Each trip becomes one row here.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" data-nav="import">Import Uber data</button></div></div>`;
+  if(!T.length && !Object.keys(S.drivers).length) return `<div class="empty"><b>No trips for this period yet</b>Download the <i>Payments Transaction</i> report from Uber Fleet Hub, then drop it on the Import page. Each trip becomes one row here.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" data-pltimport="uber">Import Uber data</button></div></div>`;
   return `
   <div class="kpis">
     <div class="kpi"><div class="l">Gross fares</div><div class="v">${fmt(fare)}</div><div class="n">${nTrips} trips · AED</div></div>
@@ -916,7 +916,7 @@ function vTrips(){
   const f = S.tripFilter; const q = f.q.toLowerCase();
   const rows = S.trips.filter(t => (t.tr || t.f || t.sf || t.tp || t.c || t.rf || t.oe) && (!f.driver || t.dr === f.driver) && (!f.vehicle || vehicleForTrip(t) === f.vehicle) && (!f.platform || plOf(t) === f.platform) && (!f.settle || !window.settleStatus || (settleStatus(t).ok ? "yes" : "no") === f.settle) && (!q || (t.id+" "+dName(t.dr)+" "+(t.p||"")).toLowerCase().includes(q)));
   rows.sort(newest);
-  const pls = [...new Set(S.trips.map(plOf))], multi = pls.length > 1;
+  const pls = [...new Set([...S.trips.map(plOf), ...Object.keys(S.platforms)])], multi = true;
   const pg = paged("trips", rows), shown = pg.rows;
   return `${window.tripEditor ? tripEditor() : ""}<div class="section"><div class="head"><div><h2>Trips</h2><p class="sub">Every platform trip in the period, one row each. Driver = whoever was logged in to the driver app for that trip; car = the plate on that trip. Net = fare − platform fee − VAT on fee. Cash = amount the driver collected from the rider.</p></div>
     <div class="row">${dlBtn("trips")}<input id="tq" placeholder="Search trip, driver, plate" value="${esc(f.q)}" aria-label="Search trips">
@@ -924,9 +924,9 @@ function vTrips(){
     <select id="tdrv" aria-label="Driver filter">${listOpts(S.drivers, d=>d.name||d.id, f.driver, "All drivers")}</select>
     <select id="tveh" aria-label="Car filter">${listOpts(S.vehicles, v=>vName(v.id), f.vehicle, "All cars")}</select>
     <select id="tset" aria-label="Settlement filter">${opts({yes:"Settled", no:"Unsettled"}, f.settle, "Settled & unsettled")}</select></div></div>
-  ${rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th>${multi?"<th>Platform</th>":""}<th>Driver</th><th>Car</th><th class="num">Fare</th><th class="num">Fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Settlement</th><th>Trip ID</th><th></th></tr></thead><tbody>
-  ${shown.map(t=>{ const vid = vehicleForTrip(t)||"unassigned", own = vehAt(t.dr, t.d); return `<tr><td>${esc(t.d)}</td><td>${esc(t.t||"")}</td>${multi?`<td>${esc(pName(plOf(t)))}</td>`:""}<td>${esc(dName(t.dr))}</td><td>${esc(vName(vid))}${own && t.p && vid !== own && vid !== "unassigned" ? ' <span class="pill brass" title="Not this driver\'s assigned car">other car</span>' : ""}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc(t.st ? t.st.replace(/_/g," ") : (t.tr ? "" : "adjustment"))}${t.prod ? ` · ${esc(t.prod)}` : ""}</td><td>${window.settleBadge ? settleBadge(t) : ""}</td><td class="mono small muted">${esc(String(t.tr||t.id).slice(0,13))}</td><td>${window.tripBtns ? tripBtns(t) : ""}</td></tr>`; }).join("")}
-  </tbody><tfoot><tr><td colspan="${multi?5:4}">${new Set(rows.map(t=>t.tr||t.id)).size} trips (${rows.length} rows)</td><td class="num">${fmt(sum(rows,t=>t.f))}</td><td class="num">${fmt(sum(rows,t=>t.sf))}</td><td class="num">${fmt(sum(rows,t=>t.tx))}</td><td class="num">${fmt(sum(rows,t=>t.tp))}</td><td class="num">${fmt(sum(rows,t=>t.rf))}</td><td class="num">${fmt(sum(rows,t=>t.c))}</td><td class="num">${fmt(sum(rows,t=>(t.f||0)-(t.sf||0)-(t.tx||0)))}</td><td class="num">${fmt(sum(rows,t=>t.km))}</td><td></td><td class="small">${window.settleStatus ? rows.filter(t => settleStatus(t).ok).length + " settled · " + rows.filter(t => (t.f||t.sf||t.tx||t.tp||t.c||t.rf) && !settleStatus(t).ok).length + " unsettled" : ""}</td><td></td><td></td></tr></tfoot></table></div>${pg.bar}
+  ${rows.length ? `<div class="tbl"><table><thead><tr><th>Date</th><th>Start</th><th>End</th>${multi?"<th>Platform</th>":""}<th>Driver</th><th>Car</th><th class="num">Fare</th><th class="num">Fee</th><th class="num">VAT</th><th class="num">Tip</th><th class="num">Refunds</th><th class="num">Cash</th><th class="num">Net</th><th class="num">Km</th><th>Status</th><th>Settlement</th><th>Trip ID</th><th></th></tr></thead><tbody>
+  ${shown.map(t=>{ const vid = vehicleForTrip(t)||"unassigned", own = vehAt(t.dr, t.d); return `<tr><td>${esc(t.d)}</td><td>${esc(t.ts||t.t||"")}</td><td>${esc(t.te||"")}</td>${multi?`<td>${esc(pName(plOf(t)))}</td>`:""}<td>${esc(dName(t.dr))}</td><td>${esc(vName(vid))}${own && t.p && vid !== own && vid !== "unassigned" ? ' <span class="pill brass" title="Not this driver\'s assigned car">other car</span>' : ""}</td><td class="num">${fmt(t.f)}</td><td class="num">${fmt(t.sf)}</td><td class="num">${fmt(t.tx)}</td><td class="num">${fmt(t.tp)}</td><td class="num">${fmt(t.rf)}</td><td class="num">${fmt(t.c)}</td><td class="num">${fmt((t.f||0)-(t.sf||0)-(t.tx||0))}</td><td class="num">${t.km ? fmt(t.km) : ""}</td><td class="small">${esc(t.st ? t.st.replace(/_/g," ") : (t.tr ? "" : "adjustment"))}${t.prod ? ` · ${esc(t.prod)}` : ""}</td><td>${window.settleBadge ? settleBadge(t) : ""}</td><td class="mono small muted">${esc(String(t.tr||t.id).slice(0,13))}</td><td>${window.tripBtns ? tripBtns(t) : ""}</td></tr>`; }).join("")}
+  </tbody><tfoot><tr><td colspan="${multi?6:5}">${new Set(rows.map(t=>t.tr||t.id)).size} trips (${rows.length} rows)</td><td class="num">${fmt(sum(rows,t=>t.f))}</td><td class="num">${fmt(sum(rows,t=>t.sf))}</td><td class="num">${fmt(sum(rows,t=>t.tx))}</td><td class="num">${fmt(sum(rows,t=>t.tp))}</td><td class="num">${fmt(sum(rows,t=>t.rf))}</td><td class="num">${fmt(sum(rows,t=>t.c))}</td><td class="num">${fmt(sum(rows,t=>(t.f||0)-(t.sf||0)-(t.tx||0)))}</td><td class="num">${fmt(sum(rows,t=>t.km))}</td><td></td><td class="small">${window.settleStatus ? rows.filter(t => settleStatus(t).ok).length + " settled · " + rows.filter(t => (t.f||t.sf||t.tx||t.tp||t.c||t.rf) && !settleStatus(t).ok).length + " unsettled" : ""}</td><td></td><td></td></tr></tfoot></table></div>${pg.bar}
   ${(()=>{ const po = S.trips.filter(t=>t.po); const a = S.activity||[]; const canc = a.filter(x=>/cancel/.test(x.st||"")).length;
     return `<p class="small muted" style="margin-top:8px">${a.length ? `Trip activity: ${a.length} requests, ${a.filter(x=>x.st==="completed").length} completed, ${canc} cancelled, ${fmt(sum(a,x=>x.km))} km. ` : "No Trip activity report imported for this period – import it to get the car, km and status of each trip. "}${po.length ? `Uber paid ${po.length} transfer(s) to the bank: AED ${fmt(sum(po,t=>t.po))}.` : ""}</p>`; })()}`
   : `<div class="empty"><b>No trips match</b>Change the period at the top, clear the filters, or import the Payments Transaction report.</div>`}</div>`;
@@ -934,18 +934,20 @@ function vTrips(){
 
 DL.trips = () => { const f = S.tripFilter, q = f.q.toLowerCase();
   const rows = S.trips.filter(t => (t.tr || t.f || t.sf || t.tp || t.c || t.rf || t.oe) && (!f.driver || t.dr === f.driver) && (!f.vehicle || vehicleForTrip(t) === f.vehicle) && (!f.platform || plOf(t) === f.platform) && (!q || (t.id + " " + dName(t.dr) + " " + (t.p || "")).toLowerCase().includes(q))).sort((a,b) => (a.d + a.t).localeCompare(b.d + b.t));
-  return [`trips_${S.from}_${S.to}.csv`, [["Date","Time","Platform","Driver","Car","Fare","Platform fee","VAT on fee","Tip","Refunds","Cash","Net","Km","Status","Settlement","Trip ID"],
-    ...rows.map(t => [t.d, t.t || "", pName(plOf(t)), dName(t.dr), vName(vehicleForTrip(t) || "unassigned"), ...[t.f, t.sf, t.tx, t.tp, t.rf, t.c, (t.f||0) - (t.sf||0) - (t.tx||0), t.km].map(v => r2(v || 0)), t.st || "", window.settleStatus && settleStatus(t).ok ? "Settled" : "Unsettled", t.tr || t.id])]];
+  return [`trips_${S.from}_${S.to}.csv`, [["Date","Start","End","Platform","Driver","Car","Fare","Platform fee","VAT on fee","Tip","Refunds","Cash","Net","Km","Status","Settlement","Trip ID"],
+    ...rows.map(t => [t.d, t.ts || t.t || "", t.te || "", pName(plOf(t)), dName(t.dr), vName(vehicleForTrip(t) || "unassigned"), ...[t.f, t.sf, t.tx, t.tp, t.rf, t.c, (t.f||0) - (t.sf||0) - (t.tx||0), t.km].map(v => r2(v || 0)), t.st || "", window.settleStatus && settleStatus(t).ok ? "Settled" : "Unsettled", t.tr || t.id])]];
 };
 
 /* ---------- import ---------- */
 const FIELDS = UberParse.FIELDS;
 const guessMap = UberParse.guessMap;
-function vImport(){
+function vImport(fixed){
+  // on a platform's tab: a file half-imported for another platform is dropped
+  if(fixed && (S.importPlatform !== fixed || (S.importState && S.importState.pl && S.importState.pl !== fixed))){ S.importPlatform = fixed; S.importState = null; S.importQueue = []; }
   const st = S.importState;
   const pl = S.importPlatform || "uber", plList = {...Object.fromEntries(STD_PLATFORMS.map(x=>[x[0],x[1]])), ...Object.fromEntries(Object.values(S.platforms).map(p=>[p.id, p.name||p.id]))};
-  let body = (window.PLT ? PLT.syncBox("") : "") + `<div class="section"><h2>Import trip data</h2>
-  <div class="form" style="margin-bottom:10px"><div class="f"><label for="impPl">Platform of these files</label><select id="impPl">${opts(plList, pl)}</select></div></div>
+  let body = (fixed ? "" : (window.PLT ? PLT.syncBox("") : "")) + `<div class="section"><h2>Import trip data${fixed ? " · " + esc(pName(pl)) : ""}</h2>
+  ${fixed ? "" : `<div class="form" style="margin-bottom:10px"><div class="f"><label for="impPl">Platform of these files</label><select id="impPl">${opts(plList, pl)}</select></div></div>`}
   ${pl === POS ? `<p class="sub">Download the statement of a card terminal (payment machine) from the bank / provider portal as CSV. Each payment is credited to the driver the terminal was assigned to on that date. Several terminals in one file are fine if it has a terminal ID column. Rows already imported are skipped.</p>`
   : pl === "uber" ? `<p class="sub">In Uber Fleet Hub open <b>Reports → Generate Report</b> and download two reports for the same dates: <b>Payments Transaction</b> (the money) and <b>Trip activity</b> (car, distance and status of each trip). Drop both CSV files below – each is recognised automatically. Rows already imported are skipped, so overlapping files are safe.</p>`
   : `<p class="sub">Download the trips / earnings report from the <b>${esc(pName(pl))}</b> fleet portal as CSV or Excel. After you drop it, match its columns to the fields once – the mapping is remembered for ${esc(pName(pl))}'s files. Rows already imported are skipped.</p>`}
@@ -1111,7 +1113,7 @@ async function runActivityImport(){
   let added = 0, upd = 0;
   for(const [day, list] of Object.entries(byDay)){
     const ref = S.db.doc("tripinfo/"+day); const snap = await ref.get(); const rows = snap.exists ? {...(snap.data().rows||{})} : {};
-    for(const t of list){ rows[t.tr] ? upd++ : added++; rows[t.tr] = {d:t.d, t:t.t, dr:t.dr, p:t.p, vu:t.vu, km:t.km, st:t.st, prod:t.prod, pay:t.pay}; }
+    for(const t of list){ rows[t.tr] ? upd++ : added++; rows[t.tr] = {d:t.d, t:t.t, te:t.te||"", dr:t.dr, p:t.p, vu:t.vu, km:t.km, st:t.st, prod:t.prod, pay:t.pay}; }
     if(!await writeOk(ref.set({date:day, rows}))) return;
   }
   const days = Object.keys(byDay).sort();
@@ -2096,7 +2098,7 @@ boot();
 <script src="rta-import.js?v=2"></script>
 <script src="reminders.js?v=5"></script>
 <script src="purchases.js?v=8"></script>
-<script src="platforms.js?v=16"></script>
+<script src="platforms.js?v=17"></script>
 <script src="settings.js?v=3"></script>
 
 </body></html>

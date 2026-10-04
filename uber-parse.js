@@ -96,7 +96,8 @@
     rows.forEach(r => {
       const tr = C.tr && r[C.tr]; if (!tr) return;
       const dt = parseTripDate(C.req && r[C.req]); if (!dt) return;
-      out.push({ tr: String(tr), d: dt.date, t: dt.time, uuid: (C.uuid && r[C.uuid]) || "", name: [C.first && r[C.first], C.last && r[C.last]].filter(Boolean).join(" ").trim(),
+      const de = C.drop && r[C.drop] ? parseTripDate(r[C.drop]) : null;
+      out.push({ tr: String(tr), d: dt.date, t: dt.time, te: de ? de.time : "", uuid: (C.uuid && r[C.uuid]) || "", name: [C.first && r[C.first], C.last && r[C.last]].filter(Boolean).join(" ").trim(),
         vu: (C.vu && r[C.vu]) || "", p: (C.p && r[C.p]) || "", km: r2(num(C.km && r[C.km])), st: (C.st && r[C.st]) || "", prod: (C.prod && r[C.prod]) || "", pay: (C.pay && r[C.pay]) || "" });
     });
     return out;

@@ -17,7 +17,7 @@ const PLT_ACCTS = {"1158": "Platform payouts in transit", "4030": "Platform adju
 Object.assign(ACCT, PLT_ACCTS); if(typeof ACCT_BASE !== "undefined") Object.assign(ACCT_BASE, PLT_ACCTS);
 S.pladj = S.pladj || {};
 S.pltView = S.pltView || ""; S.pltTab = S.pltTab || "ledger"; S.pltGroup = S.pltGroup || "week"; S.payouts = S.payouts || {}; S.feeinv = S.feeinv || {}; S.feeEdit = S.feeEdit || null; S.poMatch = S.poMatch || null;
-const PLT_TABS = {ledger: "Ledger", payouts: "Payouts", fees: "Fee invoices", api: "API / data sync"};
+const PLT_TABS = {ledger: "Ledger", import: "Import trip data", payouts: "Payouts", fees: "Fee invoices", api: "API / data sync"};
 const pltConfirm = pl => !!(S.platforms[pl] || {}).payoutConfirm;
 const histTrips = () => (S.ledger && S.ledger.trips && !S.ledger.loading) ? S.ledger.trips : S.trips;
 const histEnts = () => (S.ledger && S.ledger.entries && !S.ledger.loading) ? S.ledger.entries : S.entries;
@@ -119,16 +119,16 @@ function pltFeesTab(pl){
    How the platform's trips come in: by file (Import trip data) or through its API, fetched by the sync program on the
    office PC (uber-sync: "4 - Sync platform APIs", also run by the daily sync). Here: what to call and how to read the
    answer – nothing secret. The secrets go in uber-sync/.env under the platform's name. */
-const API_FIELDS = [["id", "Trip / order id"], ["date", "Date & time"], ["driverId", "Driver id on the platform"], ["driverName", "Driver name"], ["plate", "Number plate"], ["fare", "Fare"], ["fee", "Platform fee / commission"], ["vat", "VAT on fee"], ["tip", "Tip"], ["refund", "Tolls & refunds"], ["cash", "Cash collected by driver"], ["other", "Other earnings / bonus"], ["payout", "Payout to bank"], ["km", "Distance (km)"]];
+const API_FIELDS = [["id", "Trip / order id"], ["date", "Date & time"], ["end", "Trip end (date & time)"], ["driverId", "Driver id on the platform"], ["driverName", "Driver name"], ["plate", "Number plate"], ["fare", "Fare"], ["fee", "Platform fee / commission"], ["vat", "VAT on fee"], ["tip", "Tip"], ["refund", "Tolls & refunds"], ["cash", "Cash collected by driver"], ["other", "Other earnings / bonus"], ["payout", "Payout to bank"], ["km", "Distance (km)"]];
 // ready-made settings for platforms whose API is known (checked against the live API)
 const PLT_PRESETS = {bolt: {note: "Bolt Fleet Integration API – OAuth client credentials from the Bolt fleet portal; finished orders only.", api: {enabled: true, authType: "oauth", tokenUrl: "https://oidc.bolt.eu/token", scope: "fleet-integration:api", method: "POST",
   tripsUrl: "https://node.bolt.eu/fleet-integration-gateway/fleetIntegration/v1/getFleetOrders", body: '{"company_ids":{companyIds},"start_ts":{fromTs},"end_ts":{toTs},"offset":{offset},"limit":{limit}}', listPath: "data.orders", pageSize: 500, maxDays: 15, filter: "order_status=finished",
   companiesUrl: "https://node.bolt.eu/fleet-integration-gateway/fleetIntegration/v1/getCompanies", companiesPath: "data.company_ids",
-  fields: {id: "order_reference", date: "order_created_timestamp", driverId: "driver_uuid", driverName: "driver_name", plate: "vehicle_license_plate", fare: "order_price.ride_price", fee: "order_price.commission", tip: "order_price.tip", refund: "order_price.toll_fee", cash: "order_price.ride_price?payment_method=cash", km: "ride_distance/1000"}}},
+  fields: {id: "order_reference", date: "order_created_timestamp", driverId: "driver_uuid", driverName: "driver_name", plate: "vehicle_license_plate", fare: "order_price.ride_price", fee: "order_price.commission", tip: "order_price.tip", refund: "order_price.toll_fee", cash: "order_price.ride_price?payment_method=cash", km: "ride_distance/1000", end: "order_drop_off_timestamp"}}},
   // Yango / Yandex Fleet API: CLID + API key headers, the Fleet (park) id in the body, cursor pages; no browser access, so every call goes through the relay
   yango: {note: "Yango Fleet API – CLID, API key and Fleet ID from the Yango fleet portal; completed orders only.", api: {enabled: true, authType: "yango", forward: true, method: "POST",
   tripsUrl: "https://fleet-api.yango.tech/v1/parks/orders/list", body: '{"limit":{limit},"query":{"park":{"id":"{parkId}","order":{"booked_at":{"from":"{fromIso}","to":"{toIso}"},"statuses":["complete"]}}}}', listPath: "orders", cursorPath: "cursor", pageSize: 500, maxDays: 7, filter: "status=complete",
-  fields: {id: "id", date: "booked_at", driverId: "driver_profile.id", driverName: "driver_profile.name", plate: "car.license.number", fare: "price", cash: "price?payment_method=cash", km: "mileage/1000"}}}};
+  fields: {id: "id", date: "booked_at", driverId: "driver_profile.id", driverName: "driver_profile.name", plate: "car.license.number", fare: "price", cash: "price?payment_method=cash", km: "mileage/1000", end: "ended_at"}}}};
 function pltApiTab(pl){
   const p = S.platforms[pl];
   if(!p) return `<div class="banner">Add ${esc(pName(pl))} on Platforms & contracts first (Add Uber, Bolt…), then set its API here.</div>`;
@@ -278,7 +278,7 @@ function driverByShortName(name, pl){
   return c.length === 1 ? c[0].id : "";
 }
 async function browserSync(pl, days){
-  const p = S.platforms[pl], api = (p || {}).api || {}, F = api.fields || {};
+  const p = S.platforms[pl], api = (p || {}).api || {}, F = {end: (((PLT_PRESETS[pl] || {}).api || {}).fields || {}).end, ...(api.fields || {})};
   const to = new Date(), from = new Date(to.getTime() - days * 86400000), fromTs = Math.floor(new Date(iso(from) + "T00:00:00").getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
   let j, via;
   if(api.direct){ j = await directOrders(pl, fromTs, toTs); via = "API"; }
@@ -287,7 +287,8 @@ async function browserSync(pl, days){
   else throw new Error("save the API keys first");
   const rows = (Array.isArray(j.orders) ? j.orders : pdig(j, api.listPath) || []).filter(o => pkeep(o, api.filter));
   const trips = rows.map(o => { const dt = preadDate(ppick(o, F.date)); if(!dt) return null; const n = k => num(ppick(o, F[k])); const id = String(ppick(o, F.id) ?? "").trim() || `${dt.date}|${ppick(o, F.driverName)}|${n("fare")}`;
-    return {id: pl + ":" + norm(id), tr: pl + ":" + norm(id), d: dt.date, t: dt.time, name: String(ppick(o, F.driverName) ?? "").trim(), uuid: String(ppick(o, F.driverId) ?? "").trim(), p: String(ppick(o, F.plate) ?? "").trim(),
+    const de = F.end ? preadDate(ppick(o, F.end)) : null;
+    return {id: pl + ":" + norm(id), tr: pl + ":" + norm(id), d: dt.date, t: dt.time, te: de ? de.time : "", name: String(ppick(o, F.driverName) ?? "").trim(), uuid: String(ppick(o, F.driverId) ?? "").trim(), p: String(ppick(o, F.plate) ?? "").trim(),
       f: n("fare"), sf: Math.abs(n("fee")), tx: Math.abs(n("vat")), tp: n("tip"), rf: n("refund"), c: Math.abs(n("cash")), oe: n("other"), po: Math.abs(n("payout")), km: n("km")}; }).filter(Boolean);
   // drivers by their id on this platform or their name; cars by plate
   const byId = {}, byName = {}; Object.values(S.drivers).forEach(d => { if((d.platformIds || {})[pl]) byId[d.platformIds[pl]] = d.id; byName[norm(d.name)] = d.id; });
@@ -302,7 +303,7 @@ async function browserSync(pl, days){
   const byDay = {}; trips.forEach(t => (byDay[t.d] ||= []).push(t)); let added = 0, dup = 0;
   for(const [day, L] of Object.entries(byDay)){
     const ref = S.db.doc("trips/" + day), snap = await ref.get(), ex = snap.exists ? (snap.data().rows || {}) : {}, merged = {...ex};
-    for(const t of L){ if(ex[t.id]){ dup++; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
+    for(const t of L){ if(ex[t.id]){ dup++; if(t.te && !ex[t.id].te) merged[t.id] = {...ex[t.id], te: t.te}; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, te: t.te, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
     if(!await writeOk(ref.set({date: day, rows: merged}))) throw new Error("could not save the trips");
   }
   const {id: _, ...b} = S.platforms[pl]; await writeOk(S.db.doc("platforms/" + pl).set({...b, sync: {at: new Date().toISOString(), from: iso(from), to: iso(to), added, dup, error: "", via}}));
@@ -328,7 +329,7 @@ function syncBox(only){
 /* ---------- the page ---------- */
 function platformDetail(pl){
   const p = S.platforms[pl] || {id: pl, name: pName(pl)}, tab = PLT_TABS[S.pltTab] ? S.pltTab : "ledger";
-  const body = tab === "payouts" ? pltPayoutsTab(pl) : tab === "fees" ? pltFeesTab(pl) : tab === "api" ? syncBox(pl) + pltApiTab(pl) : pltLedgerTab(pl);
+  const body = tab === "import" ? (window.vImport ? vImport(pl) : "") : tab === "payouts" ? pltPayoutsTab(pl) : tab === "fees" ? pltFeesTab(pl) : tab === "api" ? syncBox(pl) + pltApiTab(pl) : pltLedgerTab(pl);
   return `<div class="section"><div class="head"><div><h2>${esc(p.name || pName(pl))}</h2><p class="sub">${esc(p.legalName || "")}${p.legalName ? " · " : ""}account ${esc(clearingAcct(pl))} · payouts to ${esc(acctName(payAcct(pl)))}</p></div>
     <div class="row"><button class="btn ghost" data-back="1">← Back</button>${S.platforms[pl] ? `<button class="btn" data-edit="platform" data-id="${esc(pl)}">Edit platform</button>` : ""}</div></div>
   ${tabBtns("data-plttab", tab, PLT_TABS)}${body}</div>`;
@@ -336,6 +337,7 @@ function platformDetail(pl){
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
   if(t.dataset.pltview != null){ S.pltView = t.dataset.pltview; S.edit = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.pltimport){ S.view = "platforms"; S.pltView = t.dataset.pltimport; S.pltTab = "import"; S.edit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.plttab){ S.pltTab = t.dataset.plttab; S.poMatch = null; S.feeEdit = null; render(); return; }
   if(t.dataset.poconfirm){ const p = S.platforms[t.dataset.poconfirm]; if(!p){ toast("Add the platform on Platforms & contracts first."); return; } const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, payoutConfirm: !p.payoutConfirm}))) toast(p.payoutConfirm ? "Payouts are taken as received again." : "Reconciliation on – match each payout with the bank credit."); render(); return; }
