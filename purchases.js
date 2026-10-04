@@ -24,6 +24,10 @@ function expandInv(ents){
   return out;
 }
 const supKey = src => "purSup_" + src;
+// Salik / ENOC / EV kept as money accounts (Bank & cash accounts, type "prepaid"): topped up by an inter-account transfer
+// from the bank, every imported transaction is paid from (credits) that account
+const PRE_NAME = {fuel: "ENOC", salik: "Salik", ev: "EV charging"}, preKey = src => "preAcct_" + src;
+const preOf = src => { const id = setting(preKey(src), ""); return id && cashAccounts().some(a => a.id === id) ? id : ""; };
 const supOf = src => { const id = setting(supKey(src), ""); return id && S.suppliers[id] ? id : ""; };
 const SUP_NAME = {fuel: "ENOC (fuel)", salik: "Salik", ev: "EV charging"};
 S.purTab = S.purTab || "all"; S.purImp = S.purImp || null; S.rcpt = S.rcpt || {};
@@ -112,7 +116,7 @@ function impPanel(src){
     <div class="tbl" style="margin-top:10px;max-height:340px;overflow:auto"><table><thead><tr><th>Date</th><th>Plate</th><th>Car</th><th>Driver</th><th>${src === "salik" ? "Gate" : "Station"}</th><th class="num">${PUR_SRC[src].unit}</th><th class="num">Net</th><th class="num">VAT</th><th></th></tr></thead><tbody>
     ${R.slice(0, 300).map(r => `<tr${r.dup || !r.ok ? ' style="opacity:.45"' : ""}><td>${esc(r.date ? dmyS(r.date) : "?")} <span class="small muted">${esc(r.time)}</span></td><td class="mono small">${esc(r.plate)}</td><td>${r.vid ? esc(vName(r.vid)) : '<span class="neg small">no match</span>'}</td><td class="small">${r.drv ? esc(dName(r.drv)) + (r.how ? ` <span class="muted">(${esc(r.how)})</span>` : "") : '<span class="muted">—</span>'}</td><td class="small">${esc(r.place)}</td><td class="num">${r.qty || ""}</td><td class="num">${fmt(r.net)}</td><td class="num">${fmt(r.vat)}</td><td class="small muted">${r.dup ? "already in" : !r.ok ? "skipped" : ""}</td></tr>`).join("")}
     </tbody></table></div>${R.length > 300 ? `<p class="small muted">First 300 rows shown.</p>` : ""}
-    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-impgo="1" ${groups.length && S.canWrite ? "" : "disabled"}>Import ${groups.length} expense${groups.length === 1 ? "" : "s"} – AED ${fmt(sum(groups, r => r.net + r.vat))}</button><span class="small muted">The driver is the one whose trip in that car was going on at that time (else the car's assignment). ${I.supplier ? `Saved as a purchase invoice from ${esc((S.suppliers[I.supplier] || {}).name || "")} (one per month) – it uses up the top-ups paid to him.` : "Booked as paid directly from the account."} Rows without a car are imported without a car (company cost).</span></div></div>`;
+    <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-impgo="1" ${(groups.length || R.some(r => r.ok && r.dup)) && S.canWrite ? "" : "disabled"}>${groups.length ? `Import ${groups.length} expense${groups.length === 1 ? "" : "s"} – AED ${fmt(sum(groups, r => r.net + r.vat))}` : ""}${groups.length && R.some(r => r.ok && r.dup) ? " · " : ""}${R.some(r => r.ok && r.dup) ? `Update ${R.filter(r => r.ok && r.dup).length} already in (time, driver)` : ""}</button><span class="small muted">The driver is the one whose trip in that car was going on at that time (else the car's assignment). ${I.supplier ? `Saved as a purchase invoice from ${esc((S.suppliers[I.supplier] || {}).name || "")} (one per month) – it uses up the top-ups paid to him.` : "Booked as paid directly from the account."} Rows without a car are imported without a car (company cost).</span></div></div>`;
 }
 async function impGo(){
   const I = S.purImp, P = PUR_SRC[I.src], R = impRows().filter(r => r.ok && !r.dup), D = impRows().filter(r => r.ok && r.dup);
@@ -121,8 +125,8 @@ async function impGo(){
       if(!entTimes(e).length && times.length){ if(refs.length > 1) fix.times = times; fix.time = times[0]; }
       if(!e.driverId){ const d = hit.find(h => h.drv); if(d){ fix.driverId = d.drv; if(I.recover) fix.recover = true; } }
       return Object.keys(fix).length ? fix : null; });
-    if(n && !R.length){ S.purImp = null; toast(`Nothing new in this file – ${n} expense(s) already in got their time / driver.`); render(); return; } if(n) toast(`${n} expense(s) already in got their time / driver.`); }
-  if(!R.length){ toast("Everything in this file is imported already."); return; }
+    if(!R.length){ S.purImp = null; toast(n ? `Nothing new in this file – ${n} expense(s) already in got their time / driver.` : "Nothing new in this file, and the expenses already in have their time and driver."); render(); return; } if(n) toast(`${n} expense(s) already in got their time / driver.`); }
+  if(!R.length){ S.purImp = null; toast("Everything in this file is imported already."); render(); return; }
   const list = I.group ? Object.values(R.reduce((g, r) => { const k = r.vid + "|" + r.date + "|" + r.drv; const x = g[k] ||= {...r, net: 0, vat: 0, qty: 0, n: 0, refs: [], times: []}; x.net += r.net; x.vat += r.vat; x.qty += r.qty; x.n++; x.refs.push(r.ref); if(r.time) x.times.push(r.time); return g; }, {})) : R;
   const rows = list.map(r => ({id: uid(), type: "expense", date: r.date, ...(r.times ? (r.times.length ? {times: [...r.times].sort(), time: [...r.times].sort()[0]} : {}) : r.time ? {time: r.time} : {}), category: P.cat, sub: P.sub, amount: r2(r.net), vat: r2(r.vat), vehicleId: r.vid, driverId: r.drv || "", recover: I.recover && !!r.drv, paidFrom: I.paidFrom,
     qty: r2(r.qty), note: `${P.label}${r.n > 1 ? ` · ${r.n} ${P.sub === "salik" ? "trips" : "transactions"}` : ""}${r.place && !(r.n > 1) ? " · " + r.place : ""}${r.qty ? ` · ${r2(r.qty)} ${P.unit.toLowerCase()}` : ""}`, srcRef: r.refs ? r.refs[0] : r.ref, srcRefs: r.refs || undefined, imported: I.name}));
@@ -164,6 +168,13 @@ async function recheckDrivers(src){
     return w && w.id ? {driverId: w.id, ...(src === "salik" ? {recover: true} : {})} : null; });
 }
 
+// the prepaid money account for Salik / ENOC / EV: next free code from 1131
+async function makePrepaid(src){
+  const used = new Set(cashAccounts().map(a => a.id)); let n = 1131; while(used.has(String(n)) && n < 1140) n++; if(n >= 1140){ toast("No free account code left (1131–1139)."); return ""; }
+  const id = String(n); if(!await writeOk(S.db.doc("accounts/" + id).set({name: PRE_NAME[src], type: "prepaid", bank: "", number: "", opening: 0, active: true}))) return "";
+  await writeOk(S.db.doc("settings/main").set({...S.settings, [preKey(src)]: id, [supKey(src)]: ""})); S.ledger = null; toast(`Account ${id} "${PRE_NAME[src]}" created under Bank & cash accounts.`); return id;
+}
+
 /* ---------- tabs ---------- */
 function purTable(list, unit){
   const pg = paged("pur-" + S.purTab, list.slice().sort((a, b) => b.date.localeCompare(a.date)));
@@ -177,6 +188,13 @@ function byCar(list, unit){
   return `<details style="margin-bottom:10px"><summary class="small" style="cursor:pointer"><b>By car</b> – ${rows.length} car${rows.length === 1 ? "" : "s"}</summary><div class="tbl" style="margin-top:6px"><table><thead><tr><th>Car</th><th class="num">Expenses</th>${unit ? `<th class="num">${unit}</th>` : ""}<th class="num">Total incl. VAT</th></tr></thead><tbody>${rows.map(([v, b]) => `<tr><td>${v ? esc(vName(v)) : '<span class="muted">No car</span>'}</td><td class="num">${b.n}</td>${unit ? `<td class="num">${r2(b.q) || ""}</td>` : ""}<td class="num">${fmt(b.a)}</td></tr>`).join("")}</tbody></table></div></details>`;
 }
 function prepaidBox(src){
+  const pa = preOf(src);
+  if(pa){ const bal = S.ledger && !S.ledger.loading && S.ledger.entries ? acctLines(pa, historyJournal()).close : null, list = expEntries().filter(e => entSub(e) === src), other = (S.ledger && S.ledger.entries || S.entries).filter(e => e.type === "expense" && entSub(e) === src && e.paidFrom !== pa).length;
+    return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">${esc(acctName(pa))} account (${esc(pa)}) – balance</div><div class="v ${bal != null && bal < 0 ? "neg" : ""}">${bal == null ? "…" : fmt(bal)}</div><div class="n">transfers in from the bank less ${esc(PUR_SRC[src].label.toLowerCase())} used</div></div>
+      <div class="kpi"><div class="l">Account</div><div class="v" style="font-size:14px"><button class="btn sm primary" data-pretop="${esc(pa)}">Top up from bank</button> <button class="btn sm" data-prestmt="${esc(pa)}">Statement</button>${other ? ` <button class="btn sm" data-premove="${src}" title="Expenses imported before the account existed">Pay ${other} earlier expense(s) from this account</button>` : ""}</div></div></div>`; }
+  if(!supOf(src)) return `<div class="banner info">${esc(PUR_SRC[src].label)} is prepaid: keep it as its own account under <b>Bank & cash accounts</b>, top it up with an inter-account transfer from the bank, and every imported transaction is paid from it.
+    <div class="row" style="margin-top:6px;gap:6px"><button class="btn sm primary" data-premake="${src}">Create account "${esc(PRE_NAME[src])}"</button><select data-preset="${src}" aria-label="Or choose an account">${opts(Object.fromEntries(cashAccounts().filter(a => a.type === "prepaid").map(a => [a.id, a.name + " (" + a.id + ")"])), "", "…or choose an existing prepaid account")}</select></div>
+    <div class="small muted" style="margin-top:6px">Or, if the provider bills you as a supplier: <button class="btn sm ghost" data-supmake="${src}">Create supplier "${esc(SUP_NAME[src])}"</button></div></div>`;
   const id = supOf(src);
   if(!id) return `<div class="banner info">Fuel, Salik and EV charging are prepaid: create the supplier for this account, top it up with a payment, and import the consumption as his purchase invoice.
     <div class="row" style="margin-top:6px;gap:6px"><button class="btn sm" data-supmake="${src}">Create supplier "${esc(SUP_NAME[src])}"</button><select data-supset="${src}" aria-label="Or choose a supplier">${opts(Object.fromEntries(Object.values(S.suppliers).sort((a, b) => (a.name || "").localeCompare(b.name || "")).map(x => [x.id, x.name])), "", "…or choose an existing supplier")}</select></div></div>`;
@@ -210,6 +228,11 @@ document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
   if(t.dataset.purtab){ S.purTab = t.dataset.purtab; S.purImp = null; S.edit = null; S.view = "entries"; render(); return; }
   if(t.dataset.puradd){ S.purTab = "all"; S.edit = {kind: "entry", id: "", data: {date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type: "expense", category: t.dataset.puradd, paidFrom: "1100", sub: t.dataset.sub || ""}}; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.premake){ const src = t.dataset.premake; await makePrepaid(src); render(); return; }
+  if(t.dataset.pretop){ S.xferTo = t.dataset.pretop; S.view = "transfers"; S.edit = null; render(); window.scrollTo(0, 0); toast("Inter-account transfer: paid from the bank, received in " + acctName(t.dataset.pretop) + "."); return; }
+  if(t.dataset.prestmt){ S.view = "cashbank"; S.acctView = t.dataset.prestmt; S.edit = null; render(); window.scrollTo(0, 0); return; }
+  if(t.dataset.premove){ const src = t.dataset.premove, pa = preOf(src); if(!pa) return; t.disabled = true; t.textContent = "Moving…";
+    const n = await fixEntries(e => e.type === "expense" && entSub(e) === src && e.paidFrom !== pa ? {paidFrom: pa} : null); toast(`${n} ${PUR_SRC[src].label} expense(s) now paid from ${acctName(pa)}.`); render(); return; }
   if(t.dataset.supmake){ const src = t.dataset.supmake, id = "s-" + uid(); if(await writeOk(S.db.doc("suppliers/" + id).set({name: SUP_NAME[src], creditDays: 0, opening: 0}))){ await writeOk(S.db.doc("settings/main").set({...S.settings, [supKey(src)]: id})); toast(`Supplier "${SUP_NAME[src]}" created – rename it in Suppliers if needed.`); render(); } return; }
   if(t.dataset.supchange){ const k = supKey(t.dataset.supchange); await writeOk(S.db.doc("settings/main").set({...S.settings, [k]: ""})); render(); return; }
   if(t.dataset.suptop){ S.view = "payments"; if(window.BOOKS) BOOKS.newPartyDoc("payment", "s:" + t.dataset.suptop, "2000", 0, `${PUR_SRC[t.dataset.src].label} account top-up`); render(); window.scrollTo(0,0); return; }
@@ -224,11 +247,12 @@ document.addEventListener("change", async ev => {
   const t = ev.target; if(!t.dataset) return;
   if(t.dataset.rcptadd && t.files && t.files[0]){ await attachReceipt(t.dataset.rcptadd, t.files[0]); return; }
   if(t.dataset.purimp && t.files && t.files[0]){ const src = t.dataset.purimp, file = t.files[0], rows = await readSheet(file); t.value = ""; if(!rows) return; if(!rows.length){ toast("No rows found in the file."); return; }
-    S.purImp = {src, name: file.name, rows, map: impGuess(Object.keys(rows[0]), src), vatMode: "incl", paidFrom: "1100", supplier: supOf(src), recover: src === "salik", group: src === "salik"}; render(); return; }
+    S.purImp = {src, name: file.name, rows, map: impGuess(Object.keys(rows[0]), src), vatMode: "incl", paidFrom: preOf(src) || "1100", supplier: preOf(src) ? "" : supOf(src), recover: src === "salik", group: src === "salik"}; render(); return; }
+  if(t.dataset.preset && t.value){ await writeOk(S.db.doc("settings/main").set({...S.settings, [preKey(t.dataset.preset)]: t.value, [supKey(t.dataset.preset)]: ""})); render(); return; }
   if(t.dataset.supset && t.value){ await writeOk(S.db.doc("settings/main").set({...S.settings, [supKey(t.dataset.supset)]: t.value})); render(); return; }
   if(t.dataset.impmap && S.purImp){ S.purImp.map[t.dataset.impmap] = t.value; render(); return; }
   if(t.dataset.impopt && S.purImp){ const k = t.dataset.impopt; S.purImp[k] = k === "recover" || k === "group" ? t.value === "true" : t.value; render(); return; }
 });
-window.PUR = {view: purView, busy: false, expand: expandInv};
+window.PUR = {view: purView, busy: false, expand: expandInv, makePrepaid, preOf};
 // Purchase invoices open inside Purchases & expenses (their own menu item is replaced by it)
 if(window.BOOK_VIEWS && BOOK_VIEWS.purchinv){ PUR.invView = BOOK_VIEWS.purchinv; BOOK_VIEWS.purchinv = () => { S.purTab = "invoices"; return purView(); }; }

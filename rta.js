@@ -33,9 +33,15 @@ const unpaidAt = (f, day) => f.date && f.date <= day && f.status !== "cancelled"
    without a time or a trip, the car's assignment that day, else the driver with most trips in that car that day.
    driverAt returns {id, how}; fineDriver(vid, date, time) only the driver. */
 const toMin = t => { const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]\.?m\.?)?/i); if(!m) return null; let h = +m[1]; const ap = (m[3] || "").toLowerCase(); if(ap.startsWith("p") && h < 12) h += 12; if(ap.startsWith("a") && h === 12) h = 0; return h * 60 + +m[2]; };
+// the trips of each car on each day, built once per trip list (a statement of thousands of rows asks for every row)
+const _tcd = new WeakMap();
+function tripsByCarDay(pool){
+  let m = _tcd.get(pool); if(m && m.n === pool.length) return m.idx;
+  const idx = {}; pool.forEach(t => { if(!t.dr) return; const v = vehicleForTrip(t); if(v) (idx[v + "|" + t.d] ||= []).push(t); }); _tcd.set(pool, {n: pool.length, idx}); return idx;
+}
 function driverAt(vid, date, time){
   const v = S.vehicles[vid]; if(!v || !date) return {id: "", how: ""}; const day = date.slice(0,10), tm = toMin(time);
-  const pool = (S.ledger && S.ledger.trips && !S.ledger.loading ? S.ledger.trips : S.trips), ts = pool.filter(t => t.d === day && t.dr && vehicleForTrip(t) === vid);
+  const pool = (S.ledger && S.ledger.trips && !S.ledger.loading ? S.ledger.trips : S.trips), ts = tripsByCarDay(pool)[vid + "|" + day] || [];
   if(tm != null){
     const timed = ts.map(t => ({t, m: toMin(t.ts || t.t), e: toMin(t.te)})).filter(x => x.m != null);
     const during = timed.find(x => x.e != null && x.m <= tm && tm <= (x.e < x.m ? x.e + 1440 : x.e)); if(during) return {id: during.t.dr, how: `on a trip ${during.t.ts || during.t.t}–${during.t.te}`};

@@ -225,8 +225,8 @@ const ITEM_KINDS = {loan:"Loan", advance:"Salary advance", visa:"Visa", shared:"
    cash accounts (1110–1119) and card network / merchant balances (1120–1129). 1100 Bank, 1110 Cash in
    hand and 1120 Card machine receipts always exist; more are added in the accounts collection (doc id =
    account code). Opening balances are as at the books start date (Settings). */
-const CASH_TYPES = {bank:"Bank account", cash:"Cash account", network:"Card network / merchant balance"};
-const CASH_RANGE = {bank:1101, cash:1111, network:1121};
+const CASH_TYPES = {bank:"Bank account", cash:"Cash account", network:"Card network / merchant balance", prepaid:"Prepaid account (Salik / fuel / EV)"};
+const CASH_RANGE = {bank:1101, cash:1111, network:1121, prepaid:1131};
 const DEFAULT_ACCTS = [{id:"1100", name:"Bank", type:"bank"}, {id:"1110", name:"Cash in hand", type:"cash"}, {id:"1120", name:"Card machine receipts", type:"network"}];
 function cashAccounts(){
   const o = {}; DEFAULT_ACCTS.forEach(a => o[a.id] = {...a, isDefault:true});
@@ -786,7 +786,7 @@ function vTransfers(){
   <form class="form" id="fTransfer">
     <div class="f"><label for="xd">Date</label><input id="xd" name="date" type="date" required value="${esc(iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.to)}"></div>
     <div class="f"><label for="xf">Paid from</label><select id="xf" name="paidFrom">${opts(ao, "1110")}</select></div>
-    <div class="f"><label for="xt">Received in</label><select id="xt" name="toAccount">${opts(ao, "1100")}</select></div>
+    <div class="f"><label for="xt">Received in</label><select id="xt" name="toAccount">${opts(ao, S.xferTo || "1100")}</select></div>
     <div class="f"><label for="xa">Amount</label><input id="xa" name="amount" type="number" step="0.01" required></div>
     <div class="f"><label for="xc">Bank charges</label><input id="xc" name="fee" type="number" step="0.01"></div>
     <div class="f wide"><label for="xn">Reference / note</label><input id="xn" name="note" placeholder="e.g. cash deposit slip 1182"></div>
@@ -2127,10 +2127,10 @@ boot();
 <script src="investors.js?v=4"></script>
 <script src="fleetfin.js?v=11"></script>
 <script src="loans.js?v=4"></script>
-<script src="rta.js?v=9"></script>
+<script src="rta.js?v=10"></script>
 <script src="rta-import.js?v=3"></script>
 <script src="reminders.js?v=5"></script>
-<script src="purchases.js?v=10"></script>
+<script src="purchases.js?v=11"></script>
 <script src="platforms.js?v=20"></script>
 <script src="settings.js?v=3"></script>
 
