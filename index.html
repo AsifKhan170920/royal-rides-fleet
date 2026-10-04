@@ -436,7 +436,8 @@ async function loadPeriod(){
     ents.sort((a,b)=> a.date.localeCompare(b.date)); S.entries = ents;
   }catch(e){ console.warn(e); toast("Couldn't load this period. Check your connection and change the dates to retry."); }
 }
-async function writeOk(p){ try{ await p; return true; }catch(e){ if(e && (e.code === "invalid_argument" || e.code === "permission-denied")){ S.canWrite = false; toast("You have view-only access, so changes can't be saved."); } else if(e && (e.code === "quota_exceeded" || e.code === "resource-exhausted")){ toast("Storage limit reached. Try again later."); } else toast("Save failed. Try again."); render(); return false; } }
+window.__writes = 0;
+async function writeOk(p){ window.__writes++; try{ await p; return true; }catch(e){ if(e && (e.code === "invalid_argument" || e.code === "permission-denied")){ S.canWrite = false; toast("You have view-only access, so changes can't be saved."); } else if(e && (e.code === "quota_exceeded" || e.code === "resource-exhausted")){ toast("Storage limit reached. Try again later."); } else toast("Save failed. Try again."); render(); return false; } finally{ window.__writes--; } }
 
 /* ============ calculations ============ */
 const setting = (k, d) => S.settings[k] ?? d;
@@ -890,6 +891,7 @@ function render(){
   const focus = document.activeElement && document.activeElement.id; const sel = focus && document.activeElement.selectionStart;
   el.innerHTML = html + fns[S.view]();
   autoDl(el);   // every table section gets Excel / PDF / CSV
+  autoBulk(el); // and, where its rows can be deleted, ticks and "Delete selected"
   if(focus){ const f = document.getElementById(focus); if(f && f !== document.body){ f.focus(); try{ if(sel != null) f.setSelectionRange(sel, sel); }catch(e){} } }
 }
 const dName = id => (S.drivers[id] && S.drivers[id].name) || (id === "unknown" ? "Unknown driver" : id);
@@ -1902,6 +1904,55 @@ document.addEventListener("click", ev => { const t = ev.target.closest("[data-fm
    own gets "Download: Excel PDF CSV". The file is the section's table(s) as shown – all rows of the list (not only
    the page on screen), action buttons left out, amounts as numbers. */
 const ACTION_WORDS = /^(view|edit|delete|pay|open|payslip|attach|record payment|record receipt|bounced|re-presented|reopen|close|cancel|update|done|statement|top up|change supplier|click again.*|×|pay fee|agreement|set investor)$/i;
+/* ---------- bulk delete: every table whose rows have a Delete button (or an Edit that opens a record with Delete) ----------
+   gets a tick column and a "Delete selected" button. Each ticked row is deleted by its own Delete action, one after
+   the other, so the ledger, salaries and links behave exactly as when deleting rows one by one. */
+const BULK_SKIP = new Set(["apikeysdel", "logodel"]);
+const BULK_EDIT = {driver: "drivers", vehicle: "vehicles", investor: "investors", platform: "platforms", terminal: "terminals", account: "accounts", ditem: "driverItems"};
+function bulkSpec(tr){
+  for(const b of tr.querySelectorAll("button")){ for(const k of Object.keys(b.dataset)){ if(BULK_SKIP.has(k)) continue;
+    if(/^[a-z]*del(ete)?$/.test(k) || k === "delentry") return {...b.dataset}; } }
+  const e = tr.querySelector("button[data-edit][data-id]"); if(e && BULK_EDIT[e.dataset.edit]) return {del: BULK_EDIT[e.dataset.edit], id: e.dataset.id};
+  // rows with only an Edit: the record behind it is deleted the way its own Delete does it
+  const one = sel => { const b = tr.querySelector(sel); return b ? Object.values(b.dataset)[0] : ""; };
+  const ent = id => ((S.ledger && S.ledger.entries) || []).concat(S.entries || []).find(x => x.id === id && !x.virtual);
+  for(const sel of ["button[data-editentry]", "button[data-puredit]", "button[data-bkedit]"]){ const id = one(sel), x = id && ent(id); if(x) return {txdel: JSON.stringify({kind: x.type === "expense" || x.type === "income" ? "entry" : "doc", id: x.id, date: x.date})}; }
+  const fid = one("button[data-fineedit]"); if(fid) return {finedel: fid};
+  const pid = one("button[data-pdcedit]"); if(pid) return {del: "pdcs", id: pid};
+  const eid = one("button[data-empedit]"); if(eid) return {del: "employees", id: eid};
+  return null;
+}
+function autoBulk(root){
+  if(!S.canWrite) return;
+  root.querySelectorAll("table").forEach(t => {
+    if(t.closest("form") || t.closest(".sp") || t.dataset.bulk) return;
+    const body = [...t.querySelectorAll(":scope > tbody > tr")], specs = body.map(bulkSpec); if(!specs.some(Boolean)) return;
+    t.dataset.bulk = "1"; const id = "b" + Math.random().toString(36).slice(2, 8);
+    t.querySelectorAll(":scope > thead > tr").forEach((tr, n) => { const th = document.createElement("th"); th.style.width = "26px"; if(n === 0) th.innerHTML = `<input type="checkbox" data-bulkall="${id}" aria-label="Select all rows">`; tr.insertBefore(th, tr.firstChild); });
+    body.forEach((tr, n) => { const td = document.createElement("td"); if(specs[n]){ const c = document.createElement("input"); c.type = "checkbox"; c.dataset.bulkrow = id; c.dataset.spec = JSON.stringify(specs[n]); c.setAttribute("aria-label", "Select row"); td.appendChild(c); } tr.insertBefore(td, tr.firstChild); });
+    t.querySelectorAll(":scope > tfoot > tr").forEach(tr => tr.insertBefore(document.createElement("td"), tr.firstChild));
+    const bar = document.createElement("div"); bar.className = "row"; bar.style.cssText = "justify-content:flex-start;margin:4px 0;gap:6px";
+    bar.innerHTML = `<button class="btn sm danger" data-bulkdel="${id}" disabled>Delete selected</button><span class="small muted" data-bulkinfo="${id}"></span>`;
+    const wrap = t.closest(".tbl") || t; wrap.parentNode.insertBefore(bar, wrap);
+  });
+}
+const bulkBoxes = id => [...document.querySelectorAll(`input[data-bulkrow="${id}"]`)];
+function bulkCount(id){ const n = bulkBoxes(id).filter(c => c.checked).length, b = document.querySelector(`[data-bulkdel="${id}"]`); if(!b) return; b.disabled = !n; b.textContent = n ? `Delete selected (${n})` : "Delete selected"; delete b.dataset.confirm; }
+document.addEventListener("change", ev => { const t = ev.target;
+  if(t.dataset && t.dataset.bulkall){ bulkBoxes(t.dataset.bulkall).forEach(c => c.checked = t.checked); bulkCount(t.dataset.bulkall); }
+  if(t.dataset && t.dataset.bulkrow) bulkCount(t.dataset.bulkrow); });
+async function bulkRun(specs){
+  const wait = ms => new Promise(r => setTimeout(r, ms)), oc = window.confirm; window.confirm = () => true; S.bulkBusy = true; let n = 0;
+  try{ for(const sp of specs){ toast(`Deleting ${n + 1} of ${specs.length}…`);
+      const b = document.createElement("button"); b.style.display = "none"; Object.entries(sp).forEach(([k, v]) => b.dataset[k] = v); b.dataset.confirm = "1"; document.body.appendChild(b);
+      const w0 = window.__writes; b.click(); await wait(120); for(let k = 0; k < 150 && window.__writes > 0; k++) await wait(100); await wait(450); b.remove(); n++; } }
+  finally{ window.confirm = oc; S.bulkBusy = false; }
+  toast(`${n} row(s) deleted.`); render();
+}
+document.addEventListener("click", ev => { const b = ev.target.closest && ev.target.closest("[data-bulkdel]"); if(!b) return; ev.stopPropagation();
+  const specs = [...new Set(bulkBoxes(b.dataset.bulkdel).filter(c => c.checked).map(c => c.dataset.spec))].map(x => JSON.parse(x)); if(!specs.length) return;   // one record shown on several rows is deleted once
+  if(b.dataset.confirm !== "1"){ b.dataset.confirm = "1"; b.textContent = `Click again to delete ${specs.length} row(s)`; return; }
+  b.disabled = true; b.textContent = "Deleting…"; bulkRun(specs); }, true);
 function autoDl(root){
   root.querySelectorAll(".section").forEach(sec => {
     if(sec.querySelector("[data-fmt]") || sec.closest(".sp") || sec.dataset.nodl != null) return;
