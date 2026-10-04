@@ -16,7 +16,7 @@ S.gpsTab = S.gpsTab || "data"; S.gpsTerm = S.gpsTerm || ""; S.gpsDay = S.gpsDay 
    Parking – a short move of at most gpsParkKm km (parking, queueing, moving the car)
    No trip – anything else: the off-platform km and the stretches checked for private rides */
 const GPS_TOL = 3;
-const gpsRange = () => ({pickMin: num(setting("gpsPickupMin", 30)) || 30, pickKm: num(setting("gpsPickupKm", 8)) || 8, parkKm: num(setting("gpsParkKm", 1.5))});
+const gpsRange = () => ({pickMin: num(setting("gpsPickupMin", 45)) || 45, pickKm: num(setting("gpsPickupKm", 12)) || 12, parkKm: num(setting("gpsParkKm", 2))});
 const TERM_LABEL = {trip: "Trip", pickup: "Pickup", parking: "Parking", none: "No trip"};
 
 const gDate = s => { const m = String(s || "").match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\D+(\d{1,2}):(\d{2})(?::(\d{2}))?/); if(m) return {d: `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`, t: `${m[4].padStart(2, "0")}:${m[5]}`};
@@ -135,10 +135,12 @@ function gpsCarView(A){
    A driver can switch the platform app off, agree a fare with a rider and keep the cash – the platforms show nothing,
    but the tracker records the drive. Stretches with no platform trip are joined into journeys (stops under 10 min
    are part of the same journey) and graded:
-   High   – between two platform trips of the day, or at night (00:00–05:00), 5 km or more; or 10 km+ on a day
-            the car made no platform trip at all
-   Medium – any other journey of 8 km or more
-   Low    – a drive before the first / after the last trip of the day (going to work / home), 3 km or more
+   High   – between two platform trips, 8 km+ at 30 km/h+ on average (driving somewhere, not cruising for a rider);
+            at night (00:00–05:00) 8 km+; or 15 km+ on a day the car made no platform trip at all
+   Medium – between trips 5 km+ (slower), or any other journey of 10 km+ (a drive to / from work over 25 km included)
+   Low    – the rest: short moves, the drive to work before the first / home after the last trip (up to 25 km)
+   Set from 1–3 Oct 2026: between two trips the car drove 3 km in 21 min (median), 15 km in 61 min (3 in 4 gaps);
+   journeys off the apps between trips ran 13 km at 50 km/h (median) – purposeful driving, not cruising.
    Each one can be marked Open / Discussed / Explained / Confirmed with a note, and printed per driver to discuss. */
 function gpsSuspects(A){
   const out = [];
@@ -153,9 +155,11 @@ function gpsSuspects(A){
       const dur = j.b - j.a; if(j.km < 3 || dur < 6) return;
       const night = j.a % 1440 < 300, noTrips = !x.trips, between = firstOn != null && j.a > firstOn && j.a < lastOn;
       const where = noTrips ? "No platform trip all day" : between ? "Between platform trips" : firstOn != null && j.a <= firstOn ? "Before the first trip of the day" : "After the last trip of the day";
-      const level = (between && j.km >= 5) || (night && j.km >= 5) || (noTrips && j.km >= 10) ? "high" : j.km >= 8 ? "medium" : "low";
+      const spd = dur ? Math.round(j.km / (dur / 60)) : 0, commute = !noTrips && !between && !night;
+      const level = (between && j.km >= 8 && spd >= 30) || (night && j.km >= 8) || (noTrips && j.km >= 15) ? "high"
+        : (between && j.km >= 5) || (j.km >= 10 && !(commute && j.km <= 25)) ? "medium" : "low";
       const w = window.driverAt ? driverAt(x.v, x.d, j.s) : {id: "", how: ""}, id = norm(x.v + "_" + x.d + "_" + j.s).slice(0, 60), rv = S.gpsReview[id] || {};
-      out.push({id, v: x.v, d: x.d, s: j.s, e: j.e, km: j.km, dur, from: j.from, to: j.to, stops: j.n - 1, where: where + (night ? " · at night" : ""), level, dr: rv.dr || w.id || "", how: rv.dr ? "set by hand" : w.how, status: rv.status || "open", note: rv.note || ""});
+      out.push({id, v: x.v, d: x.d, s: j.s, e: j.e, km: j.km, dur, spd, from: j.from, to: j.to, stops: j.n - 1, where: where + (night ? " · at night" : ""), level, dr: rv.dr || w.id || "", how: rv.dr ? "set by hand" : w.how, status: rv.status || "open", note: rv.note || ""});
     });
   });
   return out.sort((p, q) => q.d.localeCompare(p.d) || String(p.s).localeCompare(String(q.s)));
@@ -173,7 +177,7 @@ function gpsSuspectView(A){
       <select id="susDrv" aria-label="Driver">${opts(Object.fromEntries(drvs.map(d => [d, dName(d)])), S.susDrv, "All drivers")}</select><select id="gpsCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.gpsCar, "All cars")}</select></div>
       <div class="row" style="gap:6px">${dlBtn("gpssus")}<button class="btn sm primary" data-susrpt="${esc(S.susDrv)}" ${S.susDrv ? "" : 'disabled title="Choose a driver first"'}>Driver discussion report (PDF)</button></div></div>
     <div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Car</th><th>Driver</th><th class="num">km</th><th>Duration</th><th>From → To</th><th>Why</th><th>Level</th><th>Status</th><th>Note</th></tr></thead><tbody>
-    ${pg.rows.map(x => `<tr><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v))}</td><td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}${x.how ? `<div class="muted">${esc(x.how)}</div>` : ""}</td><td class="num">${fmt(x.km)}</td><td class="small">${susDur(x.dur)}${x.stops ? ` · ${x.stops} stop(s)` : ""}</td>
+    ${pg.rows.map(x => `<tr><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v))}</td><td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}${x.how ? `<div class="muted">${esc(x.how)}</div>` : ""}</td><td class="num">${fmt(x.km)}</td><td class="small">${susDur(x.dur)} · ${x.spd} km/h${x.stops ? ` · ${x.stops} stop(s)` : ""}</td>
       <td class="small" style="white-space:normal;min-width:180px">${esc(x.from)} → ${esc(x.to)}</td><td class="small">${esc(x.where)}</td><td>${susLevelPill(x.level)}</td>
       <td><select data-susst="${esc(x.id)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select></td><td><input data-susnote="${esc(x.id)}" value="${esc(x.note)}" placeholder="what the driver said" style="min-width:160px" ${S.canWrite ? "" : "disabled"}></td></tr>`).join("") || '<tr><td colspan="11" class="muted">Nothing suspicious with these filters.</td></tr>'}
     </tbody><tfoot><tr><td colspan="4">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="6"></td></tr></tfoot></table></div>${pg.bar}</div>`;
