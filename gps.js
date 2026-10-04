@@ -5,7 +5,9 @@
      (the trips were done in another car, or the plate on the trips is wrong).
    The tracker has no open API (its data pages work only inside its own login), so its reports are imported. */
 const GPS_PORTAL = "https://sharyoiot.in/VTSV15/Reports?pUserId=1260&pModuleId=30&pListSP=rptActivity&pLinkText=Activity";
-const GPS_TABS = {data: "GPS data", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
+const GPS_TABS = {data: "GPS data", suspect: "Suspicious trips", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
+S.susLevel = S.susLevel ?? "high"; S.susStatus = S.susStatus || ""; S.susDrv = S.susDrv || ""; S.gpsReview = S.gpsReview || {};
+const SUS_STATUS = {open: "Open", discussed: "Discussed with driver", explained: "Explained – OK", confirmed: "Confirmed – private ride"};
 S.gpsTab = S.gpsTab || "data"; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
 // a stretch with no trip within this many minutes before / after counts as off the platforms
 const GPS_PRE = 45, GPS_POST = 20;
@@ -53,6 +55,7 @@ async function gpsLoad(){
   const key = S.from + "|" + S.to; S.gps = {key, loading: true};
   try{ const snap = await S.db.collection("gps").where("date", ">=", S.from).where("date", "<=", S.to).get(), rows = [];
     snap.docs.forEach(d => Object.entries((d.data() || {}).rows || {}).forEach(([id, r]) => rows.push({id, d: d.id, ...r, v: r.v || ((gPlate(r.p) || {}).id || "")})));
+    try{ const rv = await S.db.collection("gpsreview").get(); S.gpsReview = {}; rv.docs.forEach(x => S.gpsReview[x.id] = x.data()); }catch(e){}
     if(S.gps && S.gps.key === key) S.gps = {key, rows}; }
   catch(e){ S.gps = {key, error: e.message}; }
   render();
@@ -95,7 +98,7 @@ function vGps(){
   if(S.gps.error) return head + `<div class="section"><div class="banner">Could not read the GPS data – ${esc(S.gps.error)}</div></div>`;
   if(!S.gps.rows.length) return head + `<div class="section"><div class="empty"><b>No GPS data for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</b>Import the tracker's Activity report on the Import tab (or change the period at the top).<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-gpstab="import">Import</button></div></div></div>`;
   const A = gpsAudit();
-  return head + (tab === "drivers" ? gpsDriverView(A) : tab === "data" ? gpsDataView(A) : gpsCarView(A));
+  return head + (tab === "drivers" ? gpsDriverView(A) : tab === "data" ? gpsDataView(A) : tab === "suspect" ? gpsSuspectView(A) : gpsCarView(A));
 }
 function gpsCarView(A){
   const L = A.filter(x => (!S.gpsFlag || x.flags.length) && (!S.gpsCar || x.v === S.gpsCar)), pg = paged("gps", L);
@@ -112,6 +115,82 @@ function gpsCarView(A){
     </tbody></table></div>${pg.bar}
     <p class="small muted" style="margin-top:6px">A stretch counts as on a trip when a platform trip in that car started up to ${GPS_PRE} minutes after it began or ended up to ${GPS_POST} minutes before it ended (driving to the pick-up included). Off-platform km are given to the driver of the nearest trip that day, else to the car's assigned driver.</p></div>`;
 }
+/* ---------- suspicious trips: rides the driver may have taken off the apps ----------
+   A driver can switch the platform app off, agree a fare with a rider and keep the cash – the platforms show nothing,
+   but the tracker records the drive. Stretches with no platform trip are joined into journeys (stops under 10 min
+   are part of the same journey) and graded:
+   High   – between two platform trips of the day, or at night (00:00–05:00), 5 km or more; or 10 km+ on a day
+            the car made no platform trip at all
+   Medium – any other journey of 8 km or more
+   Low    – a drive before the first / after the last trip of the day (going to work / home), 3 km or more
+   Each one can be marked Open / Discussed / Explained / Confirmed with a note, and printed per driver to discuss. */
+function gpsSuspects(A){
+  const out = [];
+  A.forEach(x => {
+    const segs = x.segs.filter(g => g.a != null).sort((p, q) => p.a - q.a); if(!segs.length) return;
+    const on = segs.filter(g => g.on), firstOn = on.length ? on[0].a : null, lastOn = on.length ? Math.max(...on.map(g => g.b ?? g.a)) : null;
+    const J = []; let cur = null;
+    segs.forEach(g => { if(g.on){ cur = null; return; }
+      if(cur && g.a - cur.b <= 10){ cur.b = Math.max(cur.b, g.b ?? g.a); cur.km = r2(cur.km + g.km); cur.to = g.to; cur.e = g.e; cur.n++; }
+      else { cur = {a: g.a, b: g.b ?? g.a, km: g.km, from: g.from, to: g.to, s: g.s, e: g.e, n: 1}; J.push(cur); } });
+    J.forEach(j => {
+      const dur = j.b - j.a; if(j.km < 3 || dur < 6) return;
+      const night = j.a % 1440 < 300, noTrips = !x.trips, between = firstOn != null && j.a > firstOn && j.a < lastOn;
+      const where = noTrips ? "No platform trip all day" : between ? "Between platform trips" : firstOn != null && j.a <= firstOn ? "Before the first trip of the day" : "After the last trip of the day";
+      const level = (between && j.km >= 5) || (night && j.km >= 5) || (noTrips && j.km >= 10) ? "high" : j.km >= 8 ? "medium" : "low";
+      const w = window.driverAt ? driverAt(x.v, x.d, j.s) : {id: "", how: ""}, id = norm(x.v + "_" + x.d + "_" + j.s).slice(0, 60), rv = S.gpsReview[id] || {};
+      out.push({id, v: x.v, d: x.d, s: j.s, e: j.e, km: j.km, dur, from: j.from, to: j.to, stops: j.n - 1, where: where + (night ? " · at night" : ""), level, dr: rv.dr || w.id || "", how: rv.dr ? "set by hand" : w.how, status: rv.status || "open", note: rv.note || ""});
+    });
+  });
+  return out.sort((p, q) => q.d.localeCompare(p.d) || String(p.s).localeCompare(String(q.s)));
+}
+const susLevelPill = l => `<span class="pill ${l === "high" ? "bad" : l === "medium" ? "warn" : ""}">${l === "high" ? "High" : l === "medium" ? "Medium" : "Low"}</span>`;
+const susDur = m => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+function susFilter(L){ return L.filter(x => (!S.susLevel || (S.susLevel === "high" ? x.level === "high" : S.susLevel === "medium" ? x.level !== "low" : true)) && (!S.susStatus || x.status === S.susStatus) && (!S.susDrv || x.dr === S.susDrv) && (!S.gpsCar || x.v === S.gpsCar)); }
+function gpsSuspectView(A){
+  const all = gpsSuspects(A), L = susFilter(all), pg = paged("gpssus", L), cnt = k => all.filter(x => x.level === k).length;
+  const drvs = [...new Set(all.map(x => x.dr).filter(Boolean))].sort((a, b) => dName(a).localeCompare(dName(b)));
+  return `<div class="section"><p class="sub">Journeys the tracker recorded with no platform trip going on – a driver may have switched the app off and taken the rider privately. Check each one with the driver; mark what he says. A journey before the first or after the last trip of the day is usually the drive to work or home (Low).</p>
+    <div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">High</div><div class="v neg">${cnt("high")}</div><div class="n">${fmt(sum(all.filter(x => x.level === "high"), x => x.km))} km</div></div><div class="kpi"><div class="l">Medium</div><div class="v">${cnt("medium")}</div></div><div class="kpi"><div class="l">Low</div><div class="v">${cnt("low")}</div></div>
+      <div class="kpi"><div class="l">Still open</div><div class="v">${all.filter(x => x.status === "open" && x.level !== "low").length}</div><div class="n">high + medium</div></div><div class="kpi"><div class="l">Confirmed private rides</div><div class="v ${all.some(x => x.status === "confirmed") ? "neg" : ""}">${all.filter(x => x.status === "confirmed").length}</div></div></div>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px;gap:6px"><div class="row" style="gap:6px"><select id="susLevel" aria-label="Level">${opts({high: "High only", medium: "High + medium", all: "All levels"}, S.susLevel || "all")}</select><select id="susStatus" aria-label="Status">${opts(SUS_STATUS, S.susStatus, "Any status")}</select>
+      <select id="susDrv" aria-label="Driver">${opts(Object.fromEntries(drvs.map(d => [d, dName(d)])), S.susDrv, "All drivers")}</select><select id="gpsCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.gpsCar, "All cars")}</select></div>
+      <div class="row" style="gap:6px">${dlBtn("gpssus")}<button class="btn sm primary" data-susrpt="${esc(S.susDrv)}" ${S.susDrv ? "" : 'disabled title="Choose a driver first"'}>Driver discussion report (PDF)</button></div></div>
+    <div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Car</th><th>Driver</th><th class="num">km</th><th>Duration</th><th>From → To</th><th>Why</th><th>Level</th><th>Status</th><th>Note</th></tr></thead><tbody>
+    ${pg.rows.map(x => `<tr><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v))}</td><td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}${x.how ? `<div class="muted">${esc(x.how)}</div>` : ""}</td><td class="num">${fmt(x.km)}</td><td class="small">${susDur(x.dur)}${x.stops ? ` · ${x.stops} stop(s)` : ""}</td>
+      <td class="small" style="white-space:normal;min-width:180px">${esc(x.from)} → ${esc(x.to)}</td><td class="small">${esc(x.where)}</td><td>${susLevelPill(x.level)}</td>
+      <td><select data-susst="${esc(x.id)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select></td><td><input data-susnote="${esc(x.id)}" value="${esc(x.note)}" placeholder="what the driver said" style="min-width:160px" ${S.canWrite ? "" : "disabled"}></td></tr>`).join("") || '<tr><td colspan="11" class="muted">Nothing suspicious with these filters.</td></tr>'}
+    </tbody><tfoot><tr><td colspan="4">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="6"></td></tr></tfoot></table></div>${pg.bar}</div>`;
+}
+DL.gpssus = () => { const L = S.gps && S.gps.rows ? susFilter(gpsSuspects(gpsAudit())) : [];
+  return [`suspicious_trips_${S.from}_${S.to}.csv`, [["Date", "Start", "End", "Car", "Driver", "km", "Minutes", "From", "To", "Why", "Level", "Status", "Note"], ...L.map(x => [x.d, x.s, x.e, vName(x.v), x.dr ? dName(x.dr) : "unknown", x.km, x.dur, x.from, x.to, x.where, x.level, SUS_STATUS[x.status], x.note])]]; };
+async function susSave(id, patch){
+  const old = S.gpsReview[id] || {}, rec = {...old, ...patch, by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()};
+  if(await writeOk(S.db.doc("gpsreview/" + id).set(rec))){ S.gpsReview[id] = rec; return true; } return false;
+}
+/* the paper to sit down with the driver: every suspicious journey of the period, what he says, signatures */
+async function susReport(drId){
+  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+  if(!gpsReady()) await gpsLoad();
+  const L = gpsSuspects(gpsAudit()).filter(x => x.dr === drId && x.level !== "low"), d = S.drivers[drId] || {}, st = S.settings || {}, co = st.company || "Royal Rides Limousine LLC";
+  if(!L.length){ toast("No high or medium suspicious journeys for this driver in the period."); return; }
+  const css = `.sr{font:8.6pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;padding:8mm 10mm;width:210mm;box-sizing:border-box;background:#fff}.sr h1{font-size:13pt;margin:0;color:#16213a}.sr .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:6px;margin-bottom:8px}
+    .sr table{width:100%;border-collapse:collapse;margin-bottom:8px}.sr th,.sr td{border:1px solid #c5c9d2;padding:3px 5px;vertical-align:top;text-align:left}.sr th{background:#16213a;color:#fff;font-weight:600;font-size:8pt}.sr td.n{text-align:right}.sr .ans{height:26px}
+    .sr .note{background:#f3f4f7;padding:6px 8px;margin:6px 0 10px;font-size:8pt}.sr .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:16px}.sr .line{border-bottom:1px solid #333;height:30px}`;
+  const html = `<div class="sr"><div class="hd"><div><h1>${esc(co)}</h1><div>Vehicle usage – journeys without a platform trip</div></div><div style="text-align:right"><b>DRIVER DISCUSSION REPORT</b><br>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
+    <table><tr><td style="width:18%;background:#f3f4f7">Driver</td><td><b>${esc(d.name || "")}</b></td><td style="width:18%;background:#f3f4f7">Journeys to explain</td><td>${L.length} · ${fmt(sum(L, x => x.km))} km</td></tr></table>
+    <div class="note">The car's tracker recorded these journeys while no Uber, Bolt or Yango trip was going on for the car. Please explain each one (e.g. fuel, car wash, workshop, going home with company permission). A journey taken with a rider outside the platforms is against company rules.</div>
+    <table><tr><th>#</th><th>Date</th><th>Time</th><th>Car</th><th>km</th><th>From → To</th><th>Why flagged</th><th style="width:26%">Driver's explanation</th></tr>
+    ${L.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}<br><span style="color:#666">${susDur(x.dur)}</span></td><td>${esc(vName(x.v))}</td><td class="n">${fmt(x.km)}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td>${esc(x.where)}${x.level === "high" ? " <b>(high)</b>" : ""}</td><td class="ans">${esc(x.note)}</td></tr>`).join("")}</table>
+    <div class="sigs"><div><b>Driver</b><div class="line"></div>${esc(d.name || "")} – signature & date</div><div><b>For ${esc(co)}</b><div class="line"></div>${esc(st.signatory || "")} – signature & date</div></div></div>`;
+  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${css}</style>${html}`; document.body.appendChild(box);
+  const name = `Discussion_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs"]}}).from(box.querySelector(".sr")).save(); toast("Downloaded " + name);
+    for(const x of L) if(x.status === "open") await susSave(x.id, {status: "discussed", dr: x.dr}); render(); }
+  catch(e){ toast("Could not make the PDF. Try again."); }
+  box.remove();
+}
+
 /* every stretch the tracker recorded in the period, with the trip it belongs to (or none) */
 function gpsSegs(A){ return A.flatMap(x => x.segs.map(g => ({...g, v: x.v, d: x.d}))).sort((a, b) => b.d.localeCompare(a.d) || vName(a.v).localeCompare(vName(b.v)) || String(a.s).localeCompare(String(b.s))); }
 function gpsDataView(A){
@@ -156,6 +235,7 @@ DL.gps = () => { const A = S.gps && S.gps.rows ? gpsAudit() : [];
 document.addEventListener("click", async ev => {
   const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
   if(t.dataset.gpstab){ S.gpsTab = t.dataset.gpstab; render(); return; }
+  if(t.dataset.susrpt != null){ if(!t.dataset.susrpt){ toast("Choose a driver first."); return; } t.disabled = true; await susReport(t.dataset.susrpt); t.disabled = false; return; }
   if(t.dataset.gpsopen){ S.gpsOpen = S.gpsOpen === t.dataset.gpsopen ? "" : t.dataset.gpsopen; render(); return; }
   if(t.dataset.gpscancel){ S.gpsImp = null; render(); return; }
   if(t.dataset.gpsgo){ t.disabled = true; t.textContent = "Importing…"; await gpsSave(); S.gpsTab = "data"; render(); return; }
@@ -166,6 +246,11 @@ document.addEventListener("change", ev => {
   if(t.id === "gpsFlag"){ S.gpsFlag = t.checked; render(); }
   if(t.id === "gpsCar"){ S.gpsCar = t.value; render(); }
   if(t.id === "gpsDay"){ S.gpsDay = t.value; render(); }
+  if(t.id === "susLevel"){ S.susLevel = t.value === "all" ? "" : t.value; render(); }
+  if(t.id === "susStatus"){ S.susStatus = t.value; render(); }
+  if(t.id === "susDrv"){ S.susDrv = t.value; render(); }
+  if(t.dataset && t.dataset.susst){ const x = gpsSuspects(gpsAudit()).find(y => y.id === t.dataset.susst); susSave(t.dataset.susst, {status: t.value, dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Saved."); render(); }); }
+  if(t.dataset && t.dataset.susnote){ const x = gpsSuspects(gpsAudit()).find(y => y.id === t.dataset.susnote); susSave(t.dataset.susnote, {note: t.value.trim(), dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Note saved."); }); }
   if(t.id === "gpsOff"){ S.gpsOff = t.checked; render(); }
 });
 ["dragover", "drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("label[for=gpsFile]"); if(!d) return; ev.preventDefault(); ev.stopPropagation(); if(n === "drop" && ev.dataTransfer.files[0]) gpsRead(ev.dataTransfer.files[0]).catch(e => toast("Could not read the file – " + e.message)); }, true));
@@ -180,4 +265,4 @@ function gpsDriver(id){
 const gpsReady = () => S.gps && S.gps.rows && S.gps.key === S.from + "|" + S.to;
 async function gpsEnsure(){ if(!gpsReady()) await gpsLoad(); return gpsReady(); }
 Object.assign(window.BOOK_VIEWS = window.BOOK_VIEWS || {}, {gps: vGps});
-window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure};
+window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure, suspects: () => gpsSuspects(gpsAudit()), report: susReport, levelPill: susLevelPill, dur: susDur, STATUS: SUS_STATUS};
