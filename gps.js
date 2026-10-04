@@ -5,8 +5,8 @@
      (the trips were done in another car, or the plate on the trips is wrong).
    The tracker has no open API (its data pages work only inside its own login), so its reports are imported. */
 const GPS_PORTAL = "https://sharyoiot.in/VTSV15/Reports?pUserId=1260&pModuleId=30&pListSP=rptActivity&pLinkText=Activity";
-const GPS_TABS = {audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
-S.gpsTab = S.gpsTab || "audit"; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
+const GPS_TABS = {data: "GPS data", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
+S.gpsTab = S.gpsTab || "data"; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
 // a stretch with no trip within this many minutes before / after counts as off the platforms
 const GPS_PRE = 45, GPS_POST = 20;
 
@@ -95,7 +95,7 @@ function vGps(){
   if(S.gps.error) return head + `<div class="section"><div class="banner">Could not read the GPS data – ${esc(S.gps.error)}</div></div>`;
   if(!S.gps.rows.length) return head + `<div class="section"><div class="empty"><b>No GPS data for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</b>Import the tracker's Activity report on the Import tab (or change the period at the top).<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-gpstab="import">Import</button></div></div></div>`;
   const A = gpsAudit();
-  return head + (tab === "drivers" ? gpsDriverView(A) : gpsCarView(A));
+  return head + (tab === "drivers" ? gpsDriverView(A) : tab === "data" ? gpsDataView(A) : gpsCarView(A));
 }
 function gpsCarView(A){
   const L = A.filter(x => (!S.gpsFlag || x.flags.length) && (!S.gpsCar || x.v === S.gpsCar)), pg = paged("gps", L);
@@ -112,6 +112,22 @@ function gpsCarView(A){
     </tbody></table></div>${pg.bar}
     <p class="small muted" style="margin-top:6px">A stretch counts as on a trip when a platform trip in that car started up to ${GPS_PRE} minutes after it began or ended up to ${GPS_POST} minutes before it ended (driving to the pick-up included). Off-platform km are given to the driver of the nearest trip that day, else to the car's assigned driver.</p></div>`;
 }
+/* every stretch the tracker recorded in the period, with the trip it belongs to (or none) */
+function gpsSegs(A){ return A.flatMap(x => x.segs.map(g => ({...g, v: x.v, d: x.d}))).sort((a, b) => b.d.localeCompare(a.d) || vName(a.v).localeCompare(vName(b.v)) || String(a.s).localeCompare(String(b.s))); }
+function gpsDataView(A){
+  const all = gpsSegs(A), L = all.filter(g => (!S.gpsCar || g.v === S.gpsCar) && (!S.gpsDay || g.d === S.gpsDay) && (!S.gpsOff || !g.on)), pg = paged("gpsdata", L);
+  const days = [...new Set(all.map(g => g.d))].sort(), byCar = {}; all.forEach(g => { const o = byCar[g.v] ||= {km: 0, off: 0, n: 0, days: new Set()}; o.km += g.km; o.n++; o.days.add(g.d); if(!g.on) o.off += g.km; });
+  const dur = g => { const b = g.b == null ? g.a : g.b; return g.a == null ? "" : `${Math.floor((b - g.a) / 60)}:${String((b - g.a) % 60).padStart(2, "0")}`; };
+  return `<div class="section"><p class="sub">Every stretch each car moved in ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} (GPS data from ${days.length ? esc(dmyS(days[0])) + " to " + esc(dmyS(days[days.length - 1])) : "—"}), with the platform trip it belongs to.</p>
+    <details style="margin-bottom:10px"><summary class="small" style="cursor:pointer"><b>By car</b> – ${Object.keys(byCar).length} cars · ${fmt(sum(all, g => g.km))} km</summary><div class="tbl" style="margin-top:6px"><table><thead><tr><th>Car</th><th class="num">Days</th><th class="num">Stretches</th><th class="num">GPS km</th><th class="num">km without a trip</th></tr></thead><tbody>
+      ${Object.entries(byCar).sort((a, b) => b[1].km - a[1].km).map(([v, o]) => `<tr><td>${esc(v ? vName(v) : "Not in Vehicles")}</td><td class="num">${o.days.size}</td><td class="num">${o.n}</td><td class="num">${fmt(o.km)}</td><td class="num">${fmt(o.off)}</td></tr>`).join("")}</tbody></table></div></details>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px"><div class="row" style="gap:6px"><select id="gpsCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.gpsCar, "All cars")}</select><select id="gpsDay" aria-label="Day">${opts(Object.fromEntries(days.map(d => [d, dmyS(d)])), S.gpsDay, "All days")}</select><label class="small"><input type="checkbox" id="gpsOff" ${S.gpsOff ? "checked" : ""}> Only without a trip</label></div>${dlBtn("gpsdata")}</div>
+    <div class="tbl"><table><thead><tr><th>Date</th><th>Car</th><th>Start</th><th>End</th><th>Duration</th><th class="num">km</th><th>From</th><th>To</th><th>Trip</th></tr></thead><tbody>
+    ${pg.rows.map(g => `<tr${g.on ? "" : ' style="background:var(--bad-bg, #fdecec)"'}><td>${esc(dmyS(g.d))}</td><td>${esc(vName(g.v))}</td><td>${esc(g.s)}</td><td>${esc(g.e)}</td><td class="small">${dur(g)}</td><td class="num">${fmt(g.km)}</td><td class="small" style="white-space:normal">${esc(g.from)}</td><td class="small" style="white-space:normal">${esc(g.to)}</td><td class="small">${g.on ? esc(dName(g.dr)) : "<b>no trip</b>"}</td></tr>`).join("") || '<tr><td colspan="9" class="muted">No stretches match.</td></tr>'}
+    </tbody><tfoot><tr><td colspan="5">${L.length} stretch(es)</td><td class="num">${fmt(sum(L, g => g.km))}</td><td colspan="3"></td></tr></tfoot></table></div>${pg.bar}</div>`;
+}
+DL.gpsdata = () => { const A = S.gps && S.gps.rows ? gpsAudit() : [], L = gpsSegs(A).filter(g => (!S.gpsCar || g.v === S.gpsCar) && (!S.gpsDay || g.d === S.gpsDay) && (!S.gpsOff || !g.on));
+  return [`gps_data_${S.from}_${S.to}.csv`, [["Date", "Car", "Start", "End", "km", "From", "To", "Trip (driver)"], ...L.map(g => [g.d, vName(g.v), g.s, g.e, g.km, g.from, g.to, g.on ? dName(g.dr) : "no trip"])]]; };
 function gpsDriverView(A){
   const by = {}; const add = (d, k, v) => { const o = by[d] ||= {d, days: new Set(), tripKm: 0, offKm: 0, flags: 0}; o[k] += v; };
   A.forEach(x => { x.drivers.forEach(d => { by[d] ||= {d, days: new Set(), tripKm: 0, offKm: 0, flags: 0}; by[d].days.add(x.d); }); const tk = {}; x.segs.filter(s => s.on && s.dr).forEach(s => tk[s.dr] = (tk[s.dr] || 0) + s.km); Object.entries(tk).forEach(([d, km]) => add(d, "tripKm", km));
@@ -142,13 +158,15 @@ document.addEventListener("click", async ev => {
   if(t.dataset.gpstab){ S.gpsTab = t.dataset.gpstab; render(); return; }
   if(t.dataset.gpsopen){ S.gpsOpen = S.gpsOpen === t.dataset.gpsopen ? "" : t.dataset.gpsopen; render(); return; }
   if(t.dataset.gpscancel){ S.gpsImp = null; render(); return; }
-  if(t.dataset.gpsgo){ t.disabled = true; t.textContent = "Importing…"; await gpsSave(); S.gpsTab = "audit"; render(); return; }
+  if(t.dataset.gpsgo){ t.disabled = true; t.textContent = "Importing…"; await gpsSave(); S.gpsTab = "data"; render(); return; }
 });
 document.addEventListener("change", ev => {
   const t = ev.target;
   if(t.id === "gpsFile" && t.files[0]) gpsRead(t.files[0]).catch(e => toast("Could not read the file – " + e.message));
   if(t.id === "gpsFlag"){ S.gpsFlag = t.checked; render(); }
   if(t.id === "gpsCar"){ S.gpsCar = t.value; render(); }
+  if(t.id === "gpsDay"){ S.gpsDay = t.value; render(); }
+  if(t.id === "gpsOff"){ S.gpsOff = t.checked; render(); }
 });
 ["dragover", "drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("label[for=gpsFile]"); if(!d) return; ev.preventDefault(); ev.stopPropagation(); if(n === "drop" && ev.dataTransfer.files[0]) gpsRead(ev.dataTransfer.files[0]).catch(e => toast("Could not read the file – " + e.message)); }, true));
 /* one driver's vehicle-usage audit for the period: the car-days he drove (his trips, or off-platform km given to him) */
