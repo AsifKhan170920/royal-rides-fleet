@@ -201,21 +201,53 @@ async function susSave(id, patch){
   if(await writeOk(S.db.doc("gpsreview/" + id).set(rec))){ S.gpsReview[id] = rec; return true; } return false;
 }
 /* the paper to sit down with the driver: every suspicious journey of the period, what he says, signatures */
+const SUS_CSS = `.sr{font:8.6pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;padding:8mm 10mm;width:210mm;box-sizing:border-box;background:#fff}.sr h1{font-size:13pt;margin:0;color:#16213a}.sr .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:6px;margin-bottom:8px}
+  .sr table{width:100%;border-collapse:collapse;margin-bottom:8px}.sr th,.sr td{border:1px solid #c5c9d2;padding:3px 5px;vertical-align:top;text-align:left}.sr th{background:#16213a;color:#fff;font-weight:600;font-size:8pt}.sr td.n{text-align:right}.sr .ans{height:26px}
+  .sr .note{background:#f3f4f7;padding:6px 8px;margin:6px 0 10px;font-size:8pt}.sr .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:16px;page-break-inside:avoid}.sr .line{border-bottom:1px solid #333;height:30px}
+  .sr tr.t td{font-weight:700;background:#f3f4f7}.sr .muted{color:#666}`;
+const gpsPlaceTxt = p => { const m = String(p || "").match(/^(-?\d+\.\d+)[ ,]+(-?\d+\.\d+)$/); return m ? (+m[1]).toFixed(4) + ", " + (+m[2]).toFixed(4) : String(p || ""); };
+function susHtml(drId){
+  const L = gpsSuspects(gpsAudit()).filter(x => x.dr === drId && x.level !== "low"), d = S.drivers[drId] || {}, st = S.settings || {}, co = st.company || "Royal Rides Limousine LLC";
+  if(!L.length) return "";
+  return `<div class="sr"><div class="hd"><div><h1>${esc(co)}</h1><div>Vehicle usage – journeys without a platform trip</div></div><div style="text-align:right"><b>SUSPICIOUS TRIPS – DRIVER DISCUSSION</b><br>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
+    <table><tr><td style="width:18%;background:#f3f4f7">Driver</td><td><b>${esc(d.name || "")}</b></td><td style="width:18%;background:#f3f4f7">Journeys to explain</td><td>${L.length} (${L.filter(x => x.level === "high").length} high) · ${fmt(sum(L, x => x.km))} km</td></tr></table>
+    <div class="note">The car's tracker recorded these journeys while no Uber, Bolt or Yango trip was going on for the car. Please explain each one (e.g. fuel, car wash, workshop, going home with company permission). A journey taken with a rider outside the platforms is against company rules.</div>
+    <table><tr><th>#</th><th>Date</th><th>Time</th><th>Car</th><th>km</th><th>km/h</th><th>From → To</th><th>Why flagged</th><th>Status</th><th style="width:22%">Driver's explanation</th></tr>
+    ${L.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}<br><span class="muted">${susDur(x.dur)}${x.stops ? " · " + x.stops + " stop(s)" : ""}</span></td><td>${esc(vName(x.v))}</td><td class="n">${fmt(x.km)}</td><td class="n">${x.spd || ""}</td><td>${esc(gpsPlaceTxt(x.from))} → ${esc(gpsPlaceTxt(x.to))}</td><td>${esc(x.where)}${x.level === "high" ? " <b>(high)</b>" : ""}</td><td>${esc(SUS_STATUS[x.status])}</td><td class="ans">${esc(x.note)}</td></tr>`).join("")}
+    <tr class="t"><td colspan="4">Total</td><td class="n">${fmt(sum(L, x => x.km))}</td><td colspan="5"></td></tr></table>
+    <div class="sigs"><div><b>Driver</b><div class="line"></div>${esc(d.name || "")} – signature & date</div><div><b>For ${esc(co)}</b><div class="line"></div>${esc(st.signatory || "")} – signature & date</div></div></div>`;
+}
+/* every stretch of his that was not a platform trip – pick-ups, parking and no-trip – one by one */
+function gpsStretchHtml(drId){
+  const L = gpsAudit().flatMap(x => x.segs.filter(g => g.dr === drId && g.term !== "trip").map(g => ({...g, v: x.v, d: x.d}))).sort((p, q) => p.d.localeCompare(q.d) || String(p.s).localeCompare(String(q.s)));
+  if(!L.length) return "";
+  const d = S.drivers[drId] || {}, co = (S.settings || {}).company || "Royal Rides Limousine LLC", t = k => L.filter(g => g.term === k);
+  const dur = g => g.a == null ? "" : `${Math.floor(((g.b ?? g.a) - g.a) / 60)}:${String(((g.b ?? g.a) - g.a) % 60).padStart(2, "0")}`;
+  return `<div class="sr"><div class="hd"><div><h1>${esc(co)}</h1><div>GPS detail – every stretch that was not a platform trip</div></div><div style="text-align:right"><b>GPS STATUS DETAIL</b><br>${esc(d.name || "")} · ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
+    <table><tr><th>Pick-up (to his trips)</th><th>Parking / short moves</th><th>Without any trip</th></tr><tr><td>${t("pickup").length} · ${fmt(sum(t("pickup"), g => g.km))} km</td><td>${t("parking").length} · ${fmt(sum(t("parking"), g => g.km))} km</td><td><b>${t("none").length} · ${fmt(sum(t("none"), g => g.km))} km</b></td></tr></table>
+    <table><tr><th>#</th><th>Date</th><th>Car</th><th>Start</th><th>End</th><th>Duration</th><th>km</th><th>What</th><th>Trip No</th><th>From</th><th>To</th><th>Why his</th></tr>
+    ${L.map((g, i) => `<tr${g.term === "none" ? ' style="background:#fdecec"' : ""}><td>${i + 1}</td><td>${esc(dmyS(g.d))}</td><td>${esc(vName(g.v))}</td><td>${esc(g.s)}</td><td>${esc(g.e)}</td><td>${dur(g)}</td><td class="n">${fmt(g.km)}</td><td>${TERM_LABEL[g.term]}</td><td>${g.no || ""}</td><td>${esc(gpsPlaceTxt(g.from))}</td><td>${esc(gpsPlaceTxt(g.to))}</td><td class="muted">${esc(g.how || "")}</td></tr>`).join("")}
+    <tr class="t"><td colspan="6">Total</td><td class="n">${fmt(sum(L, g => g.km))}</td><td colspan="5"></td></tr></table></div>`;
+}
+/* the whole audit for a driver: usage audit + suspicious trips + GPS detail, each on its own page */
+const GPS_PRINT_CSS = () => AUD_CSS + SUS_CSS;
+function gpsBundleHtml(drId){ if(!gpsReady()) return ""; const A = gpsDriverAudit(drId); if(!A || !A.days.length) return "";
+  return [gpsAuditHtml(drId), susHtml(drId), gpsStretchHtml(drId)].filter(Boolean).map(h => `<div style="page-break-before:always"></div>${h}`).join(""); }
+// bulk PDFs (jsPDF pages): an HTML block drawn on as many A4 pages as it needs
+async function addHtmlPages(doc, html, css){
+  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${css}</style>${html}`; document.body.appendChild(box);
+  try{ for(const el of box.querySelectorAll(".au, .sr")){ const canvas = await html2pdf().set({html2canvas: {scale: 2, backgroundColor: "#ffffff"}}).from(el).toCanvas().get("canvas");
+      const pageH = Math.round(canvas.width * 297 / 210);
+      for(let y = 0; y < canvas.height; y += pageH){ const c = document.createElement("canvas"); c.width = canvas.width; c.height = Math.min(pageH, canvas.height - y); c.getContext("2d").drawImage(canvas, 0, y, c.width, c.height, 0, 0, c.width, c.height);
+        doc.addPage(); doc.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, 210, 210 * c.height / c.width); } } }
+  finally{ box.remove(); }
+}
 async function susReport(drId){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
   if(!gpsReady()) await gpsLoad();
-  const L = gpsSuspects(gpsAudit()).filter(x => x.dr === drId && x.level !== "low"), d = S.drivers[drId] || {}, st = S.settings || {}, co = st.company || "Royal Rides Limousine LLC";
-  if(!L.length){ toast("No high or medium suspicious journeys for this driver in the period."); return; }
-  const css = `.sr{font:8.6pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;padding:8mm 10mm;width:210mm;box-sizing:border-box;background:#fff}.sr h1{font-size:13pt;margin:0;color:#16213a}.sr .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:6px;margin-bottom:8px}
-    .sr table{width:100%;border-collapse:collapse;margin-bottom:8px}.sr th,.sr td{border:1px solid #c5c9d2;padding:3px 5px;vertical-align:top;text-align:left}.sr th{background:#16213a;color:#fff;font-weight:600;font-size:8pt}.sr td.n{text-align:right}.sr .ans{height:26px}
-    .sr .note{background:#f3f4f7;padding:6px 8px;margin:6px 0 10px;font-size:8pt}.sr .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:16px}.sr .line{border-bottom:1px solid #333;height:30px}`;
-  const html = `<div class="sr"><div class="hd"><div><h1>${esc(co)}</h1><div>Vehicle usage – journeys without a platform trip</div></div><div style="text-align:right"><b>DRIVER DISCUSSION REPORT</b><br>${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
-    <table><tr><td style="width:18%;background:#f3f4f7">Driver</td><td><b>${esc(d.name || "")}</b></td><td style="width:18%;background:#f3f4f7">Journeys to explain</td><td>${L.length} · ${fmt(sum(L, x => x.km))} km</td></tr></table>
-    <div class="note">The car's tracker recorded these journeys while no Uber, Bolt or Yango trip was going on for the car. Please explain each one (e.g. fuel, car wash, workshop, going home with company permission). A journey taken with a rider outside the platforms is against company rules.</div>
-    <table><tr><th>#</th><th>Date</th><th>Time</th><th>Car</th><th>km</th><th>From → To</th><th>Why flagged</th><th style="width:26%">Driver's explanation</th></tr>
-    ${L.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}<br><span style="color:#666">${susDur(x.dur)}</span></td><td>${esc(vName(x.v))}</td><td class="n">${fmt(x.km)}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td>${esc(x.where)}${x.level === "high" ? " <b>(high)</b>" : ""}</td><td class="ans">${esc(x.note)}</td></tr>`).join("")}</table>
-    <div class="sigs"><div><b>Driver</b><div class="line"></div>${esc(d.name || "")} – signature & date</div><div><b>For ${esc(co)}</b><div class="line"></div>${esc(st.signatory || "")} – signature & date</div></div></div>`;
-  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${css}</style>${html}`; document.body.appendChild(box);
+  const html = susHtml(drId), L = gpsSuspects(gpsAudit()).filter(x => x.dr === drId && x.level !== "low"), d = S.drivers[drId] || {};
+  if(!html){ toast("No high or medium suspicious journeys for this driver in the period."); return; }
+  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${SUS_CSS}</style>${html}`; document.body.appendChild(box);
   const name = `Discussion_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
   try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs"]}}).from(box.querySelector(".sr")).save(); toast("Downloaded " + name);
     for(const x of L) if(x.status === "open") await susSave(x.id, {status: "discussed", dr: x.dr}); render(); }
@@ -355,14 +387,14 @@ function gpsAuditHtml(id){
 }
 async function auditPdf(id){
   if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
-  await gpsEnsure(); const html = gpsAuditHtml(id); if(!html){ toast("No GPS data for this period."); return; }
-  const d = S.drivers[id] || {}, box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${AUD_CSS}</style>${html}`; document.body.appendChild(box);
+  await gpsEnsure(); const html = [gpsAuditHtml(id), susHtml(id), gpsStretchHtml(id)].filter(Boolean).join('<div style="page-break-before:always"></div>'); if(!html){ toast("No GPS data for this period."); return; }
+  const d = S.drivers[id] || {}, box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${AUD_CSS}${SUS_CSS}</style><div class="pdfwrap">${html}</div>`; document.body.appendChild(box);
   const name = `Vehicle_usage_audit_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
-  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs", ".box"]}}).from(box.querySelector(".au")).save(); toast("Downloaded " + name); }
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs", ".box"]}}).from(box.querySelector(".pdfwrap")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
 const gpsReady = () => S.gps && S.gps.rows && S.gps.key === S.from + "|" + S.to;
 async function gpsEnsure(){ if(!gpsReady()) await gpsLoad(); return gpsReady(); }
 Object.assign(window.BOOK_VIEWS = window.BOOK_VIEWS || {}, {gps: vGps});
-window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure, suspects: () => gpsSuspects(gpsAudit()), report: susReport, levelPill: susLevelPill, dur: susDur, STATUS: SUS_STATUS, driverAudit: gpsDriverAudit, auditHtml: gpsAuditHtml, auditPdf, AUD_CSS};
+window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure, suspects: () => gpsSuspects(gpsAudit()), report: susReport, levelPill: susLevelPill, dur: susDur, STATUS: SUS_STATUS, driverAudit: gpsDriverAudit, auditHtml: gpsAuditHtml, auditPdf, AUD_CSS, bundleHtml: gpsBundleHtml, printCss: GPS_PRINT_CSS, addHtmlPages};

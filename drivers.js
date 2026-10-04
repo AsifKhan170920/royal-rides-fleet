@@ -429,8 +429,8 @@ async function printSalary(id){
   if(window.GPS) await GPS.ensure();   // the vehicle-usage audit on the statement
   const x = selX(id, compute().D[id]) || {}, late = lateFor(id, fin), M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
-  const aud = window.GPS && GPS.ready() && GPS.driverAudit(id) && GPS.driverAudit(id).days.length ? `<div style="page-break-before:always"></div>${GPS.auditHtml(id)}` : "";
-  box.innerHTML = `<style>${SAL_CSS}${window.GPS ? GPS.AUD_CSS : ""}</style><div class="pdfwrap">${salaryPrintHtml(M, d, fin)}${aud}</div>`; document.body.appendChild(box);
+  const aud = window.GPS ? GPS.bundleHtml(id) : "";   // vehicle usage audit + suspicious trips + GPS detail
+  box.innerHTML = `<style>${SAL_CSS}${window.GPS ? GPS.printCss() : ""}</style><div class="pdfwrap">${salaryPrintHtml(M, d, fin)}${aud}</div>`; document.body.appendChild(box);
   const name = `Salary_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
   try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".pdfwrap") || box.querySelector(".sp")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
@@ -591,6 +591,8 @@ async function bulkStatements(){
         box.remove();
         const h = Math.min(297, 210 * canvas.height / canvas.width), w = h < 297 ? 210 : 297 * canvas.width / canvas.height;
         if(pages) doc.addPage(); doc.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (210 - w) / 2, 0, w, h); pages++;
+        // the driver's GPS audit pages follow his statement
+        if(window.GPS){ await GPS.ensure(); const aud = GPS.bundleHtml(id); if(aud) await GPS.addHtmlPages(doc, aud, GPS.printCss()); }
       }
     }
     doc.save(`Salary_statements_finalised_${S.bulk.from}_${S.bulk.to}.pdf`); toast(`Downloaded ${pages} salary statements.`);
