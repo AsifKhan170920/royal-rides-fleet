@@ -298,24 +298,56 @@ function salaryRows(M){
     L(`Difference – ${M.inHand == null ? "still to be accounted for" : Math.abs(M.diff) < 0.005 ? "fully accounted for" : M.diff > 0 ? "shortage" : "excess"}`, M.diff, "g"));
   return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6]];
 }
-/* Performance targets (per month): the general targets in Settings apply to every driver, unless the driver
-   has his own targets (driver form → "Own targets"). Trips, days and km are pro-rated to the period
-   (a full month counts as 1); completion % is not. */
+/* Performance targets: per day worked (trips, net earnings, km), days worked per month and completion %.
+   The general targets in Settings apply to every driver, unless the driver has his own (driver form → "Own targets").
+   Days worked is pro-rated to the period (a full month counts as 1); the per-day targets and completion % are not.
+   Older monthly targets (trips / km a month) are read as per day by dividing by the days. */
 function driverTargets(id){
-  const d = S.drivers[id] || {}, own = d.ownTargets === true || d.ownTargets === "true";
-  const src = own ? {trips: d.tgTrips, days: d.tgDays, km: d.tgKm, comp: d.tgCompletion}
-    : {trips: setting("tgTrips", 300), days: setting("tgDays", 25), km: setting("tgKm", 3000), comp: setting("tgCompletion", 80)};
+  const d = S.drivers[id] || {}, own = d.ownTargets === true || d.ownTargets === "true", g = k => own ? d[k] : setting(k, "");
+  const days = num(g("tgDays")) || (own ? 0 : 25), perDay = (k, old) => num(g(k)) || (num(g(old)) && days ? num(g(old)) / days : 0);
   let f = 0; for(let day = S.from; day <= S.to; day = addDays(day, 1)) f += 1 / dim(day);
-  const t = v => num(v) ? num(v) * f : null;
-  return {own, f, trips: t(src.trips), days: t(src.days), km: t(src.km), comp: num(src.comp) || null};
+  return {own, f, tpd: perDay("tgTripsDay", "tgTrips") || null, npd: num(g("tgNetDay")) || null, kpd: perDay("tgKmDay", "tgKm") || null, days: days ? days * f : null, comp: num(g("tgCompletion")) || (own ? null : 80)};
 }
 function targetRows(id, x, completion){
-  const T = driverTargets(id), rows = [];
-  const add = (label, target, actual, unit, round) => { if(target == null) return; const tv = round ? Math.round(target) : r2(target); rows.push({label, target: tv, actual, unit, pct: tv ? Math.round(100 * actual / tv) : 0, met: actual >= tv - 0.0001}); };
-  add("Trips", T.trips, x.n || 0, "", true); add("Days worked", T.days, x.daysWorked || 0, "", true); add("Distance", T.km, r2(x.km || 0), " km", true);
+  const T = driverTargets(id), rows = [], dw = x.daysWorked || 0, per = v => dw ? r2(num(v) / dw) : 0;
+  const add = (label, target, actual, unit, dec) => { if(target == null) return; const tv = dec ? r2(target) : Math.round(target); rows.push({label, target: tv, actual, unit, pct: tv ? Math.round(100 * actual / tv) : 0, met: actual >= tv - 0.0001}); };
+  add("Trips per day", T.tpd, per(x.n), "", true); add("Net earnings per day", T.npd, per(x.net), " AED", true); add("Distance per day", T.kpd, per(x.km), " km", true);
+  add("Days worked", T.days, dw, "", false);
   if(T.comp != null && completion != null) add("Completion", T.comp, completion, "%", true);
   return {T, rows};
 }
+/* Targets from the best drivers of a month: for each measure the average of its top 3 drivers (drivers with at
+   least 10 days worked; completion from the Uber Trip activity, drivers with 50+ requests). */
+async function topTargets(month){
+  const a = month + "-01", b = monthEnd(month), ts = await S.db.collection("trips").where("date", ">=", a).where("date", "<=", b).get(), trips = [];
+  ts.docs.forEach(x => Object.entries((x.data() || {}).rows || {}).forEach(([id, r]) => trips.push({id, ...r})));
+  const is = await S.db.collection("tripinfo").where("date", ">=", addDays(a, -1)).where("date", "<=", addDays(b, 1)).get(), info = {}, acts = [];
+  is.docs.forEach(x => Object.entries((x.data() || {}).rows || {}).forEach(([tr, r]) => { info[tr] = r; if(r.d >= a && r.d <= b) acts.push(r); }));
+  if(window.mergeInfo) mergeInfo(trips, info);
+  const by = {}; trips.forEach(t => { if(!t.dr || !(t.tr || t.f)) return; const o = by[t.dr] ||= {trips: new Set(), days: new Set(), km: 0, net: 0}; if(t.tr && t.f > 0) o.trips.add(t.tr); o.days.add(t.d); o.km += t.km || 0; o.net += (t.f || 0) - (t.sf || 0) - (t.tx || 0); });
+  const comp = {}; acts.forEach(x => { if(!x.dr) return; const c = comp[x.dr] ||= {n: 0, ok: 0}; c.n++; if(x.st === "completed") c.ok++; });
+  const rows = Object.entries(by).map(([id, o]) => ({id, days: o.days.size, tpd: o.trips.size / o.days.size, npd: o.net / o.days.size, kpd: o.km / o.days.size, comp: comp[id] && comp[id].n >= 50 ? 100 * comp[id].ok / comp[id].n : null})).filter(r => r.days >= 10);
+  const M = [["tpd", "Trips per day"], ["npd", "Net earnings per day"], ["kpd", "Distance per day (km)"], ["days", "Days worked (month)"], ["comp", "Completion (%)"]];
+  const res = M.map(([k, l]) => { const t = rows.filter(r => r[k] != null).sort((x, y) => y[k] - x[k]).slice(0, 3); return {k, l, avg: t.length ? r2(t.reduce((s, r) => s + r[k], 0) / t.length) : null, top: t.map(r => ({id: r.id, v: r2(r[k])}))}; });
+  return {month, drivers: rows.length, res};
+}
+function topTargetsPanel(){
+  const R = S.tgTop; if(!R) return "";
+  if(R.busy) return '<div class="banner info">Working out the targets from the top 3…</div>';
+  return `<div class="section" style="border:1px solid var(--line)"><h3 style="margin:0 0 4px">Targets from the top 3 of ${esc(R.month)}</h3><p class="sub">${R.drivers} drivers with 10+ days worked. Each target is the average of the 3 best drivers for that measure. Saved as the general targets.</p>
+    <div class="tbl"><table><thead><tr><th>Measure</th><th class="num">Target (top-3 average)</th><th>1st</th><th>2nd</th><th>3rd</th></tr></thead><tbody>${R.res.map(x => `<tr><td>${esc(x.l)}</td><td class="num"><b>${x.avg == null ? "–" : fmt(x.avg)}</b></td>${[0, 1, 2].map(i => x.top[i] ? `<td class="small">${esc(dName(x.top[i].id))} · ${fmt(x.top[i].v)}</td>` : "<td></td>").join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="row" style="margin-top:6px"><button class="btn ghost sm" data-tgtopclose="1">Close</button></div></div>`;
+}
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
+  if(t.dataset.tgtopclose){ S.tgTop = null; render(); return; }
+  if(t.dataset.tgtop){ const m = (document.getElementById("tgMonth") || {}).value; if(!m){ toast("Choose the month."); return; }
+    S.tgTop = {busy: true}; render(); const R = await topTargets(m), v = k => (R.res.find(x => x.k === k) || {}).avg;
+    if(!R.drivers){ S.tgTop = null; toast("No driver worked 10+ days in " + m + "."); render(); return; }
+    const set = {tgTripsDay: v("tpd") ?? "", tgNetDay: v("npd") ?? "", tgKmDay: v("kpd") ?? "", tgDays: v("days") != null ? Math.round(v("days")) : "", tgCompletion: v("comp") != null ? Math.round(v("comp")) : "", tgFrom: m};
+    if(await writeOk(S.db.doc("settings/main").set({...S.settings, ...set}))){ S.tgTop = R; toast("Targets set from the top 3 of " + m + "."); } else S.tgTop = null; render(); return; }
+});
+window.topTargetsPanel = topTargetsPanel;
 function targetTable(id, x, completion, print){
   const {T, rows} = targetRows(id, x, completion); if(!rows.length) return "";
   const met = rows.filter(r => r.met).length, f = v => typeof v === "number" ? (Number.isInteger(v) ? v.toLocaleString("en-US") : fmt(v)) : v;

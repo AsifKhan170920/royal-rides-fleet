@@ -1189,11 +1189,12 @@ function driverForm(id, d0){
     <div class="f"><label for="dsal">Monthly salary (AED)</label><input id="dsal" name="salary" type="number" step="0.01" value="${esc(d.salary ?? "")}"></div>
     <div class="f"><label for="dtf">Terms effective from</label><input id="dtf" name="termFrom" type="date" value="${esc(iso(new Date()))}"></div>
     <div class="f"><label for="dtn">Reason for change (optional)</label><input id="dtn" name="termNote" placeholder="e.g. new agreement, promotion"></div>
-    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Performance targets (per month)</b> <span class="small muted">– with “Own targets” on, the general targets in Settings don't apply to this driver; a blank box means no target for it.</span></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Performance targets</b> <span class="small muted">– with “Own targets” on, the general targets in Settings don't apply to this driver; a blank box means no target for it.</span></div>
     <div class="f"><label for="dtgo">Targets</label><select id="dtgo" name="ownTargets">${opts({false:"General targets (Settings)", true:"Own targets"}, String(d.ownTargets === true || d.ownTargets === "true"))}</select></div>
-    <div class="f"><label for="dtgt">Trips</label><input id="dtgt" name="tgTrips" type="number" step="1" value="${esc(d.tgTrips ?? "")}"></div>
-    <div class="f"><label for="dtgd">Days worked</label><input id="dtgd" name="tgDays" type="number" step="1" value="${esc(d.tgDays ?? "")}"></div>
-    <div class="f"><label for="dtgk">Distance (km)</label><input id="dtgk" name="tgKm" type="number" step="1" value="${esc(d.tgKm ?? "")}"></div>
+    <div class="f"><label for="dtgt">Trips per day</label><input id="dtgt" name="tgTripsDay" type="number" step="0.01" value="${esc(d.tgTripsDay ?? (d.tgTrips && d.tgDays ? r2(d.tgTrips / d.tgDays) : ""))}"></div>
+    <div class="f"><label for="dtgn">Net earnings per day</label><input id="dtgn" name="tgNetDay" type="number" step="0.01" value="${esc(d.tgNetDay ?? "")}"></div>
+    <div class="f"><label for="dtgk">Distance per day (km)</label><input id="dtgk" name="tgKmDay" type="number" step="0.01" value="${esc(d.tgKmDay ?? (d.tgKm && d.tgDays ? r2(d.tgKm / d.tgDays) : ""))}"></div>
+    <div class="f"><label for="dtgd">Days worked (a month)</label><input id="dtgd" name="tgDays" type="number" step="1" value="${esc(d.tgDays ?? "")}"></div>
     <div class="f"><label for="dtgc">Completion (%)</label><input id="dtgc" name="tgCompletion" type="number" step="1" value="${esc(d.tgCompletion ?? "")}"></div>
     <div class="f"><label for="dact">Status</label><select id="dact" name="active">${opts({true:"Active", false:"Inactive"}, String(d.active !== false))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite?"":"disabled"}>Save driver</button><button class="btn ghost" type="button" data-cancel>Cancel</button>${id?`<button class="btn danger" type="button" data-del="drivers" data-id="${esc(id)}">Delete</button>`:""}</div>
@@ -1816,10 +1817,13 @@ function vSettings(){
   return `<div class="section"><h2>General</h2><p class="sub">Books start, driver targets, reminders and tips. Business information and VAT have their own tabs.</p>
   <form class="form" id="fSettings">
     <div class="f"><label for="sls">Books start on (driver ledgers, bank & cash opening balances)</label><input id="sls" name="ledgerStart" type="date" value="${esc(s.ledgerStart || "2026-09-01")}"></div>
-    <div class="f wide" style="margin-top:6px"><b>Driver performance targets (per month, all drivers)</b> <span class="small muted">– a driver with his own targets uses those instead.</span></div>
-    <div class="f"><label for="stt">Trips</label><input id="stt" name="tgTrips" type="number" step="1" value="${esc(s.tgTrips ?? 300)}"></div>
-    <div class="f"><label for="std">Days worked</label><input id="std" name="tgDays" type="number" step="1" value="${esc(s.tgDays ?? 25)}"></div>
-    <div class="f"><label for="stk">Distance (km)</label><input id="stk" name="tgKm" type="number" step="1" value="${esc(s.tgKm ?? 3000)}"></div>
+    <div class="f wide" style="margin-top:6px"><b>Driver performance targets (all drivers)</b> <span class="small muted">– per day worked, plus days worked a month and completion. A driver with his own targets uses those instead.${s.tgFrom ? ` Set from the top 3 of ${esc(s.tgFrom)}.` : ""}</span>
+      <div class="row" style="margin-top:6px;gap:6px;align-items:center"><span class="small">Set from the top 3 drivers of</span><input type="month" id="tgMonth" value="${esc(addDays(S.from.slice(0, 7) + "-01", -1).slice(0, 7))}" aria-label="Month"><button class="btn sm" type="button" data-tgtop="1">Set targets</button></div></div>
+    ${window.topTargetsPanel ? `<div class="f wide">${topTargetsPanel()}</div>` : ""}
+    <div class="f"><label for="sttd">Trips per day</label><input id="sttd" name="tgTripsDay" type="number" step="0.01" value="${esc(s.tgTripsDay ?? (s.tgTrips && s.tgDays ? r2(s.tgTrips / s.tgDays) : ""))}"></div>
+    <div class="f"><label for="stnd">Net earnings per day (AED)</label><input id="stnd" name="tgNetDay" type="number" step="0.01" value="${esc(s.tgNetDay ?? "")}"></div>
+    <div class="f"><label for="stkd">Distance per day (km)</label><input id="stkd" name="tgKmDay" type="number" step="0.01" value="${esc(s.tgKmDay ?? (s.tgKm && s.tgDays ? r2(s.tgKm / s.tgDays) : ""))}"></div>
+    <div class="f"><label for="std">Days worked (a month)</label><input id="std" name="tgDays" type="number" step="1" value="${esc(s.tgDays ?? 25)}"></div>
     <div class="f"><label for="stc">Completion (%)</label><input id="stc" name="tgCompletion" type="number" step="1" value="${esc(s.tgCompletion ?? 80)}"></div>
     <div class="f"><label for="srd">Remind before visa / EID / document expiry (days)</label><input id="srd" name="remindDays" type="number" step="1" value="${esc(s.remindDays ?? 30)}"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
@@ -2121,7 +2125,7 @@ boot();
 </script>
 <script src="docs.js?v=6"></script>
 <script src="books.js?v=23"></script>
-<script src="drivers.js?v=26"></script>
+<script src="drivers.js?v=27"></script>
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=13"></script>
 <script src="investors.js?v=4"></script>
