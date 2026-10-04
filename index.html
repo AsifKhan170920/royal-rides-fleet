@@ -207,7 +207,25 @@ const ENTRY_TYPES = {
   driver_advance:"Advance to driver (deducted in full)", driver_payment:"Payment to driver", driver_receipt:"Received from driver (cash handover)",
   investor_payout:"Payout to investor", investor_receipt:"Received from investor", card_settlement:"Card machine settlement to bank", transfer:"Inter-account transfer"
 };
-const PAY_MODELS = {commission:"Commission % of net earnings", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
+const PAY_MODELS = {commission:"Commission % of net earnings", tiered:"Commission by slabs (monthly net earnings)", rent:"Rent per day (driver keeps rest)", salary:"Monthly salary", salary_comm:"Salary + commission %"};
+/* commission by slabs on the driver's net earnings of each calendar month: the first slab at its %, the part between the
+   two limits at the second %, the surplus above the second limit at the third % (defaults 23% up to 7,000 · 25% on
+   7,000–10,000 · 30% above 10,000) */
+const TIER_DEF = {tier1Upto: 7000, tier1Pct: 23, tier2Upto: 10000, tier2Pct: 25, tier3Pct: 30};
+const tierOf = tm => Object.fromEntries(Object.entries(TIER_DEF).map(([k, v]) => [k, tm && tm[k] !== "" && tm[k] != null ? num(tm[k]) : v]));
+function tierCalc(tm, N){ const T = tierOf(tm), u1 = T.tier1Upto, u2 = Math.max(u1, T.tier2Upto), parts = [];
+  const add = (pct, base, label) => { if(base > 0.004) parts.push({pct, base: r2(base), amt: base * pct / 100, label}); };
+  add(T.tier1Pct, Math.min(Math.max(N, 0), u1), "up to " + fmt(u1)); add(T.tier2Pct, Math.min(Math.max(N, 0), u2) - u1, fmt(u1) + " – " + fmt(u2)); add(T.tier3Pct, N - u2, "above " + fmt(u2));
+  return {amt: parts.reduce((a, p) => a + p.amt, 0), parts}; }
+// the driver's share of one AED of net earnings on a day (slabs: the month's average rate, set by compute())
+S.tierRate = S.tierRate || {};
+function shareRate(tm, dr, day){ const model = tm.payModel || "commission";
+  if(model === "commission" || model === "salary_comm") return num(tm.commissionPct) / 100;
+  if(model === "rent") return 1;
+  if(model === "tiered"){ const k = dr + "|" + String(day || "").slice(0, 7); if(S.tierRate[k] != null) return S.tierRate[k];
+    const N = (S.trips || []).filter(t => t.dr === dr && String(t.d).slice(0, 7) === k.split("|")[1]).reduce((a, t) => a + (t.f||0) - (t.sf||0) - (t.tx||0), 0);
+    return N > 0 ? tierCalc(tm, N).amt / N : tierOf(tm).tier1Pct / 100; }
+  return 0; }
 const INV_MODELS = {profit_share:"% share of profit", mgmt_only:"Management fee only – the rest of the profit to the investor", fixed:"Fixed monthly payment", none:"Company-owned (no investor)"};
 /* Platforms and other parties the company has a contract with. Trips carry pl (platform id);
    trips saved before platforms existed have none and count as Uber. Each platform has its own
@@ -483,7 +501,7 @@ function vehicleForTrip(t){
 /* Terms change over time. Each driver and car keeps a dated history in rec.terms
    ([{from:"YYYY-MM-DD", ...terms, note, by, at}]); a term applies from its date until the next one.
    Records without a history use their top-level fields as terms that always applied. */
-const DRV_TERMS = ["payModel","commissionPct","rentPerDay","rentBasis","salary","rtaPerDay","expMode"];
+const DRV_TERMS = ["payModel","commissionPct","tier1Upto","tier1Pct","tier2Upto","tier2Pct","tier3Pct","rentPerDay","rentBasis","salary","rtaPerDay","expMode"];
 const VEH_TERMS = ["investorId","invModel","invPct","invFixed","mgmtFixed","mgmtPct","rmBy"];
 const BEGIN = "2000-01-01";
 function termList(rec, keys, field = "terms"){
@@ -495,6 +513,7 @@ const pick = (o, keys) => Object.fromEntries(keys.map(k => [k, o[k] ?? ""]));
 const dmyS = s => s.split("-").reverse().join("/");
 function drvTermText(t){
   if(!t || !t.payModel) return "No terms";
+  if(t.payModel==="tiered"){ const T = tierOf(t); return `Slabs ${T.tier1Pct}% up to ${fmt(T.tier1Upto)} · ${T.tier2Pct}% to ${fmt(T.tier2Upto)} · ${T.tier3Pct}% above`; }
   return t.payModel==="commission" ? num(t.commissionPct)+"% commission" : t.payModel==="rent" ? "Rent "+fmt(num(t.rentPerDay))+"/day"+(t.rentBasis==="calendar"?" (every day)":"")
     : t.payModel==="salary" ? "Salary "+fmt(num(t.salary))+"/mo" : "Salary "+fmt(num(t.salary))+" + "+num(t.commissionPct)+"%";
 }
@@ -502,8 +521,7 @@ function recoverShare(e){
   if(!e.recover) return 0;
   const tm = termAt(termList(S.drivers[e.driverId] || {}, DRV_TERMS), e.date) || {};
   if(tm.expMode !== "before") return 1;
-  const model = tm.payModel || "commission";
-  return model === "commission" || model === "salary_comm" ? num(tm.commissionPct) / 100 : model === "rent" ? 1 : 0;
+  return shareRate(tm, e.driverId, e.date);
 }
 function drvTermTextFull(t){ return drvTermText(t) + (t && num(t.rtaPerDay) ? " · RTA fee " + fmt(num(t.rtaPerDay)) + "/day" : "");
 }
@@ -527,6 +545,14 @@ function compute(){
   const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set(), seg:{}};
   const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0, rm:0};
   const dTerms = id => DT[id] ||= termList(S.drivers[id] || {}, DRV_TERMS);
+  // commission by slabs: the net earnings of each driver-month, the slabs on it, and its average rate for every trip
+  const TN = {}, TT = {};
+  const tierAdd = (dr, day, net) => { const tm = termAt(dTerms(dr), day) || {}; if(tm.payModel !== "tiered") return; const k = dr + "|" + String(day).slice(0, 7); TN[k] = (TN[k] || 0) + net; TT[k] = tm; };
+  for(const t of S.trips) tierAdd(t.dr || "unknown", t.d, (t.f||0) - (t.sf||0) - (t.tx||0));
+  for(const e of S.entries) if(e.type === "income" && e.driverId) tierAdd(e.driverId, e.date, num(e.amount));
+  const tierParts = {};
+  S.tierRate = {}; Object.entries(TN).forEach(([k, N]) => { const c = tierCalc(TT[k], N); S.tierRate[k] = N > 0 ? c.amt / N : tierOf(TT[k]).tier1Pct / 100;
+    const dr = k.split("|")[0]; c.parts.forEach(p => { const L = (tierParts[dr] ||= {}), q = L[p.pct + "|" + p.label] ||= {pct: p.pct, label: p.label, base: 0, amt: 0}; q.base += p.base; q.amt += p.amt; }); });
   for(const t of S.trips){
     const d = dget(t.dr||"unknown"); const vid = vehicleForTrip(t) || "unassigned"; const v = vget(vid);
     const trip = t.tr || ((t.f||t.sf||t.tp) ? t.id : ""), firstRow = trip && !d.trips.has(trip);
@@ -536,7 +562,7 @@ function compute(){
     v.fare += t.f||0; v.fee += t.sf||0; v.tax += t.tx||0; v.ref += t.rf||0; if(firstRow) v.km += t.km||0; if(trip) v.trips.add(trip); v.n = v.trips.size;
     // the driver's share of this trip under the terms in force on the trip date
     const tm = termAt(dTerms(t.dr||"unknown"), t.d) || {}; const model = tm.payModel || "commission";
-    const share = (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct)/100 : model === "rent" ? net : 0;
+    const share = net * shareRate(tm, t.dr || "unknown", t.d);
     d.entTrip += share;
     const bd = d.byDay[t.d] ||= {share:0, tip:0, cash:0, n:0}; bd.share += share; bd.tip += t.tp||0; bd.cash += t.c||0; if(firstRow) bd.n++;
     if(net){ const u = d.dayNet[t.d] ||= {}; u[vid] = (u[vid]||0) + net; }
@@ -547,7 +573,7 @@ function compute(){
   for(const e of S.entries){
     if(e.type !== "income" || !e.driverId) continue;
     const d = dget(e.driverId), tm = termAt(dTerms(e.driverId), e.date) || {}, model = tm.payModel || "commission", a = num(e.amount);
-    const share = (model === "commission" || model === "salary_comm") ? a * num(tm.commissionPct) / 100 : model === "rent" ? a : 0;
+    const share = a * shareRate(tm, e.driverId, e.date);
     d.other += a; d.otherShare += share; d.entTrip += share; if(e.date) d.days.add(e.date);
   }
   Object.keys(S.drivers).forEach(id => dget(id));
@@ -566,7 +592,7 @@ function compute(){
       if(use && tot) Object.entries(use).forEach(([vid,n]) => { vday(vid, day).drv += x * n / tot; });
       else vday(vehAt(d.id, day) || "unassigned", day).drv += x;
     }
-    d.ent = d.entTrip + dayPart;
+    d.ent = d.entTrip + dayPart; d.tierParts = tierParts[d.id] ? Object.values(tierParts[d.id]) : null;
     d.net = d.fare - d.fee - d.tax; d.daysWorked = d.days.size;
     const cur = termAt(list, to) || {}; d.model = cur.payModel || "commission";
     d.termsText = termsInPeriod(list, from, to, drvTermText);
@@ -1185,6 +1211,10 @@ function driverForm(id, d0){
     <div class="f"><label>Payment machine (assigned on the Machines page)</label><div style="padding:7px 0;font-weight:600">${trmNow ? esc((trmNow.name ? trmNow.name + " · " : "") + trmNow.tid) : '<span class="muted">None</span>'}</div></div>    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Pay terms</b> <span class="small muted">– a change applies from its effective date; earlier days keep the earlier terms.</span></div>
     <div class="f"><label for="dm">Pay model</label><select id="dm" name="payModel">${opts(PAY_MODELS, d.payModel, "Choose…")}</select></div>
     <div class="f"><label for="dpct">Commission % (driver's share)</label><input id="dpct" name="commissionPct" type="number" step="0.01" value="${esc(d.commissionPct ?? "")}"></div>
+    ${(() => { const T = tierOf(d); return `<div class="f wide"><b>Commission by slabs</b> <span class="small muted">– with the pay model “Commission by slabs”: his share of each month's net earnings, slab by slab</span></div>
+    <div class="f"><label for="dt1u">Slab 1 – up to (AED)</label><input id="dt1u" name="tier1Upto" type="number" step="0.01" value="${T.tier1Upto}"></div><div class="f"><label for="dt1p">Slab 1 – %</label><input id="dt1p" name="tier1Pct" type="number" step="0.01" value="${T.tier1Pct}"></div>
+    <div class="f"><label for="dt2u">Slab 2 – up to (AED)</label><input id="dt2u" name="tier2Upto" type="number" step="0.01" value="${T.tier2Upto}"></div><div class="f"><label for="dt2p">Slab 2 – % on the difference</label><input id="dt2p" name="tier2Pct" type="number" step="0.01" value="${T.tier2Pct}"></div>
+    <div class="f"><label for="dt3p">Above slab 2 – % on the surplus</label><input id="dt3p" name="tier3Pct" type="number" step="0.01" value="${T.tier3Pct}"></div>`; })()}
     <div class="f"><label for="drent">Rent per day (AED)</label><input id="drent" name="rentPerDay" type="number" step="0.01" value="${esc(d.rentPerDay ?? "")}"></div>
     <div class="f"><label for="drb">Rent charged for</label><select id="drb" name="rentBasis">${opts({worked:"Days with trips", calendar:"Every calendar day"}, d.rentBasis||"worked")}</select></div>
     <div class="f"><label for="dexm">Fare-related expenses (fuel, Salik, fines, repairs) charged to him</label><select id="dexm" name="expMode">${opts({after:"In full, after his salary", before:"Before the commission (shared like the earnings)"}, d.expMode || "after")}</select></div>
@@ -2038,7 +2068,7 @@ async function savePdf(name, rows){
 }
 document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
-  const numF = ["commissionPct","rentPerDay","salary","rtaPerDay","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
+  const numF = ["commissionPct","tier1Upto","tier1Pct","tier2Upto","tier2Pct","tier3Pct","rentPerDay","salary","rtaPerDay","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
   numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? (f.id === "fPlatform" && k === "commissionPct" ? "" : 0) : num(fd[k]); });
   ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver","ownTargets"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
   if(!S.db) return;
@@ -2177,9 +2207,9 @@ document.addEventListener("click", async ev => {
 
 boot();
 </script>
-<script src="docs.js?v=6"></script>
+<script src="docs.js?v=7"></script>
 <script src="books.js?v=23"></script>
-<script src="drivers.js?v=36"></script>
+<script src="drivers.js?v=37"></script>
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=13"></script>
 <script src="investors.js?v=4"></script>
@@ -2188,7 +2218,7 @@ boot();
 <script src="rta.js?v=10"></script>
 <script src="rta-import.js?v=3"></script>
 <script src="gps.js?v=12"></script>
-<script src="pax.js?v=7"></script>
+<script src="pax.js?v=8"></script>
 <script src="reminders.js?v=5"></script>
 <script src="purchases.js?v=11"></script>
 <script src="platforms.js?v=20"></script>

@@ -16,7 +16,7 @@ function offerDefaults(d) {
   const vid = (d.id && typeof vehAt === "function" && vehAt(d.id, iso(new Date()))) || d.vehicleId, v = vid && S.vehicles[vid];
   return {
     name: d.name || "", nationality: "", passport: "", phone: d.phone || "", position: "Limousine Driver", place: "Dubai, UAE",
-    start: iso(new Date()), probation: 6, payModel: d.payModel || "commission", commissionPct: num(d.commissionPct),
+    start: iso(new Date()), probation: 6, payModel: d.payModel || "commission", commissionPct: num(d.commissionPct), ...Object.fromEntries(Object.keys(TIER_DEF).map(k => [k, d[k] ?? ""])),
     rentPerDay: num(d.rentPerDay), salary: num(d.salary), housing: 0, transport: 0, settle: "weekly",
     hours: "8 hours a day, 6 days a week (48 hours a week)", leave: 30, notice: 30, vehicle: v ? vName(v.id) : "",
     benefits: "Employment visa, Emirates ID, medical insurance and the RTA limousine driver permit, arranged and paid by the Company.",
@@ -56,6 +56,7 @@ const L = s => esc(s).replace(/\n/g, "<br>");
 function offerBody(x) {
   const pay = x.payModel === "salary" ? `a basic monthly salary of <b>${aedT(x.salary)}</b>`
     : x.payModel === "salary_comm" ? `a basic monthly salary of <b>${aedT(x.salary)}</b> plus a commission of <b>${num(x.commissionPct)}%</b> of your net trip earnings`
+    : x.payModel === "tiered" ? (() => { const T = tierOf(x); return `a commission on your net trip earnings of each month of <b>${T.tier1Pct}%</b> up to AED ${fmt(T.tier1Upto)}, <b>${T.tier2Pct}%</b> on the part from AED ${fmt(T.tier1Upto)} to AED ${fmt(T.tier2Upto)}, and <b>${T.tier3Pct}%</b> on the amount above AED ${fmt(T.tier2Upto)}`; })()
     : x.payModel === "rent" ? `your net trip earnings less a vehicle charge of <b>${aedT(x.rentPerDay)} per day</b>`
     : `a commission of <b>${num(x.commissionPct)}%</b> of your net trip earnings`;
   const allow = (num(x.housing) || num(x.transport)) ? ` In addition you will receive${num(x.housing) ? ` a housing allowance of ${aedT(x.housing)} per month` : ""}${num(x.housing) && num(x.transport) ? " and" : ""}${num(x.transport) ? ` a transport allowance of ${aedT(x.transport)} per month` : ""}.` : "";

@@ -34,8 +34,8 @@ async function saveSel(id, patch){
   await writeOk(S.db.doc("drvAdj/" + selKey(id)).set({...d, kind: "sel", driverId: id, from: S.from, to: S.to}));
 }
 function tripShare(t){
-  const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, model = tm.payModel || "commission", net = (t.f||0) - (t.sf||0) - (t.tx||0);
-  return (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct) / 100 : model === "rent" ? net : 0;
+  const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, net = (t.f||0) - (t.sf||0) - (t.tx||0);
+  return net * shareRate(tm, t.dr, t.d);
 }
 // the period's computation without the trips left out of this salary
 function selX(id, x0){
@@ -187,8 +187,8 @@ const salaryOf = x => r2(num(x.balance) - num(x.books) + num(x.paid) - num(x.rec
 const moneyRow = t => !!(t.f || t.sf || t.tx || t.tp || t.c || t.rf);
 // what one trip row adds to the driver's salary: his share of the net, tips, less the cash he kept
 function tripEffect(t){
-  const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, model = tm.payModel || "commission", net = (t.f||0) - (t.sf||0) - (t.tx||0);
-  const share = (model === "commission" || model === "salary_comm") ? net * num(tm.commissionPct) / 100 : model === "rent" ? net : 0;
+  const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, net = (t.f||0) - (t.sf||0) - (t.tx||0);
+  const share = net * shareRate(tm, t.dr, t.d);
   return share + (setting("tipsToDriver", true) ? (t.tp || 0) : 0) - (t.c || 0);   // not rounded per trip, so sums match the computation
 }
 function settledMap(id){ const m = {}; Object.values(S.payroll).filter(p => p.driverId === id).forEach(p => (p.rows || []).forEach(r => m[r] = p)); return m; }
@@ -263,7 +263,7 @@ function salaryModel(id, x, late, lateEff, T){
 function salaryRows(M){
   const x = M.x, tm = M.tm, L = (label, v, kind = "") => ({label, v, kind});
   const model = tm.payModel || "commission", pct = num(tm.commissionPct);
-  const payLabel = model === "rent" ? "Driver earnings after company fee" : model === "salary" ? "Salary" : model === "salary_comm" ? `Salary + commission (${pct}%)` : `Commission (${pct}%)`;
+  const payLabel = model === "rent" ? "Driver earnings after company fee" : model === "salary" ? "Salary" : model === "salary_comm" ? `Salary + commission (${pct}%)` : model === "tiered" ? "Commission (by slabs)" : `Commission (${pct}%)`;
   const S2 = M.platforms.map(p => L(`${esc(p.name)} <span class="sub">${p.n} trips · fares ${fmt(p.fares)} − fee & VAT ${fmt(p.fee)}</span>`, p.net));
   if(num(x.other)) S2.push(L("Other bookings (direct)", x.other));
   if(x.excluded) S2.push(L(`<span class="sub">${x.excluded} trip row(s) of this period are left out of this salary (Trip history)</span>`, null));
@@ -275,6 +275,7 @@ function salaryRows(M){
   const S4 = [];
   if(M.rentAmt) S4.push(L(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -M.rentAmt));
   if(M.rta) S4.push(L(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta));
+  if(model === "tiered" && x.tierParts && M.mode === "after") x.tierParts.forEach(p => S4.push(L(`${p.pct}% on ${fmt(p.base)} (${p.label})`, r2(p.amt))));
   S4.push(L(payLabel, M.base));
   if(x.tipsDue) S4.push(L("Tips from platforms", x.tipsDue));
   M.pens.forEach(a => S4.push({...L(`Violation deduction${a.pct ? " " + num(a.pct) + "%" : ""}${a.reason ? " – " + esc(a.reason) : ""}`, -num(a.amount)), pen: a.id}));
