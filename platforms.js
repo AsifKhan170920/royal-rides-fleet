@@ -127,7 +127,7 @@ const PLT_PRESETS = {bolt: {note: "Bolt Fleet Integration API – OAuth client c
   fields: {id: "order_reference", date: "order_created_timestamp", driverId: "driver_uuid", driverName: "driver_name", plate: "vehicle_license_plate", fare: "order_price.ride_price", fee: "order_price.commission", tip: "order_price.tip", refund: "order_price.toll_fee", cash: "order_price.ride_price?payment_method=cash", km: "ride_distance/1000"}}},
   // Yango / Yandex Fleet API: CLID + API key headers, the Fleet (park) id in the body, cursor pages; no browser access, so every call goes through the relay
   yango: {note: "Yango Fleet API – CLID, API key and Fleet ID from the Yango fleet portal; completed orders only.", api: {enabled: true, authType: "yango", forward: true, method: "POST",
-  tripsUrl: "https://fleet-api.taxi.yandex.net/v1/parks/orders/list", body: '{"limit":{limit},"query":{"park":{"id":"{parkId}","order":{"booked_at":{"from":"{fromIso}","to":"{toIso}"},"statuses":["complete"]}}}}', listPath: "orders", cursorPath: "cursor", pageSize: 500, maxDays: 7, filter: "status=complete",
+  tripsUrl: "https://fleet-api.yango.tech/v1/parks/orders/list", body: '{"limit":{limit},"query":{"park":{"id":"{parkId}","order":{"booked_at":{"from":"{fromIso}","to":"{toIso}"},"statuses":["complete"]}}}}', listPath: "orders", cursorPath: "cursor", pageSize: 500, maxDays: 7, filter: "status=complete",
   fields: {id: "id", date: "booked_at", driverId: "driver_profile.id", driverName: "driver_profile.name", plate: "car.license.number", fare: "price", cash: "price?payment_method=cash", km: "mileage/1000"}}}};
 function pltApiTab(pl){
   const p = S.platforms[pl];
