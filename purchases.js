@@ -78,6 +78,10 @@ async function readSheet(file){
 const toIsoD = s => { s = String(s || "").trim(); let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return `${m[1]}-${m[2]}-${m[3]}`; m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/); if(m) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
   m = s.match(/^(\d{1,2})[ -]([A-Za-z]{3})[a-z]*[ -](\d{2,4})/); if(m){ const mo = "janfebmaraprmayjunjulaugsepoctnovdec".indexOf(m[2].toLowerCase()) / 3 + 1; if(mo > 0) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${String(mo).padStart(2, "0")}-${m[1].padStart(2, "0")}`; } const d = new Date(s); return isNaN(d) ? "" : iso(d); };
 const plateMap = () => { const m = {}; Object.values(S.vehicles).forEach(v => { const p = norm(v.plate); m[p] = v.id; m[p.replace(/^[a-z]+/, "")] = v.id; m[p.replace(/\D/g, "")] = m[p.replace(/\D/g, "")] || v.id; }); return m; };
+const hm = x => { const m = String(x || "").match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([AP])?\.?M?\.?/i); if(!m) return ""; let h = +m[1]; if(m[3]){ const pm = /p/i.test(m[3]); if(pm && h < 12) h += 12; if(!pm && h === 12) h = 0; } return String(h).padStart(2, "0") + ":" + m[2]; };
+// the time(s) of an expense: one row → its time, a group → every time of the day
+const entTimes = e => e.times && e.times.length ? e.times : e.time ? [e.time] : [];
+const timeCell = e => { const t = entTimes(e); return !t.length ? "" : t.length === 1 ? t[0] : `${t[0]}–${t[t.length - 1]} (${t.length})`; };
 function impRows(){
   const I = S.purImp, M = I.map, pm = plateMap(), seen = new Set(); (((S.ledger && S.ledger.entries) || S.entries)).forEach(e => { if(e.srcRef) seen.add(e.srcRef); (e.srcRefs || []).forEach(x => seen.add(x)); (e.lines || []).forEach(l => { if(l.srcRef) seen.add(l.srcRef); (l.srcRefs || []).forEach(x => seen.add(x)); }); });
   const out = I.rows.map((r, i) => {
@@ -88,7 +92,7 @@ function impRows(){
     const net = r2(gross - (I.vatMode === "none" ? 0 : vat));
     const ref = M.txn && String(r[M.txn]).trim() ? I.src + ":" + norm(r[M.txn]) : I.src + ":" + norm([date, r[M.time], p, gross, r[M.place]].join("|"));
     // the time from its own column, else from the date column ("14/09/2026 08:10", "2026-09-14T08:10:00")
-    const time = M.time ? String(r[M.time]).trim() : ((String(r[M.date] || "").match(/\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]\.?M\.?)?/i) || [""])[0]), who = vid && window.driverAt ? driverAt(vid, date, time) : {id: "", how: ""};
+    const time = hm(M.time ? String(r[M.time]).trim() : ((String(r[M.date] || "").match(/\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]\.?M\.?)?/i) || [""])[0])), who = vid && window.driverAt ? driverAt(vid, date, time) : {id: "", how: ""};
     return {i, date, time, plate: r[M.plate], vid, drv: who.id, how: who.how, net, vat: I.vatMode === "none" ? 0 : r2(vat), qty: M.qty ? num(r[M.qty]) : 0, place: M.place ? String(r[M.place]).trim() : "", ref, dup: seen.has(ref), ok: !!date && !!gross};
   });
   return out;
@@ -97,7 +101,7 @@ function impPanel(src){
   const I = S.purImp; if(!I || I.src !== src) return `<div class="row" style="gap:8px;align-items:center;margin-bottom:10px"><label class="btn primary" style="cursor:pointer">Import ${esc(PUR_SRC[src].label)} statement<input type="file" accept=".xlsx,.xls,.csv" data-purimp="${src}" hidden></label><span class="small muted">${esc(PUR_SRC[src].hint)} (Excel or CSV).</span></div>`;
   const keys = Object.keys(I.rows[0] || {}), R = impRows(), use = R.filter(r => r.ok && !r.dup), noCar = use.filter(r => !r.vid).length;
   const sel = (f, l) => `<div class="f"><label>${l}</label><select data-impmap="${f}">${opts(Object.fromEntries(keys.map(k => [k, k])), I.map[f], "— none —")}</select></div>`;
-  const groups = I.group ? Object.values(use.reduce((g, r) => { const k = r.vid + "|" + r.date + "|" + r.drv; (g[k] ||= {...r, net: 0, vat: 0, qty: 0, n: 0}); g[k].net += r.net; g[k].vat += r.vat; g[k].qty += r.qty; g[k].n++; return g; }, {})) : use;
+  const groups = I.group ? Object.values(use.reduce((g, r) => { const k = r.vid + "|" + r.date + "|" + r.drv; (g[k] ||= {...r, net: 0, vat: 0, qty: 0, n: 0, times: []}); g[k].net += r.net; g[k].vat += r.vat; g[k].qty += r.qty; g[k].n++; if(r.time) g[k].times.push(r.time); return g; }, {})) : use;
   return `<div class="section" style="border:1px solid var(--line)"><div class="head"><div><h3 style="margin:0">Import ${esc(PUR_SRC[src].label)} – ${esc(I.name)}</h3><p class="sub">${R.length} rows · ${use.length} new · ${R.filter(r => r.dup).length} already imported · ${R.filter(r => !r.ok).length} without date / amount${noCar ? ` · <b class="neg">${noCar} without a matching car</b>` : ""}</p></div><button class="btn ghost" data-impcancel="1">Cancel</button></div>
     <div class="form" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">${sel("date", "Date")}${sel("time", "Time")}${sel("plate", "Plate")}${sel("amount", "Amount")}${sel("vat", "VAT")}${sel("qty", PUR_SRC[src].unit)}${sel("place", src === "salik" ? "Gate" : "Station / location")}${sel("txn", "Transaction no.")}
       <div class="f"><label>Amounts</label><select data-impopt="vatMode">${opts({incl: "Include 5% VAT", excl: "Are before VAT (VAT column added)", none: "No VAT"}, I.vatMode)}</select></div>
@@ -111,9 +115,16 @@ function impPanel(src){
     <div class="row" style="margin-top:10px;gap:10px"><button class="btn primary" data-impgo="1" ${groups.length && S.canWrite ? "" : "disabled"}>Import ${groups.length} expense${groups.length === 1 ? "" : "s"} – AED ${fmt(sum(groups, r => r.net + r.vat))}</button><span class="small muted">The driver is the one whose trip in that car was going on at that time (else the car's assignment). ${I.supplier ? `Saved as a purchase invoice from ${esc((S.suppliers[I.supplier] || {}).name || "")} (one per month) – it uses up the top-ups paid to him.` : "Booked as paid directly from the account."} Rows without a car are imported without a car (company cost).</span></div></div>`;
 }
 async function impGo(){
-  const I = S.purImp, P = PUR_SRC[I.src], R = impRows().filter(r => r.ok && !r.dup);
-  const list = I.group ? Object.values(R.reduce((g, r) => { const k = r.vid + "|" + r.date + "|" + r.drv; const x = g[k] ||= {...r, net: 0, vat: 0, qty: 0, n: 0, refs: []}; x.net += r.net; x.vat += r.vat; x.qty += r.qty; x.n++; x.refs.push(r.ref); return g; }, {})) : R;
-  const rows = list.map(r => ({id: uid(), type: "expense", date: r.date, category: P.cat, sub: P.sub, amount: r2(r.net), vat: r2(r.vat), vehicleId: r.vid, driverId: r.drv || "", recover: I.recover && !!r.drv, paidFrom: I.paidFrom,
+  const I = S.purImp, P = PUR_SRC[I.src], R = impRows().filter(r => r.ok && !r.dup), D = impRows().filter(r => r.ok && r.dup);
+  if(D.length){ const by = {}; D.forEach(r => by[r.ref] = r); const n = await fixEntries(e => { const refs = [e.srcRef, ...(e.srcRefs || [])].filter(Boolean), hit = refs.map(x => by[x]).filter(Boolean); if(!hit.length) return null;
+      const fix = {}, times = hit.map(h => h.time).filter(Boolean).sort();
+      if(!entTimes(e).length && times.length){ if(refs.length > 1) fix.times = times; fix.time = times[0]; }
+      if(!e.driverId){ const d = hit.find(h => h.drv); if(d){ fix.driverId = d.drv; if(I.recover) fix.recover = true; } }
+      return Object.keys(fix).length ? fix : null; });
+    if(n && !R.length){ S.purImp = null; toast(`Nothing new in this file – ${n} expense(s) already in got their time / driver.`); render(); return; } if(n) toast(`${n} expense(s) already in got their time / driver.`); }
+  if(!R.length){ toast("Everything in this file is imported already."); return; }
+  const list = I.group ? Object.values(R.reduce((g, r) => { const k = r.vid + "|" + r.date + "|" + r.drv; const x = g[k] ||= {...r, net: 0, vat: 0, qty: 0, n: 0, refs: [], times: []}; x.net += r.net; x.vat += r.vat; x.qty += r.qty; x.n++; x.refs.push(r.ref); if(r.time) x.times.push(r.time); return g; }, {})) : R;
+  const rows = list.map(r => ({id: uid(), type: "expense", date: r.date, ...(r.times ? (r.times.length ? {times: [...r.times].sort(), time: [...r.times].sort()[0]} : {}) : r.time ? {time: r.time} : {}), category: P.cat, sub: P.sub, amount: r2(r.net), vat: r2(r.vat), vehicleId: r.vid, driverId: r.drv || "", recover: I.recover && !!r.drv, paidFrom: I.paidFrom,
     qty: r2(r.qty), note: `${P.label}${r.n > 1 ? ` · ${r.n} ${P.sub === "salik" ? "trips" : "transactions"}` : ""}${r.place && !(r.n > 1) ? " · " + r.place : ""}${r.qty ? ` · ${r2(r.qty)} ${P.unit.toLowerCase()}` : ""}`, srcRef: r.refs ? r.refs[0] : r.ref, srcRefs: r.refs || undefined, imported: I.name}));
   rows.forEach(r => { if(!r.srcRefs) delete r.srcRefs; });
   if(I.supplier){
@@ -121,7 +132,7 @@ async function impGo(){
     const byM = {}; rows.forEach(r => (byM[r.date.slice(0,7)] ||= []).push(r));
     const docs = Object.entries(byM).map(([m, rs]) => ({id: uid(), type: "purchase_invoice", date: rs.map(r => r.date).sort().pop(), dueDate: rs.map(r => r.date).sort().pop(), party: "s:" + I.supplier,
       number: `${P.label.toUpperCase().replace(/[^A-Z]/g, "")}-${m}`, ref: I.name, note: `${P.label} consumption imported from ${I.name} – to change it, delete this invoice and import again`,
-      lines: rs.map(r => ({desc: `${r.note}${r.vehicleId ? " – " + vName(r.vehicleId) : ""} – ${dmyS(r.date)}`, account: r.category, qty: 1, price: r.amount, vat: r.vat ? "5" : "", vatAmt: r.vat || "", date: r.date, sub: r.sub, units: r.qty, vehicleId: r.vehicleId, driverId: r.driverId, recover: r.recover, srcRef: r.srcRef, ...(r.srcRefs ? {srcRefs: r.srcRefs} : {})})),
+      lines: rs.map(r => ({desc: `${r.note}${r.vehicleId ? " – " + vName(r.vehicleId) : ""} – ${dmyS(r.date)}${timeCell(r) ? " " + timeCell(r) : ""}`, ...(r.time ? {time: r.time} : {}), ...(r.times ? {times: r.times} : {}), account: r.category, qty: 1, price: r.amount, vat: r.vat ? "5" : "", vatAmt: r.vat || "", date: r.date, sub: r.sub, units: r.qty, vehicleId: r.vehicleId, driverId: r.driverId, recover: r.recover, srcRef: r.srcRef, ...(r.srcRefs ? {srcRefs: r.srcRefs} : {})})),
       by: (S.user && (S.user.name || S.user.id)) || "", at: new Date().toISOString()}));
     try{ await S.db.doc("settings/main").set({...S.settings, [supKey(I.src)]: I.supplier}); }catch(e){}
     if(await addEntries(docs)){ S.purImp = null; toast(`${rows.length} ${P.label.toLowerCase()} line${rows.length === 1 ? "" : "s"} saved as ${docs.length} purchase invoice${docs.length === 1 ? "" : "s"} from ${(S.suppliers[I.supplier] || {}).name}.`); render(); }
@@ -131,12 +142,34 @@ async function impGo(){
   if(window.addEntries ? await addEntries(rows) : false){ S.purImp = null; toast(`${rows.length} ${P.label.toLowerCase()} expense${rows.length === 1 ? "" : "s"} imported.`); render(); }
 }
 
+/* changes saved expenses (and purchase-invoice lines) in place: fn(entry or line) → fields to set, or null */
+async function fixEntries(fn){
+  let n = 0; const start = setting("ledgerStart", "2026-09-01");
+  for(const m of months(start < S.from ? start : S.from, S.to > iso(new Date()) ? S.to : iso(new Date()))){
+    const ref = S.db.doc("entries/" + m), snap = await ref.get(); if(!snap.exists) continue; let ch = false;
+    const rows = (snap.data().rows || []).map(e => {
+      if(e.type === "purchase_invoice" && e.lines){ let lc = false; const lines = e.lines.map(l => { const f = fn({...l, date: l.date || e.date}); if(f){ lc = true; n++; return {...l, ...f}; } return l; }); if(lc){ ch = true; return {...e, lines}; } return e; }
+      const f = e.type === "expense" ? fn(e) : null; if(f){ ch = true; n++; return {...e, ...f}; } return e; });
+    if(ch && !await writeOk(ref.set({month: m, rows}))) return n;
+  }
+  if(n){ await loadPeriod(); S.ledger = null; }
+  return n;
+}
+// Salik / fuel / EV without a driver: look again (trips imported later, a car assigned since)
+async function recheckDrivers(src){
+  if(!window.driverAt) return 0;
+  if(!S.ledger || S.ledger.loading || !S.ledger.trips) await loadLedger();   // every trip of the history, with its car
+  return fixEntries(e => { if(e.driverId || !e.vehicleId || entSub(e) !== src) return null; const t = entTimes(e);
+    const w = t.length ? t.map(x => driverAt(e.vehicleId, e.date, x)).find(x => x.id) : driverAt(e.vehicleId, e.date, "");
+    return w && w.id ? {driverId: w.id, ...(src === "salik" ? {recover: true} : {})} : null; });
+}
+
 /* ---------- tabs ---------- */
 function purTable(list, unit){
   const pg = paged("pur-" + S.purTab, list.slice().sort((a, b) => b.date.localeCompare(a.date)));
-  return `<div class="tbl"><table><thead><tr><th>Date</th><th>Category</th><th>Car</th><th>Driver</th><th>Note</th>${unit ? `<th class="num">${unit}</th>` : ""}<th class="num">Net</th><th class="num">VAT</th><th>Paid from</th><th>Receipt</th><th></th></tr></thead><tbody>
-  ${pg.rows.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td class="small">${esc(EXP_CATS[e.category] || "")}${e.recover ? ' <span class="pill brass">From driver</span>' : ""}</td><td>${e.vehicleId ? esc(vName(e.vehicleId)) : ""}</td><td class="small">${e.driverId ? esc(dName(e.driverId)) : ""}</td><td class="small" style="white-space:normal">${esc(e.note || "")}</td>${unit ? `<td class="num">${num(e.qty) || ""}</td>` : ""}<td class="num">${fmt(num(e.amount))}</td><td class="num">${num(e.vat) ? fmt(num(e.vat)) : ""}</td><td class="small">${esc(e.virtual ? "Invoice – " + (window.BOOKS ? BOOKS.partyName(e.party) : "supplier") : e.paidFrom === "driver" ? "Driver's cash" : acctName(e.paidFrom || "1100"))}</td><td>${rcptCell(e)}</td><td><button class="btn sm" data-puredit="${esc(e.id)}">Edit</button></td></tr>`).join("") || `<tr><td colspan="${unit ? 11 : 10}" class="muted">Nothing in this period.</td></tr>`}
-  </tbody><tfoot><tr><td colspan="${unit ? 5 : 5}">${list.length} expense(s)</td>${unit ? `<td class="num">${r2(sum(list, e => num(e.qty))) || ""}</td>` : ""}<td class="num">${fmt(sum(list, e => num(e.amount)))}</td><td class="num">${fmt(sum(list, e => num(e.vat)))}</td><td colspan="3"></td></tr></tfoot></table></div>${pg.bar}`;
+  return `<div class="tbl"><table><thead><tr><th>Date</th><th>Time</th><th>Category</th><th>Car</th><th>Driver</th><th>Note</th>${unit ? `<th class="num">${unit}</th>` : ""}<th class="num">Net</th><th class="num">VAT</th><th>Paid from</th><th>Receipt</th><th></th></tr></thead><tbody>
+  ${pg.rows.map(e => `<tr><td>${esc(dmyS(e.date))}</td><td class="small" title="${esc(entTimes(e).join(", "))}">${esc(timeCell(e))}</td><td class="small">${esc(EXP_CATS[e.category] || "")}${e.recover ? ' <span class="pill brass">From driver</span>' : ""}</td><td>${e.vehicleId ? esc(vName(e.vehicleId)) : ""}</td><td class="small">${e.driverId ? esc(dName(e.driverId)) : ""}</td><td class="small" style="white-space:normal">${esc(e.note || "")}</td>${unit ? `<td class="num">${num(e.qty) || ""}</td>` : ""}<td class="num">${fmt(num(e.amount))}</td><td class="num">${num(e.vat) ? fmt(num(e.vat)) : ""}</td><td class="small">${esc(e.virtual ? "Invoice – " + (window.BOOKS ? BOOKS.partyName(e.party) : "supplier") : e.paidFrom === "driver" ? "Driver's cash" : acctName(e.paidFrom || "1100"))}</td><td>${rcptCell(e)}</td><td><button class="btn sm" data-puredit="${esc(e.id)}">Edit</button></td></tr>`).join("") || `<tr><td colspan="${unit ? 12 : 11}" class="muted">Nothing in this period.</td></tr>`}
+  </tbody><tfoot><tr><td colspan="6">${list.length} expense(s)</td>${unit ? `<td class="num">${r2(sum(list, e => num(e.qty))) || ""}</td>` : ""}<td class="num">${fmt(sum(list, e => num(e.amount)))}</td><td class="num">${fmt(sum(list, e => num(e.vat)))}</td><td colspan="3"></td></tr></tfoot></table></div>${pg.bar}`;
 }
 function byCar(list, unit){
   const by = {}; list.forEach(e => { const b = by[e.vehicleId || ""] ||= {n: 0, q: 0, a: 0}; b.n++; b.q += num(e.qty); b.a += num(e.amount) + num(e.vat); });
@@ -165,14 +198,15 @@ function purView(){
     body = `<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${withR.length} of ${E.length} expenses in this period have a receipt. Expenses without a receipt are listed first – attach a photo or PDF.</span></div>${purTable([...without, ...withR].reverse())}`;
   } else {
     const P = PUR_SRC[tab], list = E.filter(e => entSub(e) === tab);
-    body = `${prepaidBox(tab)}${impPanel(tab)}<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · ${list.length} expense(s) · AED ${fmt(sum(list, e => num(e.amount) + num(e.vat)))} incl. VAT</span><div class="row">${dlBtn("purlist", tab)}<button class="btn sm" data-puradd="${P.cat}" data-sub="${P.sub}">Add one manually</button></div></div>${byCar(list, P.unit)}${purTable(list, P.unit)}`;
+    body = `${prepaidBox(tab)}${impPanel(tab)}<div class="row" style="justify-content:space-between;margin-bottom:8px"><span class="small muted">${esc(dmyS(S.from))} to ${esc(dmyS(S.to))} · ${list.length} expense(s) · AED ${fmt(sum(list, e => num(e.amount) + num(e.vat)))} incl. VAT</span><div class="row">${dlBtn("purlist", tab)}${list.some(e => e.vehicleId && !e.driverId) ? `<button class="btn sm" data-recheck="${tab}" title="Find the driver again from the trips (start–end time) and the car assignments">Find missing drivers (${list.filter(e => e.vehicleId && !e.driverId).length})</button>` : ""}<button class="btn sm" data-puradd="${P.cat}" data-sub="${P.sub}">Add one manually</button></div></div>${byCar(list, P.unit)}${purTable(list, P.unit)}`;
   }
   return head + `<div class="section">${body}</div>`;
 }
 DL.purlist = tab => { const E = expEntries().filter(e => tab === "purchase" ? !["fuel", "salik", "ev"].includes(entSub(e)) : entSub(e) === tab);
-  return [`${tab}_${S.from}_${S.to}.csv`, [["Date","Category","Car","Driver","Note","Quantity","Net","VAT","Total","Paid from","Recover from driver","Receipt"], ...E.sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, EXP_CATS[e.category] || "", e.vehicleId ? vName(e.vehicleId) : "", e.driverId ? dName(e.driverId) : "", e.note || "", num(e.qty) || "", num(e.amount), num(e.vat), r2(num(e.amount) + num(e.vat)), e.paidFrom === "driver" ? "Driver's cash" : acctName(e.paidFrom || "1100"), e.recover ? "Yes" : "No", S.rcpt[e.id] ? "Yes" : "No"])]]; };
+  return [`${tab}_${S.from}_${S.to}.csv`, [["Date","Time","Category","Car","Driver","Note","Quantity","Net","VAT","Total","Paid from","Recover from driver","Receipt"], ...E.sort((a, b) => a.date.localeCompare(b.date)).map(e => [e.date, entTimes(e).join(" "), EXP_CATS[e.category] || "", e.vehicleId ? vName(e.vehicleId) : "", e.driverId ? dName(e.driverId) : "", e.note || "", num(e.qty) || "", num(e.amount), num(e.vat), r2(num(e.amount) + num(e.vat)), e.paidFrom === "driver" ? "Driver's cash" : acctName(e.paidFrom || "1100"), e.recover ? "Yes" : "No", S.rcpt[e.id] ? "Yes" : "No"])]]; };
 
 document.addEventListener("click", async ev => {
+  { const b = ev.target.closest && ev.target.closest("[data-recheck]"); if(b){ b.disabled = true; b.textContent = "Looking…"; const n = await recheckDrivers(b.dataset.recheck); toast(n ? `Driver found for ${n} expense(s).` : "No driver found – the car had no trip that day and no driver assigned."); render(); return; } }
   const t = ev.target.closest("button"); if(!t) return;
   if(t.dataset.purtab){ S.purTab = t.dataset.purtab; S.purImp = null; S.edit = null; S.view = "entries"; render(); return; }
   if(t.dataset.puradd){ S.purTab = "all"; S.edit = {kind: "entry", id: "", data: {date: iso(new Date()) <= S.to && iso(new Date()) >= S.from ? iso(new Date()) : S.from, type: "expense", category: t.dataset.puradd, paidFrom: "1100", sub: t.dataset.sub || ""}}; render(); window.scrollTo(0,0); return; }

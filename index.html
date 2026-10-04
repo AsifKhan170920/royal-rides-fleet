@@ -425,7 +425,7 @@ async function loadPeriod(){
     const is = await S.db.collection("tripinfo").where("date",">=",addDays(S.from,-1)).where("date","<=",addDays(S.to,1)).get();
     const info = {}, acts = [];
     is.docs.forEach(d => { const rows = (d.data()||{}).rows || {}; Object.entries(rows).forEach(([tr,r]) => { info[tr] = r; if(r.d >= S.from && r.d <= S.to) acts.push({tr, ...r}); }); });
-    trips.forEach(t => { const i = t.tr && info[t.tr]; if(i){ t.p = t.p || i.p; t.km = t.km || i.km; t.st = i.st; t.prod = i.prod; t.pay = i.pay; if(i.t) t.ts = i.t; if(i.te) t.te = t.te || i.te; } });
+    mergeInfo(trips, info);
     S.trips = trips; S.activity = acts;
     const cs = await S.db.collection("cardtx").where("date",">=",S.from).where("date","<=",S.to).get();
     const cards = []; cs.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([id,r]) => cards.push({id, ...r}))); S.cardtx = cards;
@@ -1410,6 +1410,8 @@ function platformForm(id, p0){
 /* A running account per driver from the ledger start date: earnings share, tips and cash collected
    from trips, plus advances, payments, charges and loan instalments. Positive balance = the company
    owes the driver. Loans are shown separately: they move into the account as instalments fall due. */
+// trip details from the Trip activity report (car, km, status, start / end) onto the trips
+function mergeInfo(trips, info){ trips.forEach(t => { const i = t.tr && info[t.tr]; if(i){ t.p = t.p || i.p; t.km = t.km || i.km; t.st = i.st; t.prod = i.prod; t.pay = i.pay; if(i.t) t.ts = i.t; if(i.te) t.te = t.te || i.te; } }); }
 async function loadLedger(){
   const start = setting("ledgerStart", "2026-09-01"), to = S.to, key = start + "|" + to;
   S.ledger = {key, loading:true};
@@ -1418,6 +1420,9 @@ async function loadLedger(){
     if(start <= to){
       const ts = await S.db.collection("trips").where("date",">=",start).where("date","<=",to).get();
       ts.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([id,r]) => trips.push({id, ...r})));
+      // without it the Uber trips of the history have no car – Salik / fines could not find their driver
+      const is = await S.db.collection("tripinfo").where("date",">=",addDays(start,-1)).where("date","<=",addDays(to,1)).get(), info = {};
+      is.docs.forEach(d => Object.entries((d.data()||{}).rows || {}).forEach(([tr,r]) => { info[tr] = r; })); mergeInfo(trips, info);
       for(const m of months(start, to)){ const d = await S.db.doc("entries/"+m).get(); (d.exists ? (d.data().rows || []) : []).forEach(r => { if(r.date >= start && r.date <= to) ents.push(r); }); }
     }
     const cards = [];
@@ -2094,10 +2099,10 @@ boot();
 <script src="investors.js?v=4"></script>
 <script src="fleetfin.js?v=11"></script>
 <script src="loans.js?v=4"></script>
-<script src="rta.js?v=7"></script>
+<script src="rta.js?v=8"></script>
 <script src="rta-import.js?v=2"></script>
 <script src="reminders.js?v=5"></script>
-<script src="purchases.js?v=8"></script>
+<script src="purchases.js?v=9"></script>
 <script src="platforms.js?v=19"></script>
 <script src="settings.js?v=3"></script>
 

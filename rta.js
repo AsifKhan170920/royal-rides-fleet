@@ -37,9 +37,10 @@ function driverAt(vid, date, time){
   const v = S.vehicles[vid]; if(!v || !date) return {id: "", how: ""}; const day = date.slice(0,10), tm = toMin(time);
   const pool = (S.ledger && S.ledger.trips && !S.ledger.loading ? S.ledger.trips : S.trips), ts = pool.filter(t => t.d === day && t.dr && vehicleForTrip(t) === vid);
   if(tm != null){
-    const timed = ts.map(t => ({t, m: toMin(t.t)})).filter(x => x.m != null);
+    const timed = ts.map(t => ({t, m: toMin(t.ts || t.t), e: toMin(t.te)})).filter(x => x.m != null);
+    const during = timed.find(x => x.e != null && x.m <= tm && tm <= (x.e < x.m ? x.e + 1440 : x.e)); if(during) return {id: during.t.dr, how: `on a trip ${during.t.ts || during.t.t}–${during.t.te}`};
     const before = timed.filter(x => x.m <= tm && tm - x.m <= 180).sort((a, b) => b.m - a.m)[0], after = timed.filter(x => x.m > tm && x.m - tm <= 60).sort((a, b) => a.m - b.m)[0];
-    const hit = before || after; if(hit) return {id: hit.t.dr, how: `trip at ${hit.t.t}`};
+    const hit = before || after; if(hit) return {id: hit.t.dr, how: `trip at ${hit.t.ts || hit.t.t}`};
   }
   try{ const h = holderOf(vehDrv(v), day); if(h) return {id: h, how: "assigned"}; }catch(e){}
   const n = {}; ts.forEach(t => n[t.dr] = (n[t.dr] || 0) + 1); const top = Object.entries(n).sort((a, b) => b[1] - a[1])[0];
