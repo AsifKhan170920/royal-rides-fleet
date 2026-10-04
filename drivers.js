@@ -275,7 +275,7 @@ function salaryRows(M){
   const S4 = [];
   if(M.rentAmt) S4.push(L(`Company fee (${x.rentDays} days × ${fmt(num(tm.rentPerDay))})`, -M.rentAmt));
   if(M.rta) S4.push(L(`RTA / permit fee (${x.rtaDays} days × ${fmt(num(tm.rtaPerDay))})`, -M.rta));
-  S4.push(L(payLabel, M.base, "t"));
+  S4.push(L(payLabel, M.base));
   if(x.tipsDue) S4.push(L("Tips from platforms", x.tipsDue));
   M.pens.forEach(a => S4.push({...L(`Violation deduction${a.pct ? " " + num(a.pct) + "%" : ""}${a.reason ? " – " + esc(a.reason) : ""}`, -num(a.amount)), pen: a.id}));
   S4.push(L("Salary for the period", M.salary, "g"));
@@ -291,7 +291,7 @@ function salaryRows(M){
   S5.push(L("Net payable for the period", M.due, "g"));
   if(M.paidIn) S5.push(L("Paid to / received from the driver in the period", M.paidIn));
   if(M.T){ S5.push(L("Balance brought forward", M.T.before)); S5.push(L(M.payable >= 0 ? "Balance payable to the driver" : "Balance the driver owes", M.payable, "g")); }
-  const S6 = [L("Total receivable (fares, tips & tolls + other bookings)", M.receivable, "t"), L("Less platform payments (paid in the app)", -M.app)];
+  const S6 = [L("Total receivable (fares, tips & tolls + other bookings)", M.receivable), L("Less platform payments (paid in the app)", -M.app)];
   if(M.otherCo > 0.004) S6.push(L("Less other bookings received by the company", -M.otherCo));
   S6.push(L("Less machine payments (card)", -x.card), L("Cash that should be with the driver", M.expected, "t"), L("Less handed over / spent for the company", -M.handed),
     L(M.inHand == null ? "Less cash in hand with the driver (not counted)" : "Less cash in hand with the driver (counted)", M.inHand == null ? null : -M.inHand),
@@ -382,8 +382,8 @@ function salaryHtml(M, print, locked){
   const cell = r => !r ? '<td></td><td></td>' : `<td style="white-space:normal">${r.kind ? "<b>" + r.label + "</b>" : r.label}${r.pen && !locked ? ` <button class="btn sm ghost" data-pendel="${esc(r.pen)}" aria-label="Remove">✕</button>` : ""}</td><td class="num">${val(r)}</td>`;
   const P = salaryPairs(salaryRows(M));
   return perf + P.map(p => `<div class="tbl" style="margin-top:14px"><table style="table-layout:fixed"><colgroup><col style="width:37%"><col style="width:13%"><col style="width:37%"><col style="width:13%"></colgroup><thead><tr>${p.titles.map(t => `<th colspan="2" style="width:50%">${t}</th>`).join("")}</tr></thead><tbody>
-    ${p.rows.map(([a, b]) => `<tr${(a && a.kind) || (b && b.kind) ? ' class="tot"' : ""}>${cell(a)}${cell(b)}</tr>`).join("")}
-    ${p.foot.map((f, k) => `<tr class="tot"${k ? "" : ' style="border-top:2px solid var(--ink, #16213a)"'}>${f.wide ? `<td colspan="3" style="white-space:normal"><b>${f.wide.label}</b></td><td class="num"><b>${val(f.wide)}</b></td>` : f.pair.map(cell).join("")}</tr>`).join("")}</tbody></table></div>
+    ${p.rows.map(([a, b]) => `<tr>${cell(a)}${cell(b)}</tr>`).join("")}
+    ${p.foot.map((f, k) => `<tr${f.wide ? ' class="tot"' : ""}${k ? "" : ' style="border-top:2px solid var(--ink, #16213a)"'}>${f.wide ? `<td colspan="3" style="white-space:normal"><b>${f.wide.label}</b></td><td class="num"><b>${val(f.wide)}</b></td>` : f.pair.map(cell).join("")}</tr>`).join("")}</tbody></table></div>
     ${p.ns.map(n => forms[n] || "").join("")}`).join("");
 }
 /* sections two by two: [{titles, rows: [[left, right]], foot: [result rows], ns}] – plain rows first (padded so both sides
@@ -411,7 +411,7 @@ const SAL_CSS = `.sp{font:8.6pt/1.3 "Segoe UI",Arial,sans-serif;color:#111;paddi
 .sp .perf th{background:#f3f4f7;color:#444;font-weight:600;font-size:7.5pt;text-align:center;padding:3px 2px}.sp .perf td{text-align:center;font-weight:700;padding:4px 2px}
 .sp tr.sec th{background:#16213a;color:#fff;text-align:left;font-size:8.5pt;font-weight:600;letter-spacing:.03em}
 .sp td.n{text-align:right;white-space:nowrap;width:26%;font-variant-numeric:tabular-nums}
-.sp tr.t td{font-weight:700;background:#f3f4f7}.sp tr.g td{font-weight:700;background:#e4e8f0;border-top:2px solid #16213a}
+.sp tr.t td{font-weight:700;background:#f3f4f7}.sp td.b{font-weight:700}.sp tr.gf td{background:#eef1f6}.sp tr.gf.top td{border-top:2px solid #16213a}.sp tr.g td{font-weight:700;background:#e4e8f0;border-top:2px solid #16213a}
 .sp .tg th{background:#f3f4f7;color:#444;font-weight:600;font-size:7.5pt;text-align:center}.sp .tg tr.sec th{text-align:left}.sp .tg td.c{text-align:center}.sp .tg td.ok{color:#11703a;font-weight:700}.sp .tg td.no{color:#b3261e;font-weight:700}
 .sp .sub{color:#666;font-size:7.5pt}.sp .neg{color:#111}
 .sp .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:12px;page-break-inside:avoid}
@@ -431,8 +431,8 @@ function salaryPrintHtml(M, d, fin){
     <tr><td class="l">Car</td><td>${car ? esc(vName(car)) : "—"}</td><td class="l">Printed</td><td>${esc(dmyS(today))}</td></tr></table>
   <table class="perf"><tr class="sec"><th colspan="${cells.length}">1. Performance</th></tr><tr>${cells.map(c => `<th>${c[0]}</th>`).join("")}</tr><tr>${cells.map(c => `<td>${c[1]}</td>`).join("")}</tr></table>
   ${targetTable(M.id, M.x, M.perf.completion, true)}
-  ${salaryPairs(salaryRows(M)).map(p => { const v = r => !r ? '<td></td><td class="n"></td>' : `<td>${r.label}</td><td class="n">${r.num ? (r.v == null ? "" : r.int ? String(r.v) : fmt(r.v)) : amt(r.v)}</td>`;
-    return `<table class="pair"><colgroup><col style="width:37%"><col style="width:13%"><col style="width:37%"><col style="width:13%"></colgroup><tr class="sec">${p.titles.map(t => `<th colspan="2">${t}</th>`).join("")}</tr>${p.rows.map(([a, b]) => `<tr${(a && a.kind) || (b && b.kind) ? ' class="t"' : ""}>${v(a)}${v(b)}</tr>`).join("")}${p.foot.map(f => f.wide ? `<tr class="g"><td colspan="3">${f.wide.label}</td><td class="n">${amt(f.wide.v)}</td></tr>` : `<tr class="${f.pair.some(x => x && x.kind) ? "g" : "t"}">${f.pair.map(v).join("")}</tr>`).join("")}</table>`; }).join("")}
+  ${salaryPairs(salaryRows(M)).map(p => { const v = r => !r ? '<td></td><td class="n"></td>' : `<td${r.kind ? ' class="b"' : ""}>${r.label}</td><td class="n${r.kind ? " b" : ""}">${r.num ? (r.v == null ? "" : r.int ? String(r.v) : fmt(r.v)) : amt(r.v)}</td>`;
+    return `<table class="pair"><colgroup><col style="width:37%"><col style="width:13%"><col style="width:37%"><col style="width:13%"></colgroup><tr class="sec">${p.titles.map(t => `<th colspan="2">${t}</th>`).join("")}</tr>${p.rows.map(([a, b]) => `<tr>${v(a)}${v(b)}</tr>`).join("")}${p.foot.map((f, k) => f.wide ? `<tr class="g"><td colspan="3">${f.wide.label}</td><td class="n">${amt(f.wide.v)}</td></tr>` : `<tr class="gf${k ? "" : " top"}">${f.pair.map(v).join("")}</tr>`).join("")}</table>`; }).join("")}
   <div class="sigs"><div><div class="who">For Driver</div><div class="line"></div><div>${esc(d.name || "")}</div><div class="cap">Signature & date</div></div>
     <div><div class="who">For ${esc(co)}</div><div class="line"></div><div>${esc(s.signatory || "")}${s.signatoryTitle ? (s.signatory ? ", " : "") + esc(s.signatoryTitle) : ""}</div><div class="cap">Authorised signatory</div></div></div>
   </div>`;
