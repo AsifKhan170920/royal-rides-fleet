@@ -165,6 +165,8 @@ function apiKeysBox(pl){
       ${has ? `<div style="margin-top:4px"><span class="pill good">Keys saved</span> <span class="small muted">${kk.at ? "on " + esc(new Date(kk.at).toLocaleString("en-GB")) : ""} – the secret is not shown again; enter a new one only to change it.</span></div>` : k && k.error ? `<div class="small" style="margin-top:4px"><span class="pill bad">Could not read</span> ${esc(k.error)}</div>` : ""}</div>
     <div class="f"><label for="ak_id">Client ID</label><input id="ak_id" name="clientId" value="${esc(kk.clientId || "")}" autocomplete="off" style="min-width:300px"></div>
     <div class="f"><label for="ak_sec">Client secret</label><input id="ak_sec" name="clientSecret" type="password" autocomplete="new-password" placeholder="${has ? "saved – leave blank to keep" : ""}" style="min-width:300px"></div>
+    <div class="f wide"><label for="ak_relay">Token relay URL</label><input id="ak_relay" name="relayUrl" value="${esc(a.relayUrl || "")}" placeholder="https://script.google.com/macros/s/…/exec" style="min-width:460px">
+      <span class="small muted">Bolt gives its sign-in token only to a server, not to a web page. Deploy apps-script/token-relay.gs once as a Google web app and paste its URL here – it keeps nothing, the keys stay in this software.</span></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save keys</button>${has ? `<button class="btn" type="button" data-apitest="${esc(pl)}">Test connection</button><button class="btn ghost" type="button" data-apikeysdel="${esc(pl)}">Remove keys</button>` : ""}
       ${a.tokenUrl ? "" : '<span class="small muted">Then click "Fill in the API settings" below (or set the token / trips URLs).</span>'}</div></form>`;
 }
@@ -183,7 +185,11 @@ async function apiToken(api, keys){
   if((api.authType || "oauth") !== "oauth") return keys.clientSecret;
   if(!api.tokenUrl) throw new Error("set the token URL (Fill in the API settings)");
   const body = new URLSearchParams({client_id: keys.clientId, client_secret: keys.clientSecret, grant_type: "client_credentials"}); if(api.scope) body.set("scope", api.scope);
-  const j = await apiFetch(api.tokenUrl, {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded"}, body});
+  let j;
+  // Bolt refuses token requests from a web page – the token comes through the user's own relay (apps-script/token-relay.gs)
+  if(api.relayUrl){ body.set("token_url", api.tokenUrl); j = await apiFetch(api.relayUrl, {method: "POST", body}); if(j && j.error && !j.access_token) throw new Error("token: " + (j.error_description || j.error)); }
+  else{ try{ j = await apiFetch(api.tokenUrl, {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded"}, body}); }
+    catch(e){ throw new Error(/fetch|HTTP 5/i.test(e.message) ? `${api.tokenUrl.includes("bolt") ? "Bolt" : "The platform"} does not give the token to a web page – set the Token relay URL in the API keys box` : e.message); } }
   if(!j || !j.access_token) throw new Error("no token in the answer – check the client id and secret");
   return j.access_token;
 }
@@ -325,7 +331,7 @@ document.addEventListener("submit", async ev => {
     const rec = {clientId: d.clientId.trim(), clientSecret: d.clientSecret.trim() || old.clientSecret || "", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || ""};
     if(!rec.clientId || !rec.clientSecret){ toast("Enter the client ID and the client secret."); return; }
     if(!await writeOk(S.db.doc("secrets/" + pl).set(rec))) return; S.apiKeys[pl] = rec;
-    const {id, ...b} = p, pr = PLT_PRESETS[pl]; await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...((pr && !(b.api || {}).tokenUrl) ? pr.api : {}), ...(b.api || {}), direct: true}}));
+    const {id, ...b} = p, pr = PLT_PRESETS[pl]; await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...((pr && !(b.api || {}).tokenUrl) ? pr.api : {}), ...(b.api || {}), direct: true, relayUrl: (d.relayUrl || "").trim()}}));
     toast(`${pName(pl)} API keys saved – click "Test connection", then "Sync now".`); render(); return; }
   if(f.id === "fApi"){ const d = Object.fromEntries(new FormData(f).entries()), p = S.platforms[f.dataset.pl]; if(!p) return; const {id, ...b} = p, fields = {};
     Object.keys(d).filter(k => k.startsWith("f_")).forEach(k => { if(d[k].trim()) fields[k.slice(2)] = d[k].trim(); delete d[k]; });
