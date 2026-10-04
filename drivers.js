@@ -296,7 +296,7 @@ function salaryRows(M){
   S6.push(L("Less machine payments (card)", -x.card), L("Cash that should be with the driver", M.expected, "t"), L("Less handed over / spent for the company", -M.handed),
     L(M.inHand == null ? "Less cash in hand with the driver (not counted)" : "Less cash in hand with the driver (counted)", M.inHand == null ? null : -M.inHand),
     L(`Difference – ${M.inHand == null ? "still to be accounted for" : Math.abs(M.diff) < 0.005 ? "fully accounted for" : M.diff > 0 ? "shortage" : "excess"}`, M.diff, "g"));
-  return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6], ["7", "Vehicle usage audit (GPS)", auditRows(M.id)]];
+  return [["2", "Earnings", S2], ["3", "Direct expenditure", S3], ["4", "Salary calculation", S4], ["5", "Payable this period", S5], ["6", "Cash reconciliation", S6], ["7", "Vehicle usage (GPS) – summary", auditRows(M.id)]];
 }
 /* Performance targets: per day worked (trips, net earnings, km), days worked per month and completion %.
    The general targets in Settings apply to every driver, unless the driver has his own (driver form → "Own targets").
@@ -429,9 +429,10 @@ async function printSalary(id){
   if(window.GPS) await GPS.ensure();   // the vehicle-usage audit on the statement
   const x = selX(id, compute().D[id]) || {}, late = lateFor(id, fin), M = salaryModel(id, x, late, r2(sum(late, tripEffect)), drvTx(id)), d = S.drivers[id] || {};
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff";
-  box.innerHTML = `<style>${SAL_CSS}</style>${salaryPrintHtml(M, d, fin)}`; document.body.appendChild(box);
+  const aud = window.GPS && GPS.ready() && GPS.driverAudit(id) && GPS.driverAudit(id).days.length ? `<div style="page-break-before:always"></div>${GPS.auditHtml(id)}` : "";
+  box.innerHTML = `<style>${SAL_CSS}${window.GPS ? GPS.AUD_CSS : ""}</style><div class="pdfwrap">${salaryPrintHtml(M, d, fin)}${aud}</div>`; document.body.appendChild(box);
   const name = `Salary_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
-  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".sp")).save(); toast("Downloaded " + name); }
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, scrollX: 0, scrollY: 0, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["table", ".sigs"]}}).from(box.querySelector(".pdfwrap") || box.querySelector(".sp")).save(); toast("Downloaded " + name); }
   catch(e){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
@@ -738,7 +739,7 @@ function dRms(id){
   if(!S.gps.rows.length) return `<div class="empty"><b>No GPS data for this period</b>Import the tracker's Activity report on GPS tracking → Import.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" data-nav="gps">GPS tracking</button></div></div>`;
   return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Days with the car</div><div class="v">${A.days}</div></div><div class="kpi"><div class="l">GPS km on his trips</div><div class="v">${fmt(A.onKm)}</div></div>
       <div class="kpi"><div class="l">Off-platform km</div><div class="v ${A.pct >= 35 ? "neg" : ""}">${fmt(A.offKm)}</div><div class="n">${A.pct}% of his km</div></div><div class="kpi"><div class="l">Days to check</div><div class="v">${A.flagged}</div></div></div>
-    <div class="row" style="justify-content:flex-end;margin-bottom:6px">${dlBtn("rms", id)}</div>
+    <div class="row" style="justify-content:flex-end;margin-bottom:6px;gap:6px">${dlBtn("rms", id)}<button class="btn sm primary" data-audpdf="${esc(id)}">Vehicle usage audit (PDF)</button></div>
     <div class="tbl"><table><thead><tr><th>Date</th><th>Car</th><th class="num">Trips</th><th class="num">GPS km (car)</th><th class="num">km on his trips</th><th class="num">Off-platform km (his)</th><th>Other drivers in the car</th><th>Check</th></tr></thead><tbody>
     ${A.rows.map(r => `<tr><td>${esc(dmyS(r.d))}</td><td>${esc(vName(r.v))}</td><td class="num">${r.trips || ""}</td><td class="num">${fmt(r.gpsKm)}</td><td class="num">${fmt(r.onKm)}</td><td class="num ${r.offKm >= 25 ? "neg" : ""}">${fmt(r.offKm)}</td><td class="small">${esc(r.others.map(dName).join(", ") || "—")}</td><td>${r.flags.map(f => `<span class="pill ${/did not move|more than/.test(f) ? "warn" : "bad"}">${esc(f)}</span>`).join(" ") || '<span class="pill good">OK</span>'}</td></tr>`).join("") || '<tr><td colspan="8" class="muted">No car-days for this driver in the GPS data of this period.</td></tr>'}
     </tbody></table></div>${(() => { const L = GPS.suspects().filter(x => x.dr === id && x.level !== "low"); return `<div class="row" style="justify-content:space-between;align-items:center;margin:14px 0 6px"><h3 style="margin:0">Suspicious journeys (${L.length})</h3>${L.length ? `<button class="btn sm primary" data-susrpt="${esc(id)}">Discussion report (PDF)</button>` : ""}</div>
@@ -748,13 +749,13 @@ DL.rms = id => { const A = window.GPS && GPS.ready() ? GPS.driver(id) : {rows: [
   return [`vehicle_usage_audit_${norm(dName(id))}_${S.from}_${S.to}.csv`, [["Date", "Car", "Trips", "GPS km (car)", "km on his trips", "Off-platform km (his)", "Other drivers in the car", "Check"], ...A.rows.map(r => [r.d, vName(r.v), r.trips, r.gpsKm, r.onKm, r.offKm, r.others.map(dName).join(", "), r.flags.join("; ")])]]; };
 // the audit as a section of the salary statement (rows like the others)
 function auditRows(id){
-  const A = window.GPS && GPS.ready() ? GPS.driver(id) : null, L = (label, v, kind = "") => ({label, v, kind, num: true});
+  // the summary only – the full Vehicle usage audit is its own page (RMS tab, and page 2 of the salary PDF)
+  const A = window.GPS && GPS.ready() ? GPS.driverAudit(id) : null, L = (label, v, kind = "") => ({label, v, kind, num: true});
   if(!A || !S.gps.rows.length) return [{label: '<span class="sub">No GPS data imported for this period</span>', v: null}];
-  const out = [{...L("Days with the car (GPS)", A.days), int: true}, L("GPS km on his platform trips", A.onKm), L(`Off-platform km given to him (${A.pct}%)`, A.offKm, A.pct >= 35 ? "t" : "")];
-  { const SL = GPS.suspects().filter(x => x.dr === id && x.level !== "low"); if(SL.length) out.push({...L(`Suspicious journeys (${SL.filter(x => x.level === "high").length} high) – ${SL.filter(x => x.status === "confirmed").length} confirmed private`, SL.length), int: true, kind: SL.some(x => x.status === "confirmed") ? "t" : ""}); }
-  A.rows.filter(r => r.flags.length).slice(0, 6).forEach(r => out.push({label: `<span class="sub">${esc(dmyS(r.d))} · ${esc(vName(r.v))} – ${esc(r.flags.join(", "))}${r.offKm ? " · " + fmt(r.offKm) + " km off-platform" : ""}</span>`, v: null}));
-  if(A.flagged > 6) out.push({label: `<span class="sub">… and ${A.flagged - 6} more day(s) – see RMS (GPS)</span>`, v: null});
-  return out;
+  if(!A.days.length) return [{label: '<span class="sub">No GPS km found for this driver in the period</span>', v: null}];
+  return [L("Km on his trips and pick-ups", A.work), L("Parking and short moves (km)", A.tot.parking), L(`Km without any trip (${A.pctNone}% of ${fmt(A.total)} km)`, A.tot.none, A.pctNone >= 30 ? "t" : ""),
+    {...L(`Journeys to explain: ${A.high} high · ${A.explained} explained · ${A.confirmed} confirmed private · ${A.open + A.discussed} not settled`, A.sus.length), int: true, kind: A.confirmed ? "t" : ""},
+    {label: '<span class="sub">Details: Vehicle usage audit (next page / RMS tab)</span>', v: null}];
 }
 
 /* ---------- duplicate drivers: find and merge ----------

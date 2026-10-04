@@ -275,6 +275,7 @@ document.addEventListener("click", async ev => {
   const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
   if(t.dataset.gpstab){ S.gpsTab = t.dataset.gpstab; render(); return; }
   if(t.dataset.gototrip){ S.view = "trips"; S.tripFilter = {...S.tripFilter, q: "#" + t.dataset.gototrip, driver: "", vehicle: "", platform: "", settle: ""}; render(); window.scrollTo(0, 0); return; }
+  if(t.dataset.audpdf){ t.disabled = true; await auditPdf(t.dataset.audpdf); t.disabled = false; return; }
   if(t.dataset.susrpt != null){ if(!t.dataset.susrpt){ toast("Choose a driver first."); return; } t.disabled = true; await susReport(t.dataset.susrpt); t.disabled = false; return; }
   if(t.dataset.gpsopen){ S.gpsOpen = S.gpsOpen === t.dataset.gpsopen ? "" : t.dataset.gpsopen; render(); return; }
   if(t.dataset.gpscancel){ S.gpsImp = null; render(); return; }
@@ -305,7 +306,61 @@ function gpsDriver(id){
   const onKm = r2(sum(rows, r => r.onKm)), offKm = r2(sum(rows, r => r.offKm));
   return {rows, days: rows.length, onKm, offKm, pct: onKm + offKm ? Math.round(100 * offKm / (onKm + offKm)) : 0, flagged: rows.filter(r => r.flags.length).length};
 }
+/* ---------- the driver's vehicle usage audit (a page of its own, also printed after the salary statement) ----------
+   Every km the cars moved while the driver had them, split by what it was: his platform trips, driving to his
+   pick-ups, parking / short moves, and km with no trip; day by day; and the suspicious journeys to explain. */
+function gpsDriverAudit(id){
+  if(!S.gps || !S.gps.rows) return null;
+  const A = gpsAudit(), days = [], tot = {trip: 0, pickup: 0, parking: 0, none: 0};
+  A.forEach(x => { const mine = x.segs.filter(s => s.dr === id); if(!mine.length) return;
+    const k = t => r2(sum(mine.filter(s => s.term === t), s => s.km)), row = {d: x.d, v: x.v, trip: k("trip"), pickup: k("pickup"), parking: k("parking"), none: k("none"), trips: new Set(mine.filter(s => s.no).map(s => s.no)).size};
+    row.total = r2(row.trip + row.pickup + row.parking + row.none); Object.keys(tot).forEach(t => tot[t] = r2(tot[t] + row[t])); days.push(row); });
+  days.sort((p, q) => p.d.localeCompare(q.d) || vName(p.v).localeCompare(vName(q.v)));
+  const total = r2(tot.trip + tot.pickup + tot.parking + tot.none), sus = gpsSuspects(A).filter(x => x.dr === id && x.level !== "low");
+  const cnt = st => sus.filter(x => x.status === st).length;
+  return {days, tot, total, work: r2(tot.trip + tot.pickup), pctNone: total ? Math.round(100 * tot.none / total) : 0, sus, high: sus.filter(x => x.level === "high").length,
+    open: cnt("open"), discussed: cnt("discussed"), explained: cnt("explained"), confirmed: cnt("confirmed"), cars: [...new Set(days.map(r => r.v))]};
+}
+const AUD_CSS = `.au{font:8.4pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;padding:7mm 10mm;width:210mm;box-sizing:border-box;background:#fff}
+.au .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:6px;margin-bottom:8px}.au .co{font:700 14pt "Segoe UI",Arial;color:#16213a}
+.au .ttl{text-align:right;color:#16213a}.au .ttl b{display:block;font-size:11pt;letter-spacing:.06em}
+.au table{width:100%;border-collapse:collapse;margin:0 0 6px;page-break-inside:auto}.au th,.au td{border:1px solid #c5c9d2;padding:2px 5px;vertical-align:top;text-align:left}
+.au tr.sec th{background:#16213a;color:#fff;font-weight:600}.au th{background:#f3f4f7;font-weight:600;font-size:7.6pt}.au td.n,.au th.n{text-align:right;white-space:nowrap}
+.au tr.t td{font-weight:700;background:#f3f4f7}.au .bad{color:#b3261e;font-weight:700}.au .box{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:8px}
+.au .box div{border:1px solid #c5c9d2;padding:4px 6px}.au .box b{display:block;font-size:11pt}.au .box span{color:#555;font-size:7.4pt}.au .note{color:#555;font-size:7.4pt;margin:2px 0 6px}
+.au .sigs{display:grid;grid-template-columns:1fr 1fr;gap:34px;margin-top:12px;page-break-inside:avoid}.au .line{border-bottom:1px solid #333;height:28px}`;
+function gpsAuditHtml(id){
+  const A = gpsDriverAudit(id), d = S.drivers[id] || {}, st = S.settings || {}, co = st.company || "Royal Rides Limousine LLC", R = gpsRange();
+  if(!A) return "";
+  const pc = v => A.total ? Math.round(100 * v / A.total) + "%" : "";
+  return `<div class="au"><div class="hd"><div class="co">${esc(co)}</div><div class="ttl"><b>VEHICLE USAGE AUDIT</b>${esc(d.name || "")} · ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
+    <div class="box"><div><span>Days with a company car</span><b>${A.days.length}</b></div><div><span>Km the car moved (GPS)</span><b>${fmt(A.total)}</b></div><div><span>Km working (trips + pick-ups)</span><b>${fmt(A.work)}</b></div><div><span>Km without any trip</span><b class="${A.pctNone >= 30 ? "bad" : ""}">${fmt(A.tot.none)} (${A.pctNone}%)</b></div></div>
+    <table><tr class="sec"><th colspan="3">1. Where the km went</th></tr><tr><th>What</th><th class="n">km</th><th class="n">Share</th></tr>
+      <tr><td>On his Uber / Bolt / Yango trips (rider in the car)</td><td class="n">${fmt(A.tot.trip)}</td><td class="n">${pc(A.tot.trip)}</td></tr>
+      <tr><td>Driving to pick up his next rider (up to ${R.pickMin} min / ${R.pickKm} km before the trip)</td><td class="n">${fmt(A.tot.pickup)}</td><td class="n">${pc(A.tot.pickup)}</td></tr>
+      <tr><td>Parking and short moves (up to ${R.parkKm} km each)</td><td class="n">${fmt(A.tot.parking)}</td><td class="n">${pc(A.tot.parking)}</td></tr>
+      <tr><td><b>Without any trip</b> – not for a platform trip (home, errands, waiting, or a ride off the apps)</td><td class="n"><b>${fmt(A.tot.none)}</b></td><td class="n"><b>${pc(A.tot.none)}</b></td></tr>
+      <tr class="t"><td>Total km while the car was with him</td><td class="n">${fmt(A.total)}</td><td class="n">100%</td></tr></table>
+    <table><tr class="sec"><th colspan="4">2. Journeys to explain (suspicious)</th></tr><tr><th>Found</th><th>Explained – OK</th><th>Confirmed – private ride</th><th>Not yet discussed</th></tr>
+      <tr><td>${A.sus.length} (${A.high} high)</td><td>${A.explained}</td><td class="${A.confirmed ? "bad" : ""}">${A.confirmed}</td><td>${A.open + A.discussed}</td></tr></table>
+    ${A.sus.length ? `<table><tr><th>#</th><th>Date</th><th>Time</th><th>Car</th><th class="n">km</th><th class="n">km/h</th><th>Why flagged</th><th>Level</th><th>Status / driver's explanation</th></tr>
+      ${A.sus.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v))}</td><td class="n">${fmt(x.km)}</td><td class="n">${x.spd || ""}</td><td>${esc(x.where)}</td><td>${x.level === "high" ? "<b>High</b>" : "Medium"}</td><td>${esc(SUS_STATUS[x.status])}${x.note ? " – " + esc(x.note) : ""}</td></tr>`).join("")}</table>` : ""}
+    <table><tr class="sec"><th colspan="8">3. Day by day</th></tr><tr><th>Date</th><th>Car</th><th class="n">Trips</th><th class="n">Trip km</th><th class="n">Pick-up km</th><th class="n">Parking km</th><th class="n">No-trip km</th><th class="n">Total</th></tr>
+      ${A.days.map(r => `<tr><td>${esc(dmyS(r.d))}</td><td>${esc(vName(r.v))}</td><td class="n">${r.trips || ""}</td><td class="n">${fmt(r.trip)}</td><td class="n">${fmt(r.pickup)}</td><td class="n">${fmt(r.parking)}</td><td class="n ${r.none >= 25 ? "bad" : ""}">${fmt(r.none)}</td><td class="n">${fmt(r.total)}</td></tr>`).join("")}
+      <tr class="t"><td colspan="3">Total</td><td class="n">${fmt(A.tot.trip)}</td><td class="n">${fmt(A.tot.pickup)}</td><td class="n">${fmt(A.tot.parking)}</td><td class="n">${fmt(A.tot.none)}</td><td class="n">${fmt(A.total)}</td></tr></table>
+    <div class="note">How it is worked out: the car's tracker records every stretch it moved. A stretch during one of his platform trips is "trip"; one that ends within ${R.pickMin} minutes before his next trip (up to ${R.pickKm} km) is "pick-up"; a move of up to ${R.parkKm} km is "parking"; everything else is "without any trip". Parking and no-trip stretches are his when they fall between his trips or within ${R.attrMin} minutes of one, or when the car was assigned to him. A journey without a trip is flagged High when it is between two of his trips, 8 km or more at 30 km/h or more, at night, or on a day with no trip at all.</div>
+    <div class="sigs"><div><b>Driver</b><div class="line"></div>${esc(d.name || "")} – signature & date</div><div><b>For ${esc(co)}</b><div class="line"></div>${esc(st.signatory || "")} – signature & date</div></div></div>`;
+}
+async function auditPdf(id){
+  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+  await gpsEnsure(); const html = gpsAuditHtml(id); if(!html){ toast("No GPS data for this period."); return; }
+  const d = S.drivers[id] || {}, box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;background:#fff"; box.innerHTML = `<style>${AUD_CSS}</style>${html}`; document.body.appendChild(box);
+  const name = `Vehicle_usage_audit_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.97}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "portrait"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs", ".box"]}}).from(box.querySelector(".au")).save(); toast("Downloaded " + name); }
+  catch(e){ toast("Could not make the PDF. Try again."); }
+  box.remove();
+}
 const gpsReady = () => S.gps && S.gps.rows && S.gps.key === S.from + "|" + S.to;
 async function gpsEnsure(){ if(!gpsReady()) await gpsLoad(); return gpsReady(); }
 Object.assign(window.BOOK_VIEWS = window.BOOK_VIEWS || {}, {gps: vGps});
-window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure, suspects: () => gpsSuspects(gpsAudit()), report: susReport, levelPill: susLevelPill, dur: susDur, STATUS: SUS_STATUS};
+window.GPS = {read: gpsRead, audit: gpsAudit, load: gpsLoad, driver: gpsDriver, ready: gpsReady, ensure: gpsEnsure, suspects: () => gpsSuspects(gpsAudit()), report: susReport, levelPill: susLevelPill, dur: susDur, STATUS: SUS_STATUS, driverAudit: gpsDriverAudit, auditHtml: gpsAuditHtml, auditPdf, AUD_CSS};
