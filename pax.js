@@ -156,13 +156,13 @@ function paxOldBox(){
 DL.pax = () => { const L = paxAudit().filter(x => (!S.paxOnly || (!x.match && x.level !== "low")) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar));
   return [`passenger_audit_${S.from}_${S.to}.csv`, [["Date", "Seat taken", "Seat free", "Minutes", "Car", "Seats", "km", "From", "To", "Term", "Trip No", "Driver", "Driver found by", "Level", "Status", "Note"], ...L.map(x => [x.d, x.s, x.e, x.dur, vName(x.v) || x.p, x.seats, x.km, x.from, x.to, PAX_TERM[x.term], x.no, x.dr ? dName(x.dr) : "unknown", x.how, x.match ? "" : x.level, x.match ? "" : SUS_STATUS[x.status], x.note])]]; };
 
-/* ---------- the driver's audit (RMS tab, salary statement) ---------- */
+/* ---------- the driver's audit (FMS tab, salary statement) ---------- */
 const PAX_CSS = `.px{font:8.2pt/1.3 "Segoe UI",Arial,sans-serif;color:#111;padding:7mm 9mm;width:297mm;box-sizing:border-box;background:#fff}
 .px .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:5px;margin-bottom:7px}.px .co{font:700 14pt "Segoe UI",Arial;color:#16213a}
 .px .ttl{text-align:right;color:#16213a}.px .ttl b{display:block;font-size:11pt;letter-spacing:.06em}
-.px table{width:100%;border-collapse:collapse;margin:0 0 6px}.px th,.px td{border:1px solid #c5c9d2;padding:2px 5px;vertical-align:top;text-align:left}
-.px tr.sec th{background:#16213a;color:#fff;font-weight:600}.px th{background:#f3f4f7;font-weight:600;font-size:7.6pt}.px td.n,.px th.n{text-align:right;white-space:nowrap}
-.px tr.t td{font-weight:700;background:#f3f4f7}.px .bad{color:#b3261e;font-weight:700}.px .ans{min-width:48mm}
+.px table{width:100%;border-collapse:collapse;margin:0 0 6px;table-layout:fixed}.px th,.px td{border:1px solid #c5c9d2;padding:2px 4px;vertical-align:top;text-align:left;white-space:normal;overflow-wrap:anywhere;word-break:break-word;font-size:7.8pt;line-height:1.25;height:auto}
+.px tr.sec th{background:#16213a;color:#fff;font-weight:600}.px th{background:#f3f4f7;font-weight:600;font-size:7.4pt}.px td.n,.px th.n{text-align:right}
+.px tr.t td{font-weight:700;background:#f3f4f7}.px .bad{color:#b3261e;font-weight:700}
 .px .box{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:7px}.px .box div{border:1px solid #c5c9d2;padding:4px 6px}.px .box b{display:block;font-size:11pt}.px .box span{color:#555;font-size:7.4pt}
 .px .note{color:#555;font-size:7.4pt;margin:3px 0 6px}.px .sigs{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:10px;page-break-inside:avoid}.px .line{border-bottom:1px solid #333;height:26px}`;
 function paxAuditHtml(id){
@@ -173,7 +173,7 @@ function paxAuditHtml(id){
   return `<div class="px"><div class="hd"><div class="co">${esc(co)}</div><div class="ttl"><b>PASSENGER TRIPS AUDIT</b>${esc(d.name || "")} · ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
     <div class="box"><div><span>Passenger journeys in his cars</span><b>${A.all.length}</b></div><div><span>On his platform trips</span><b>${A.on.length} · ${fmt(A.onKm)} km</b></div><div><span>With a passenger but NO platform trip</span><b class="${A.sus.length ? "bad" : ""}">${A.sus.length} · ${fmt(A.offKm)} km</b></div>
       <div><span>Explained / confirmed private</span><b>${A.explained} / <span class="${A.confirmed ? "bad" : ""}" style="font-size:11pt;color:inherit">${A.confirmed}</span></b></div><div><span>Not yet settled</span><b>${A.open}</b></div></div>
-    <table><tr class="sec"><th colspan="13">1. Passenger journeys with no Uber / Bolt / Yango trip – to explain</th></tr>
+    <table><colgroup>${[3, 6.5, 8, 4, 6, 3.5, 4, 14, 14, 10, 5, 7, 15].map(w => `<col style="width:${w}%">`).join("")}</colgroup><tr class="sec"><th colspan="13">1. Passenger journeys with no Uber / Bolt / Yango trip – to explain</th></tr>
       <tr><th>#</th><th>Date</th><th>Seat taken – free</th><th>Time</th><th>Car</th><th class="n">Seats</th><th class="n">km</th><th>From</th><th>To</th><th>Why his</th><th>Level</th><th>Status</th><th class="ans">Driver's explanation</th></tr>
       ${A.sus.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)} – ${esc(x.e)}</td><td>${paxDur(x.dur)}</td><td>${esc(vName(x.v) || x.p)}</td><td class="n">${x.seats}</td><td class="n">${fmt(x.km)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.how)}</td><td>${x.level === "high" ? "<b>High</b>" : "Medium"}</td><td>${esc(SUS_STATUS[x.status])}</td><td class="ans">${esc(x.note)}</td></tr>`).join("") || '<tr><td colspan="13">None – every passenger journey matched one of his platform trips.</td></tr>'}
       ${A.sus.length ? `<tr class="t"><td colspan="6">Total</td><td class="n">${fmt(A.offKm)}</td><td colspan="6"></td></tr>` : ""}</table>
@@ -189,15 +189,19 @@ function paxSummaryRows(id){
   if(!paxReady() || !S.pax.rows.length) return [{label: '<span class="sub">No Trip Passenger report imported for this period</span>', v: null}];
   if(!A || !A.all.length) return [{label: '<span class="sub">No passenger journeys in his cars in the period</span>', v: null}];
   return [{...L("Passenger journeys on his platform trips", A.on.length), int: true}, {...L(`Passenger journeys with no platform trip (${fmt(A.offKm)} km, ${A.high} high)`, A.sus.length, A.sus.length ? "t" : ""), int: true},
-    {...L(`Explained ${A.explained} · confirmed private ${A.confirmed} · not settled`, A.open, A.confirmed ? "t" : ""), int: true}, {label: '<span class="sub">Details: Passenger trips audit (next page / RMS tab)</span>', v: null}];
+    {...L(`Explained ${A.explained} · confirmed private ${A.confirmed} · not settled`, A.open, A.confirmed ? "t" : ""), int: true}, {label: '<span class="sub">Details: Passenger trips audit (next page / FMS tab)</span>', v: null}];
 }
 // landscape pages added to a jsPDF document (salary PDFs)
 async function paxAddPages(doc, id){
   const html = paxAuditHtml(id); if(!html) return 0;
   const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:297mm;background:#fff"; box.innerHTML = `<style>${PAX_CSS}</style>${html}`; document.body.appendChild(box); let n = 0;
-  try{ const canvas = await html2pdf().set({html2canvas: {scale: 2, backgroundColor: "#ffffff"}}).from(box.querySelector(".px")).toCanvas().get("canvas"), pageH = Math.round(canvas.width * 210 / 297);
-    for(let y = 0; y < canvas.height; y += pageH){ const c = document.createElement("canvas"); c.width = canvas.width; c.height = Math.min(pageH, canvas.height - y); c.getContext("2d").drawImage(canvas, 0, y, c.width, c.height, 0, 0, c.width, c.height);
-      doc.addPage("a4", "landscape"); doc.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, 297, 297 * c.height / c.width); n++; } }
+  try{ const el = box.querySelector(".px"), top0 = el.getBoundingClientRect().top, cssW = el.offsetWidth;
+    const cuts = [...el.querySelectorAll("tr, .box, .note, .sigs, .hd")].map(x => x.getBoundingClientRect().bottom - top0).sort((a, b) => a - b);
+    const canvas = await html2pdf().set({margin: 0, jsPDF: {unit: "mm", format: "a4", orientation: "landscape"}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}}).from(el).toCanvas().get("canvas"), k = canvas.width / cssW, mm = cssW / 297, total = el.offsetHeight;
+    let y = 0;
+    while(y < total - 1){ const room = (n ? 210 - 14 : 210 - 7) * mm; let end = Math.max(...cuts.filter(c => c > y + 1 && c <= y + room), 0); if(end <= y + 1) end = Math.min(y + room, total); if(total - y <= room) end = total;
+      const c = document.createElement("canvas"); c.width = canvas.width; c.height = Math.max(1, Math.round((end - y) * k)); c.getContext("2d").drawImage(canvas, 0, Math.round(y * k), c.width, c.height, 0, 0, c.width, c.height);
+      doc.addPage("a4", "landscape"); doc.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, n ? 7 : 0, 297, 297 * c.height / c.width); n++; y = end; } }
   finally{ box.remove(); }
   return n;
 }
@@ -211,18 +215,20 @@ async function paxPdf(id){
   catch(e){ toast("Could not make the PDF. Try again."); }
   box.remove();
 }
-// the driver's RMS tab
+// the driver's FMS tab
 function paxRmsHtml(id){
   if(!paxReady()){ if(!(S.pax && S.pax.loading)) paxLoad(); return '<p class="sub">Loading the passenger journeys…</p>'; }
   if(!S.pax.rows.length) return `<div class="empty"><b>No Trip Passenger report for this period</b>Import it on GPS tracking → Passenger audit.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" data-nav="gps">GPS tracking</button></div></div>`;
   const A = paxDriver(id);
   return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Passenger journeys in his cars</div><div class="v">${A.all.length}</div></div><div class="kpi"><div class="l">On his platform trips</div><div class="v">${A.on.length}</div><div class="n">${fmt(A.onKm)} km</div></div>
       <div class="kpi"><div class="l">No platform trip</div><div class="v ${A.sus.length ? "neg" : ""}">${A.sus.length}</div><div class="n">${fmt(A.offKm)} km · ${A.high} high</div></div><div class="kpi"><div class="l">Confirmed private</div><div class="v ${A.confirmed ? "neg" : ""}">${A.confirmed}</div><div class="n">${A.open} not settled</div></div></div>
-    <div class="row" style="justify-content:flex-end;margin-bottom:6px"><button class="btn sm primary" data-paxpdf="${esc(id)}">Passenger trips audit (PDF)</button></div>
-    <div class="tbl"><table><thead><tr><th>Date</th><th>Seat taken</th><th>Car</th><th class="num">Seats</th><th class="num">km</th><th>From → To</th><th>Why his</th><th>Level</th><th>Status</th><th>Note</th></tr></thead><tbody>
-    ${A.sus.map(x => `<tr><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v) || x.p)}</td><td class="num">${x.seats}</td><td class="num">${fmt(x.km)}</td><td class="small" style="white-space:normal">${esc(x.from)} → ${esc(x.to)}</td><td class="small">${esc(x.how)}</td><td>${paxLevel(x.level)}</td>
-      <td><select data-paxst="${esc(x.rid)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select></td><td><input data-paxnote="${esc(x.rid)}" value="${esc(x.note)}" placeholder="what the driver said" ${S.canWrite ? "" : "disabled"}></td></tr>`).join("") || '<tr><td colspan="10" class="muted">Every passenger journey matched one of his platform trips.</td></tr>'}
-    </tbody></table></div><p class="small muted" style="margin-top:6px">From the tracker's seat sensor (Trip Passenger report). This audit is printed with his salary statement.</p>`;
+    <div class="row" style="justify-content:space-between;margin-bottom:6px;gap:6px"><select id="fmsTerm" aria-label="Term">${opts(PAX_TERM, S.fmsTerm || "", "All terms")}</select><button class="btn sm primary" data-paxpdf="${esc(id)}">Passenger trips audit (PDF)</button></div>
+    ${(() => { const L = A.all.filter(x => !S.fmsTerm || x.term === S.fmsTerm).sort((a, b) => b.d.localeCompare(a.d) || String(b.s).localeCompare(String(a.s))), pg = paged("fms", L);
+      return `<div class="tbl"><table><thead><tr><th>Date</th><th>Seat taken</th><th>Car</th><th class="num">Seats</th><th class="num">km</th><th>From → To</th><th>Term</th><th>Trip No</th><th>Why his</th><th>Status</th><th>Note</th></tr></thead><tbody>
+      ${pg.rows.map(x => `<tr${x.term === "none" ? ' style="background:var(--bad-bg, #fdecec)"' : ""}><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v) || x.p)}</td><td class="num">${x.seats}</td><td class="num">${fmt(x.km)}</td><td class="small" style="white-space:normal;min-width:200px">${esc(x.from)} → ${esc(x.to)}</td><td>${paxTerm(x)}</td>
+        <td class="small">${x.no ? `<button class="btn sm ghost" data-gototrip="${x.no}" style="padding:1px 6px">${x.no}</button>` : "—"}</td><td class="small">${esc(x.how)}</td>
+        <td>${x.term === "none" ? `<select data-paxst="${esc(x.rid)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select>` : ""}</td><td>${x.term === "none" ? `<input data-paxnote="${esc(x.rid)}" value="${esc(x.note)}" placeholder="what the driver said" ${S.canWrite ? "" : "disabled"}>` : ""}</td></tr>`).join("") || '<tr><td colspan="11" class="muted">No passenger journeys of his in this period.</td></tr>'}
+      </tbody><tfoot><tr><td colspan="4">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="6"></td></tr></tfoot></table></div>${pg.bar}`; })()}<p class="small muted" style="margin-top:6px">From the tracker's seat sensor (Trip Passenger report). This audit is printed with his salary statement.</p>`;
 }
 
 document.addEventListener("click", async ev => {
@@ -244,6 +250,7 @@ document.addEventListener("change", ev => {
   if(t.id === "paxDrv"){ S.paxDrv = t.value; render(); }
   if(t.id === "paxCar"){ S.paxCar = t.value; render(); }
   if(t.id === "paxTermF"){ S.paxTermF = t.value; render(); }
+  if(t.id === "fmsTerm"){ S.fmsTerm = t.value; render(); }
   if(t.dataset && t.dataset.paxst){ const x = paxAudit().find(y => y.rid === t.dataset.paxst); susSave(t.dataset.paxst, {status: t.value, dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Saved."); render(); }); }
   if(t.dataset && t.dataset.paxnote){ const x = paxAudit().find(y => y.rid === t.dataset.paxnote); susSave(t.dataset.paxnote, {note: t.value.trim(), dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Note saved."); }); }
 });

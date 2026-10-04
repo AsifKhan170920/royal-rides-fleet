@@ -3,7 +3,7 @@
    (one record per driver and period). Finalised periods cannot overlap, so a period is paid once.
    Accounts: loans, salary advances, visa and other amounts recovered from the driver, 100% his share
    unless a lower share is entered (the company bears the rest as an expense). */
-const DRV_TABS = {trips:"Trip history", tx:"Transactions", salary:"Salary", perf:"Performance", rms:"RMS (GPS)", accts:"Accounts"};
+const DRV_TABS = {trips:"Trip history", tx:"Transactions", salary:"Salary", perf:"Performance", rms:"FMS (GPS)", accts:"Accounts"};
 const histKey = () => setting("ledgerStart", "2026-09-01") + "|" + S.to;
 function historyReady(){
   if(!S.db) return false;
@@ -748,7 +748,7 @@ document.addEventListener("submit", async ev => {
   S.tripEdit = null; await loadPeriod(); render(); toast("Trip saved.");
 });
 
-/* ---------- RMS: the tracker's data for the driver – vehicle-usage audit ----------
+/* ---------- FMS: the tracker's data for the driver – vehicle-usage audit ----------
    The car-days of the period he drove: GPS km on his platform trips, km driven off the platforms that are given to
    him (nearest trip / car assignment), and the days to check. The same summary goes on the salary statement. */
 function dRms(id){
@@ -769,13 +769,13 @@ DL.rms = id => { const A = window.GPS && GPS.ready() ? GPS.driver(id) : {rows: [
   return [`vehicle_usage_audit_${norm(dName(id))}_${S.from}_${S.to}.csv`, [["Date", "Car", "Trips", "GPS km (car)", "km on his trips", "Off-platform km (his)", "Other drivers in the car", "Check"], ...A.rows.map(r => [r.d, vName(r.v), r.trips, r.gpsKm, r.onKm, r.offKm, r.others.map(dName).join(", "), r.flags.join("; ")])]]; };
 // the audit as a section of the salary statement (rows like the others)
 function auditRows(id){
-  // the summary only – the full Vehicle usage audit is its own page (RMS tab, and page 2 of the salary PDF)
+  // the summary only – the full Vehicle usage audit is its own page (FMS tab, and page 2 of the salary PDF)
   const A = window.GPS && GPS.ready() ? GPS.driverAudit(id) : null, L = (label, v, kind = "") => ({label, v, kind, num: true});
   if(!A || !S.gps.rows.length) return [{label: '<span class="sub">No GPS data imported for this period</span>', v: null}];
   if(!A.days.length) return [{label: '<span class="sub">No GPS km found for this driver in the period</span>', v: null}];
   return [L("Km on his trips and pick-ups", A.work), L("Parking and short moves (km)", A.tot.parking), L(`Km without any trip (${A.pctNone}% of ${fmt(A.total)} km)`, A.tot.none, A.pctNone >= 30 ? "t" : ""),
     {...L(`Journeys to explain: ${A.high} high · ${A.explained} explained · ${A.confirmed} confirmed private · ${A.open + A.discussed} not settled`, A.sus.length), int: true, kind: A.confirmed ? "t" : ""},
-    {label: '<span class="sub">Details: Vehicle usage audit (next page / RMS tab)</span>', v: null}];
+    {label: '<span class="sub">Details: Vehicle usage audit (next page / FMS tab)</span>', v: null}];
 }
 
 /* ---------- duplicate drivers: find and merge ----------
