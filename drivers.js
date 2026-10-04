@@ -701,23 +701,33 @@ function driverDupes(){
     const [keep, drop] = drvScore(a) >= drvScore(b) ? [a, b] : [b, a];
     // one platform account each: two different Uber / Bolt / Yango ids are two people
     const clash = (keep.uberUuid && drop.uberUuid && keep.uberUuid !== drop.uberUuid) || Object.keys(drop.platformIds || {}).some(k => (keep.platformIds || {})[k] && keep.platformIds[k] !== drop.platformIds[k]);
-    if(clash) return; out.push({keep: keep.id, drop: drop.id}); used.add(drop.id); }));
+    // a short common name ("Muhammad Ahmad") that fits several drivers is left alone – merge it by hand
+    if(clash || D.filter(c => c.id !== drop.id && sameName(drop.name, c.name)).length > 1) return; out.push({keep: keep.id, drop: drop.id}); used.add(drop.id); }));
   return out;
 }
-function swapIds(x, from, to){
-  if(Array.isArray(x)){ let ch = false; const a = x.map(v => { const r = swapIds(v, from, to); if(r !== v) ch = true; return r; }); return ch ? a : x; }
-  if(x && typeof x === "object"){ let ch = false; const o = {}; for(const [k, v] of Object.entries(x)){ const k2 = k === from ? to : k, v2 = swapIds(v, from, to); if(k2 !== k || v2 !== v) ch = true; o[k2] = v2; } return ch ? o : x; }
-  if(x === from) return to; if(x === "d:" + from) return "d:" + to; return x;
+// M: {duplicate id: id kept}
+function swapIds(x, M){
+  if(Array.isArray(x)){ let ch = false; const a = x.map(v => { const r = swapIds(v, M); if(r !== v) ch = true; return r; }); return ch ? a : x; }
+  if(x && typeof x === "object"){ let ch = false; const o = {}; for(const [k, v] of Object.entries(x)){ const k2 = M[k] || k, v2 = swapIds(v, M); if(k2 !== k || v2 !== v) ch = true; o[k2] = v2; } return ch ? o : x; }
+  if(typeof x === "string"){ if(M[x]) return M[x]; if(x.startsWith("d:") && M[x.slice(2)]) return "d:" + M[x.slice(2)]; } return x;
 }
-async function mergeDrivers(keepId, dropId){
-  const keep = S.drivers[keepId], drop = S.drivers[dropId]; if(!keep || !drop || keepId === dropId) return 0; let n = 0;
+// several merges in one pass over the data: pairs [{keep, drop}]
+async function mergeDriversMany(pairs){
+  const M = {}; pairs.forEach(p => { if(S.drivers[p.keep] && S.drivers[p.drop] && p.keep !== p.drop) M[p.drop] = p.keep; }); if(!Object.keys(M).length) return 0; let n = 0;
   for(const c of MERGE_COLS){ const snap = await S.db.collection(c).get();
-    for(const doc of snap.docs){ const v = doc.data(), v2 = swapIds(v, dropId, keepId); if(v2 !== v){ n++; if(!await writeOk(S.db.doc(c + "/" + doc.id).set(v2))) return -1; } } }
+    for(const doc of snap.docs){ const v = doc.data(), v2 = swapIds(v, M); if(v2 !== v){ n++; if(!await writeOk(S.db.doc(c + "/" + doc.id).set(v2))) return -1; } } }
+  for(const [dropId, keepId] of Object.entries(M)){ if(await joinDriver(keepId, dropId) < 0) return -1; }
+  return n;
+}
+const mergeDrivers = (keepId, dropId) => mergeDriversMany([{keep: keepId, drop: dropId}]);
+async function joinDriver(keepId, dropId){
+  const keep = S.drivers[keepId], drop = S.drivers[dropId]; if(!keep || !drop) return 0;
   const {id: _k, ...kb} = keep, {id: _d, ...db} = drop;
   const rec = {...db, ...kb, platformIds: {...(db.platformIds || {}), ...(kb.platformIds || {})}, uberUuid: kb.uberUuid || db.uberUuid || "", aliases: [...new Set([...(kb.aliases || []), ...(db.aliases || []), drop.name].filter(Boolean))]};
   if(!await writeOk(S.db.doc("drivers/" + keepId).set(rec))) return -1;
   if(!await writeOk(S.db.doc("drivers/" + dropId).delete())) return -1;
-  return n;
+  S.drivers[keepId] = {id: keepId, ...rec}; delete S.drivers[dropId];
+  return 1;
 }
 function dupesPanel(){
   if(!S.dupOpen) return "";
@@ -731,8 +741,7 @@ document.addEventListener("click", async ev => {
   if(t.dataset.dupopen != null){ S.dupOpen = !!t.dataset.dupopen; render(); return; }
   if(t.dataset.dupmerge || t.dataset.dupswap){ const keep = t.dataset.dupmerge || t.dataset.dupswap, drop = t.dataset.drop; t.disabled = true; t.textContent = "Merging…";
     const n = await mergeDrivers(keep, drop); await loadPeriod(); S.ledger = null; toast(n < 0 ? "Merge stopped – could not save." : `Merged – ${n} record(s) moved to ${(S.drivers[keep] || {}).name || "the driver"}.`); render(); return; }
-  if(t.dataset.dupall){ const L = driverDupes(); t.disabled = true; let done = 0;
-    for(const x of L){ t.textContent = `Merging ${done + 1} of ${L.length}…`; if(await mergeDrivers(x.keep, x.drop) < 0) break; done++; }
-    await loadPeriod(); S.ledger = null; toast(`${done} duplicate driver(s) merged.`); render(); return; }
+  if(t.dataset.dupall){ const L = driverDupes(); t.disabled = true; t.textContent = `Merging ${L.length}…`; const n = await mergeDriversMany(L);
+    await loadPeriod(); S.ledger = null; toast(n < 0 ? "Merge stopped – could not save." : `${L.length} duplicate driver(s) merged.`); render(); return; }
 });
-window.dupesPanel = dupesPanel; window.driverDupes = driverDupes; window.mergeDrivers = mergeDrivers;
+window.dupesPanel = dupesPanel; window.driverDupes = driverDupes; window.mergeDrivers = mergeDrivers; window.mergeDriversMany = mergeDriversMany;
