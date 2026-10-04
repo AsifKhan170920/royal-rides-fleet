@@ -124,7 +124,11 @@ const API_FIELDS = [["id", "Trip / order id"], ["date", "Date & time"], ["driver
 const PLT_PRESETS = {bolt: {note: "Bolt Fleet Integration API – OAuth client credentials from the Bolt fleet portal; finished orders only.", api: {enabled: true, authType: "oauth", tokenUrl: "https://oidc.bolt.eu/token", scope: "fleet-integration:api", method: "POST",
   tripsUrl: "https://node.bolt.eu/fleet-integration-gateway/fleetIntegration/v1/getFleetOrders", body: '{"company_ids":{companyIds},"start_ts":{fromTs},"end_ts":{toTs},"offset":{offset},"limit":{limit}}', listPath: "data.orders", pageSize: 500, maxDays: 15, filter: "order_status=finished",
   companiesUrl: "https://node.bolt.eu/fleet-integration-gateway/fleetIntegration/v1/getCompanies", companiesPath: "data.company_ids",
-  fields: {id: "order_reference", date: "order_created_timestamp", driverId: "driver_uuid", driverName: "driver_name", plate: "vehicle_license_plate", fare: "order_price.ride_price", fee: "order_price.commission", tip: "order_price.tip", refund: "order_price.toll_fee", cash: "order_price.ride_price?payment_method=cash", km: "ride_distance/1000"}}}};
+  fields: {id: "order_reference", date: "order_created_timestamp", driverId: "driver_uuid", driverName: "driver_name", plate: "vehicle_license_plate", fare: "order_price.ride_price", fee: "order_price.commission", tip: "order_price.tip", refund: "order_price.toll_fee", cash: "order_price.ride_price?payment_method=cash", km: "ride_distance/1000"}}},
+  // Yango / Yandex Fleet API: CLID + API key headers, the Fleet (park) id in the body, cursor pages; no browser access, so every call goes through the relay
+  yango: {note: "Yango Fleet API – CLID, API key and Fleet ID from the Yango fleet portal; completed orders only.", api: {enabled: true, authType: "yango", forward: true, method: "POST",
+  tripsUrl: "https://fleet-api.taxi.yandex.net/v1/parks/orders/list", body: '{"limit":{limit},"query":{"park":{"id":"{parkId}","order":{"booked_at":{"from":"{fromIso}","to":"{toIso}"},"statuses":["complete"]}}}}', listPath: "orders", cursorPath: "cursor", pageSize: 500, maxDays: 7, filter: "status=complete",
+  fields: {id: "id", date: "booked_at", driverId: "driver_profile.id", driverName: "driver_profile.name", plate: "car.license.number", fare: "price", cash: "price?payment_method=cash", km: "mileage/1000"}}}};
 function pltApiTab(pl){
   const p = S.platforms[pl];
   if(!p) return `<div class="banner">Add ${esc(pName(pl))} on Platforms & contracts first (Add Uber, Bolt…), then set its API here.</div>`;
@@ -137,7 +141,7 @@ function pltApiTab(pl){
   ${PLT_PRESETS[pl] ? `<div class="row" style="margin-bottom:8px"><button class="btn" data-apipreset="${esc(pl)}">Fill in the ${esc(pName(pl))} API settings</button><span class="small muted">${esc(PLT_PRESETS[pl].note)}</span></div>` : ""}
   <form class="form" id="fApi" data-pl="${esc(pl)}">
     <div class="f"><label for="ap_en">Trips come by</label><select id="ap_en" name="enabled">${opts({false: "File import (Import trip data)", true: "API – fetched by the office sync program"}, String(!!a.enabled))}</select></div>
-    <div class="f"><label for="ap_auth">Sign-in</label><select id="ap_auth" name="authType">${opts({oauth: "OAuth 2 – client ID & secret", apikey: "API key in a header", bearer: "Fixed bearer token", none: "None"}, a.authType || "oauth")}</select></div>
+    <div class="f"><label for="ap_auth">Sign-in</label><select id="ap_auth" name="authType">${opts({oauth: "OAuth 2 – client ID & secret", yango: "Yango / Yandex Fleet – CLID, API key, Fleet ID", apikey: "API key in a header", bearer: "Fixed bearer token", none: "None"}, a.authType || "oauth")}</select></div>
     ${fld("tokenUrl", "Token URL (OAuth)", "https://…/oauth/token")}${fld("scope", "Scope (if asked)")}${fld("keyHeader", "API key header name", "X-API-Key")}
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Trips / earnings request</b> <span class="small muted">– placeholders: {from} {to} (dates), {fromTs} {toTs} (Unix time), {offset} {page} {limit} (pages), {companyIds} (accounts)</span></div>
     <div class="f"><label for="ap_m">Method</label><select id="ap_m" name="method">${opts({GET: "GET", POST: "POST"}, a.method || "GET")}</select></div>
@@ -159,14 +163,16 @@ async function loadApiKeys(pl){ try{ const d = await S.db.doc("secrets/" + pl).g
 function apiKeysBox(pl){
   const k = S.apiKeys[pl], a = (S.platforms[pl] || {}).api || {};
   if(k === undefined){ loadApiKeys(pl).then(() => { if(S.pltView === pl && S.pltTab === "api") render(); }); }
-  const has = k && k.clientSecret, kk = k || {};
+  const has = k && k.clientSecret, kk = k || {}, yk = (a.authType || ((PLT_PRESETS[pl] || {}).api || {}).authType) === "yango";
+  const relay = a.relayUrl || (Object.values(S.platforms).find(p => p.api && p.api.relayUrl) || {api: {}}).api.relayUrl || "";
   return `<form class="form section" id="fApiKeys" data-pl="${esc(pl)}" style="padding:12px 14px">
     <div class="f wide"><b>API keys – sync straight from the software</b> <span class="small muted">– from the ${esc(pName(pl))} fleet portal (API credentials). Saved once; then "Sync now" above fetches the trips. No office PC or script needed.</span>
       ${has ? `<div style="margin-top:4px"><span class="pill good">Keys saved</span> <span class="small muted">${kk.at ? "on " + esc(new Date(kk.at).toLocaleString("en-GB")) : ""} – the secret is not shown again; enter a new one only to change it.</span></div>` : k && k.error ? `<div class="small" style="margin-top:4px"><span class="pill bad">Could not read</span> ${esc(k.error)}</div>` : ""}</div>
-    <div class="f"><label for="ak_id">Client ID</label><input id="ak_id" name="clientId" value="${esc(kk.clientId || "")}" autocomplete="off" style="min-width:300px"></div>
-    <div class="f"><label for="ak_sec">Client secret</label><input id="ak_sec" name="clientSecret" type="password" autocomplete="new-password" placeholder="${has ? "saved – leave blank to keep" : ""}" style="min-width:300px"></div>
-    <div class="f wide"><label for="ak_relay">Token relay URL</label><input id="ak_relay" name="relayUrl" value="${esc(a.relayUrl || "")}" placeholder="https://script.google.com/macros/s/…/exec" style="min-width:460px">
-      <span class="small muted">Bolt gives its sign-in token only to a server, not to a web page. Deploy apps-script/token-relay.gs once as a Google web app and paste its URL here – it keeps nothing, the keys stay in this software.</span></div>
+    <div class="f"><label for="ak_id">${yk ? "CLID" : "Client ID"}</label><input id="ak_id" name="clientId" value="${esc(kk.clientId || "")}" autocomplete="off" style="min-width:300px"></div>
+    <div class="f"><label for="ak_sec">${yk ? "API Key" : "Client secret"}</label><input id="ak_sec" name="clientSecret" type="password" autocomplete="new-password" placeholder="${has ? "saved – leave blank to keep" : ""}" style="min-width:300px"></div>
+    ${yk ? `<div class="f"><label for="ak_park">Fleet ID</label><input id="ak_park" name="parkId" value="${esc(kk.parkId || "")}" autocomplete="off" style="min-width:300px"></div>` : ""}
+    <div class="f wide"><label for="ak_relay">${yk ? "Relay URL" : "Token relay URL"}</label><input id="ak_relay" name="relayUrl" value="${esc(relay)}" placeholder="https://script.google.com/macros/s/…/exec" style="min-width:460px">
+      <span class="small muted">${yk ? "Yango answers only servers, not web pages – the same relay passes the requests on." : "Bolt gives its sign-in token only to a server, not to a web page."} Deploy apps-script/token-relay.gs once as a Google web app and paste its URL here – it keeps nothing, the keys stay in this software.</span></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save keys</button>${has ? `<button class="btn" type="button" data-apitest="${esc(pl)}">Test connection</button><button class="btn ghost" type="button" data-apikeysdel="${esc(pl)}">Remove keys</button>` : ""}
       ${a.tokenUrl ? "" : '<span class="small muted">Then click "Fill in the API settings" below (or set the token / trips URLs).</span>'}</div></form>`;
 }
@@ -181,7 +187,22 @@ async function apiFetch(url, opt){
   }
   throw new Error("the platform kept saying too many requests – try again in a few minutes");
 }
+// platforms that answer only servers (Yango): the relay makes the call and sends back the status and the text
+async function apiCall(api, url, opt = {}){
+  if(!api.forward) return apiFetch(url, opt);
+  if(!api.relayUrl) throw new Error("set the relay URL in the API keys box");
+  for(let i = 0; i < 5; i++){
+    const r = await apiFetch(api.relayUrl, {method: "POST", body: new URLSearchParams({forward_url: url, method: opt.method || "GET", headers: JSON.stringify(opt.headers || {}), body: opt.body || ""})});
+    if(!r || r.status == null) throw new Error((r && r.error) || "the relay did not answer – update it (apps-script/token-relay.gs) and deploy a new version");
+    if(r.status === 429){ await sleep([2000, 5000, 15000, 30000, 30000][i]); continue; }
+    let j; try{ j = JSON.parse(r.text); }catch(e){ j = null; }
+    if(r.status >= 300) throw new Error(`HTTP ${r.status} ${(j && (j.message || j.code)) || String(r.text || "").slice(0, 120)}`);
+    return j;
+  }
+  throw new Error("the platform kept saying too many requests – try again in a few minutes");
+}
 async function apiToken(api, keys){
+  if(api.authType === "yango") return "";
   if((api.authType || "oauth") !== "oauth") return keys.clientSecret;
   if(!api.tokenUrl) throw new Error("set the token URL (Fill in the API settings)");
   const body = new URLSearchParams({client_id: keys.clientId, client_secret: keys.clientSecret, grant_type: "client_credentials"}); if(api.scope) body.set("scope", api.scope);
@@ -193,9 +214,10 @@ async function apiToken(api, keys){
   if(!j || !j.access_token) throw new Error("no token in the answer – check the client id and secret");
   return j.access_token;
 }
-function apiHeaders(api, token){
+function apiHeaders(api, token, keys = {}){
   const h = {Accept: "application/json"};
-  if((api.authType || "oauth") === "apikey") h[api.keyHeader || "X-API-Key"] = token; else if(api.authType !== "none") h.Authorization = "Bearer " + token;
+  if(api.authType === "yango"){ h["X-Client-ID"] = keys.clientId; h["X-API-Key"] = keys.clientSecret; h["X-Park-ID"] = keys.parkId || ""; }
+  else if((api.authType || "oauth") === "apikey") h[api.keyHeader || "X-API-Key"] = token; else if(api.authType !== "none") h.Authorization = "Bearer " + token;
   return h;
 }
 async function apiCompanies(api, token){
@@ -207,19 +229,22 @@ async function directOrders(pl, fromTs, toTs){
   const api = (S.platforms[pl] || {}).api || {}, keys = await loadApiKeys(pl);
   if(!keys.clientSecret) throw new Error("save the API keys first");
   if(!api.tripsUrl) throw new Error("set the trips URL (Fill in the API settings)");
-  const token = await apiToken(api, keys), companies = await apiCompanies(api, token), H = apiHeaders(api, token);
+  const token = await apiToken(api, keys), companies = await apiCompanies(api, token), H = apiHeaders(api, token, keys);
   const span = (num(api.maxDays) || 3650) * 86400, limit = num(api.pageSize) || 0, all = {}, list = [];
   const fill = (t, v) => String(t || "").replace(/\{(\w+)\}/g, (m, k) => k in v ? (typeof v[k] === "object" ? JSON.stringify(v[k]) : v[k]) : m);
   for(let a = fromTs; a <= toTs; a += span){
     const b = Math.min(toTs, a + span - 1);
+    let cursor = "";
     for(let pg = 0; pg < 200; pg++){
-      const v = {fromTs: a, toTs: b, from: iso(new Date(a * 1000)), to: iso(new Date(b * 1000)), offset: pg * (limit || 0), page: pg + (num(api.pageStart) || 0), limit: limit || 1000, companyIds: companies};
+      const v = {fromTs: a, toTs: b, from: iso(new Date(a * 1000)), to: iso(new Date(b * 1000)), fromIso: new Date(a * 1000).toISOString(), toIso: new Date(b * 1000).toISOString(), offset: pg * (limit || 0), page: pg + (num(api.pageStart) || 0), limit: limit || 1000, companyIds: companies, parkId: keys.parkId || "", cursor};
       const opt = {method: api.method || "GET", headers: {...H}};
-      if(opt.method === "POST"){ opt.headers["Content-Type"] = "application/json"; opt.body = fill(api.body, v); }
-      const j = await apiFetch(fill(api.tripsUrl, v), opt);
+      if(opt.method === "POST"){ opt.headers["Content-Type"] = "application/json"; opt.body = fill(api.body, v);
+        if(api.cursorPath && cursor){ const o = JSON.parse(opt.body); o[api.cursorPath] = cursor; opt.body = JSON.stringify(o); } }
+      const j = await apiCall(api, fill(api.tripsUrl, v), opt);
       if(j && typeof j.code === "number" && j.code !== 0) throw new Error(`${pName(pl)}: ${j.code} ${j.message || ""}`);
       const rows = pdig(j, api.listPath) || [];
       rows.forEach(o => { const id = ppick(o, (api.fields || {}).id); if(id != null && id !== ""){ all[id] = o; } else list.push(o); });
+      if(api.cursorPath){ cursor = pdig(j, api.cursorPath) || ""; if(!cursor || !rows.length) break; continue; }
       if(!limit || rows.length < limit) break;
     }
   }
@@ -240,6 +265,7 @@ function ppick(o, spec){
 const pkeep = (o, filter) => !filter || String(filter).split("&").every(c => { const [k, v] = c.split("="); return String(v || "").split("|").includes(String(pdig(o, k.trim()))); });
 function preadDate(v){
   if(typeof v === "number" || /^\d{10,13}$/.test(String(v || ""))){ const n = +v, d = new Date(n < 1e12 ? n * 1000 : n); return {date: iso(d), time: d.toTimeString().slice(0, 5)}; }
+  if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(String(v || ""))){ const d = new Date(v); if(!isNaN(d)) return {date: iso(d), time: d.toTimeString().slice(0, 5)}; }
   return UberParse.parseTripDate(v);
 }
 // platforms send a short name ("Ahsan Khalid"), the RTA record has the full one ("Ahsan Khalid Muhammad Khalid"):
@@ -321,7 +347,9 @@ document.addEventListener("click", async ev => {
     const days = days0, uber = !!(($("#syncUber") || {}).checked);
     const prev = S.syncReq || {}; if(await writeOk(S.db.doc("settings/syncRequest").set({...prev, status: "waiting", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", days, uber, only: t.dataset.syncnow || "", log: []}))) toast(prev.listener && (Date.now() - new Date(prev.listener).getTime()) < 180000 ? "Sync requested – the office PC is fetching the trips." : "Sync requested – it runs when the listener on the office PC is started."); return; }
   if(t.dataset.apitest){ const pl = t.dataset.apitest; t.disabled = true; t.textContent = "Testing…";
-    try{ const api = (S.platforms[pl] || {}).api || {}; if(!api.tokenUrl) throw new Error('click "Fill in the API settings" first'); const keys = await loadApiKeys(pl), tok = await apiToken(api, keys), c = await apiCompanies(api, tok);
+    try{ const api = (S.platforms[pl] || {}).api || {};
+      if(api.authType === "yango"){ const now = Math.floor(Date.now() / 1000), x = await directOrders(pl, now - 86400, now); toast(`Connected to ${pName(pl)} – ${x.orders.length} completed order(s) in the last 24 hours.`); render(); return; }
+      if(!api.tokenUrl) throw new Error('click "Fill in the API settings" first'); const keys = await loadApiKeys(pl), tok = await apiToken(api, keys), c = await apiCompanies(api, tok);
       toast(`Connected to ${pName(pl)} – ${c.length ? c.length + " company account(s): " + c.join(", ") : "token OK"}.`); }catch(e){ toast("Connection failed – " + e.message); }
     render(); return; }
   if(t.dataset.apikeysdel){ const pl = t.dataset.apikeysdel; if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
@@ -338,9 +366,12 @@ document.addEventListener("submit", async ev => {
   const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv" && f.id !== "fApi" && f.id !== "fApiKeys") return; ev.preventDefault(); if(!S.db) return;
   if(f.id === "fApiKeys"){ const pl = f.dataset.pl, d = Object.fromEntries(new FormData(f).entries()), old = S.apiKeys[pl] || {}, p = S.platforms[pl]; if(!p) return;
     const rec = {clientId: d.clientId.trim(), clientSecret: d.clientSecret.trim() || old.clientSecret || "", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || ""};
-    if(!rec.clientId || !rec.clientSecret){ toast("Enter the client ID and the client secret."); return; }
+    if(d.parkId != null) rec.parkId = d.parkId.trim();
+    if(!rec.clientId || !rec.clientSecret){ toast(d.parkId != null ? "Enter the CLID and the API key." : "Enter the client ID and the client secret."); return; }
+    if(d.parkId != null && !rec.parkId){ toast("Enter the Fleet ID."); return; }
+    if(d.parkId != null && !(d.relayUrl || "").trim()){ toast("Enter the relay URL – Yango does not answer web pages directly."); return; }
     if(!await writeOk(S.db.doc("secrets/" + pl).set(rec))) return; S.apiKeys[pl] = rec;
-    const {id, ...b} = p, pr = PLT_PRESETS[pl]; await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...((pr && !(b.api || {}).tokenUrl) ? pr.api : {}), ...(b.api || {}), direct: true, relayUrl: (d.relayUrl || "").trim()}}));
+    const {id, ...b} = p, pr = PLT_PRESETS[pl]; await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...((pr && !(b.api || {}).tripsUrl) ? pr.api : {}), ...(b.api || {}), direct: true, relayUrl: (d.relayUrl || "").trim()}}));
     toast(`${pName(pl)} API keys saved – click "Test connection", then "Sync now".`); render(); return; }
   if(f.id === "fApi"){ const d = Object.fromEntries(new FormData(f).entries()), p = S.platforms[f.dataset.pl]; if(!p) return; const {id, ...b} = p, fields = {};
     Object.keys(d).filter(k => k.startsWith("f_")).forEach(k => { if(d[k].trim()) fields[k.slice(2)] = d[k].trim(); delete d[k]; });
