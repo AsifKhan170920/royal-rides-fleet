@@ -84,7 +84,7 @@ function pltPayoutsTab(pl){
       <div class="f"><label for="pm_d">Received in the bank on</label><input id="pm_d" name="bankDate" type="date" required value="${esc(m.bankDate || p.date)}"></div><div class="f"><label for="pm_a">Amount received</label><input id="pm_a" name="bankAmount" type="number" step="0.01" required value="${esc(m.bankAmount ?? p.amount)}"></div>
       <div class="f"><label for="pm_ac">Bank account</label><select id="pm_ac" name="account">${opts(acctOpts(["bank"]), m.account || payAcct(pl))}</select></div><div class="f"><label for="pm_r">Bank reference</label><input id="pm_r" name="ref" value="${esc(m.ref || "")}"></div>
       <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save match</button><button class="btn ghost" type="button" data-pomatch="">Cancel</button>${m.bankDate ? `<button class="btn danger" type="button" data-pounmatch="${esc(p.id)}">Remove match</button>` : ""}</div></form>`; })() : "";
-  return `<div class="banner ${on ? "info" : ""}">${on ? `Payouts are reconciled with the bank: a payout waits in <b>1158 Platform payouts in transit</b> until you match it with the bank credit. In transit now: <b>AED ${fmt(sum(allOpen, p => p.amount))}</b> (${allOpen.length} payout${allOpen.length === 1 ? "" : "s"}).` : `Payouts are taken as received in the bank on their date. Turn on reconciliation to match each payout with the bank statement – unmatched payouts then wait in "payouts in transit".`}
+  return poGetBox(pl) + `<div class="banner ${on ? "info" : ""}">${on ? `Payouts are reconciled with the bank: a payout waits in <b>1158 Platform payouts in transit</b> until you match it with the bank credit. In transit now: <b>AED ${fmt(sum(allOpen, p => p.amount))}</b> (${allOpen.length} payout${allOpen.length === 1 ? "" : "s"}).` : `Payouts are taken as received in the bank on their date. Turn on reconciliation to match each payout with the bank statement – unmatched payouts then wait in "payouts in transit".`}
     <div class="row" style="margin-top:6px"><button class="btn sm ${on ? "" : "primary"}" data-poconfirm="${esc(pl)}">${on ? "Turn reconciliation off" : "Reconcile payouts with the bank"}</button></div></div>
   ${form}
   <div class="tbl"><table><thead><tr><th>Payout date</th><th class="num">Payout (statement)</th><th>Received in bank</th><th class="num">Amount received</th><th class="num">Difference</th><th>Bank</th><th>Status</th><th></th></tr></thead><tbody>
@@ -93,6 +93,46 @@ function pltPayoutsTab(pl){
       <td>${ok ? (diff ? '<span class="pill warn">Matched – difference</span>' : '<span class="pill good">Matched</span>') : on ? '<span class="pill bad">In transit</span>' : '<span class="pill">Assumed received</span>'}</td><td>${on ? `<button class="btn sm ${ok ? "" : "primary"}" data-pomatch="${esc(p.id)}" data-pl="${esc(pl)}">${ok ? "Edit" : "Match"}</button>` : ""}</td></tr>`; }).join("") || `<tr><td colspan="8" class="muted">No payouts in the trip data for this period.</td></tr>`}
   </tbody><tfoot><tr><td>${P.length} payout(s)</td><td class="num">${fmt(sum(P, p => p.amount))}</td><td></td><td class="num">${fmt(sum(matched, p => num(p.m.bankAmount)))}</td><td class="num">${fmt(sum(matched, p => num(p.m.bankAmount) - p.amount))}</td><td colspan="3">${on ? `Not matched: ${open.length} · AED ${fmt(sum(open, p => p.amount))}` : ""}</td></tr></tfoot></table></div>
   <p class="small muted" style="margin-top:6px">Payouts come from the "paid to bank" rows of ${esc(pName(pl))}'s statement in the trip data. A payout entered by hand (Purchases & expenses → Platform payout received) is a bank receipt already and is in the Ledger.</p>`;
+}
+
+/* ---------- getting the payouts: Uber's Payments file has them; Bolt / Yango give no payouts in their API,
+   so their payout report (CSV / Excel from the fleet portal) is imported here, or a payout is added by hand.
+   Each payout is saved as a "paid to bank" row of the trip data (po), like Uber's, so the ledger and the
+   reconciliation treat all platforms the same; the id (platform + reference / date + amount) stops duplicates. */
+S.poImp = S.poImp || null; S.poAdd = S.poAdd || null;
+function poGetBox(pl){
+  const I = S.poImp && S.poImp.pl === pl ? S.poImp : null, A = S.poAdd === pl;
+  const src = pl === "uber" ? `<b>Uber</b> sends its payouts in the <b>Payments</b> file (rows "so.payout") – import it on the <b>Import trip data</b> tab and the payouts appear here.`
+    : `<b>${esc(pName(pl))}</b>'s API gives the trips but not the payouts to the company – download the payouts / balance report from the ${esc(pName(pl))} fleet portal (CSV or Excel) and drop it here, or add a payout by hand.`;
+  const prev = I ? `<div style="margin-top:8px"><b>${esc(I.file)}</b> – ${I.rows.length} payout(s), AED ${fmt(sum(I.rows, r => r.amount))}${I.skipped ? ` · ${I.skipped} row(s) without a date or amount skipped` : ""}
+      <div class="small muted">Columns used: date = <b>${esc(I.cols.date || "–")}</b>, amount = <b>${esc(I.cols.amount || "–")}</b>, reference = <b>${esc(I.cols.ref || "–")}</b></div>
+      <div class="tbl" style="max-height:220px;overflow:auto;margin-top:6px"><table><thead><tr><th>Date</th><th class="num">Amount</th><th>Reference</th></tr></thead><tbody>${I.rows.slice(0, 50).map(r => `<tr><td>${esc(dmyS(r.date))}</td><td class="num">${fmt(r.amount)}</td><td class="small">${esc(r.ref)}</td></tr>`).join("")}</tbody></table></div>
+      <div class="row" style="margin-top:6px"><button class="btn primary" data-poimpgo="${esc(pl)}" ${S.canWrite && I.rows.length ? "" : "disabled"}>Import ${I.rows.length} payout(s)</button><button class="btn ghost" data-poimpcancel="1">Cancel</button></div></div>` : "";
+  const add = A ? `<form class="form" id="fPoAdd" data-pl="${esc(pl)}" style="margin-top:8px"><div class="f"><label for="pa_d">Payout date</label><input id="pa_d" name="date" type="date" required value="${esc(iso(new Date()))}"></div>
+      <div class="f"><label for="pa_a">Amount paid to the bank</label><input id="pa_a" name="amount" type="number" step="0.01" min="0.01" required></div><div class="f"><label for="pa_r">Reference</label><input id="pa_r" name="ref" placeholder="payout / transfer id"></div>
+      <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save payout</button><button class="btn ghost" type="button" data-poadd="">Cancel</button></div></form>` : "";
+  return `<div class="section" style="padding:10px 14px"><div class="small">${src}</div>
+    ${pl === "uber" ? "" : `<div class="row" style="margin-top:8px;gap:6px"><label class="btn" for="poFile">Import payouts file</label><input type="file" id="poFile" data-pl="${esc(pl)}" accept=".csv,.xlsx,.xls" hidden><button class="btn" data-poadd="${esc(pl)}">Add payout</button></div>`}${prev}${add}</div>`;
+}
+async function poReadFile(file, pl){
+  const wb = /\.csv$/i.test(file.name) ? XLSX.read(await file.text(), {type: "string", raw: true}) : XLSX.read(await file.arrayBuffer(), {type: "array", cellDates: true});
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval: "", raw: false, dateNF: "yyyy-mm-dd hh:mm:ss"}), H = Object.keys(rows[0] || {});
+  const find = (...res) => { for(const re of res){ const h = H.find(x => re.test(String(x).toLowerCase())); if(h) return h; } return ""; };
+  const cols = {date: find(/payout date|transfer date|paid (on|date)/, /^date$/, /date/, /time/), amount: find(/payout amount|amount paid|paid amount|transfer amount/, /^amount/, /amount|payout|total|sum/), ref: find(/payout id|transfer id|reference|^ref/, /transaction|id$/)};
+  let skipped = 0; const out = [];
+  rows.forEach(r => { const dt = preadDate(r[cols.date]), a = Math.abs(num(String(r[cols.amount] || "").replace(/[^0-9.\-]/g, "")));
+    if(!dt || !a){ skipped++; return; } out.push({date: dt.date, amount: r2(a), ref: String(r[cols.ref] || "").trim()}); });
+  S.poImp = {pl, file: file.name, cols, rows: out, skipped}; render();
+}
+async function poSave(pl, list, file){
+  const byDay = {}; list.forEach(p => (byDay[p.date] ||= []).push(p)); let added = 0, dup = 0;
+  for(const [day, L] of Object.entries(byDay)){
+    const ref = S.db.doc("trips/" + day), snap = await ref.get(), d = snap.exists ? snap.data() : {date: day, rows: {}}, rows = {...(d.rows || {})};
+    for(const p of L){ const id = "po:" + pl + ":" + norm(p.ref || (day + "_" + p.amount)).slice(0, 60);
+      if(rows[id]){ dup++; continue; } rows[id] = {tr: "", d: day, t: "", dr: "", p: "", f: 0, sf: 0, tx: 0, tp: 0, rf: 0, c: 0, oe: 0, po: p.amount, km: 0, pl, ref: p.ref || "", src: file || "manual"}; added++; }
+    if(!await writeOk(S.db.doc("trips/" + day).set({...d, date: day, rows}))) return null;
+  }
+  return {added, dup};
 }
 
 /* ---------- fee invoices ---------- */
@@ -337,6 +377,10 @@ function platformDetail(pl){
 document.addEventListener("click", async ev => {
   const t = ev.target.closest("button"); if(!t) return;
   if(t.dataset.pltview != null){ S.pltView = t.dataset.pltview; S.edit = null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.poadd != null){ S.poAdd = t.dataset.poadd || null; render(); return; }
+  if(t.dataset.poimpcancel){ S.poImp = null; render(); return; }
+  if(t.dataset.poimpgo){ const I = S.poImp; if(!I) return; t.disabled = true; t.textContent = "Importing…"; const r = await poSave(I.pl, I.rows, I.file);
+    if(r){ S.poImp = null; await loadPeriod(); S.ledger = null; toast(`${r.added} payout(s) imported, ${r.dup} already there.`); } render(); return; }
   if(t.dataset.pltimport){ S.view = "platforms"; S.pltView = t.dataset.pltimport; S.pltTab = "import"; S.edit = null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.plttab){ S.pltTab = t.dataset.plttab; S.poMatch = null; S.feeEdit = null; render(); return; }
   if(t.dataset.poconfirm){ const p = S.platforms[t.dataset.poconfirm]; if(!p){ toast("Add the platform on Platforms & contracts first."); return; } const {id, ...b} = p;
@@ -365,9 +409,12 @@ document.addEventListener("click", async ev => {
   if(t.dataset.feeedit != null){ S.feeEdit = t.dataset.feeedit ? {pl: t.dataset.pl || S.pltView, id: t.dataset.feeedit === "new" ? "" : t.dataset.feeedit} : null; render(); return; }
   if(t.dataset.feedel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; } if(await writeOk(S.db.doc("feeinv/" + t.dataset.feedel).delete())){ S.feeEdit = null; toast("Fee invoice deleted."); render(); } return; }
 });
-document.addEventListener("change", ev => { if(ev.target.id === "pltGrp"){ S.pltGroup = ev.target.value; render(); } });
+document.addEventListener("change", ev => { if(ev.target.id === "pltGrp"){ S.pltGroup = ev.target.value; render(); }
+  if(ev.target.id === "poFile" && ev.target.files[0]){ poReadFile(ev.target.files[0], ev.target.dataset.pl).catch(e => toast("Could not read the file – " + e.message)); } });
 document.addEventListener("submit", async ev => {
-  const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv" && f.id !== "fApi" && f.id !== "fApiKeys") return; ev.preventDefault(); if(!S.db) return;
+  const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv" && f.id !== "fApi" && f.id !== "fApiKeys" && f.id !== "fPoAdd") return; ev.preventDefault(); if(!S.db) return;
+  if(f.id === "fPoAdd"){ const d = Object.fromEntries(new FormData(f).entries()), r = await poSave(f.dataset.pl, [{date: d.date, amount: r2(num(d.amount)), ref: d.ref.trim()}], "manual");
+    if(r){ S.poAdd = null; await loadPeriod(); S.ledger = null; toast(r.added ? "Payout saved." : "This payout is there already."); render(); } return; }
   if(f.id === "fApiKeys"){ const pl = f.dataset.pl, d = Object.fromEntries(new FormData(f).entries()), old = S.apiKeys[pl] || {}, p = S.platforms[pl]; if(!p) return;
     const rec = {clientId: d.clientId.trim(), clientSecret: d.clientSecret.trim() || old.clientSecret || "", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || ""};
     if(d.parkId != null) rec.parkId = d.parkId.trim();
