@@ -5,7 +5,7 @@
      (the trips were done in another car, or the plate on the trips is wrong).
    The tracker has no open API (its data pages work only inside its own login), so its reports are imported. */
 const GPS_PORTAL = "https://sharyoiot.in/VTSV15/Reports?pUserId=1260&pModuleId=30&pListSP=rptActivity&pLinkText=Activity";
-const GPS_TABS = {pax: "Passenger audit", data: "GPS data", suspect: "Suspicious trips", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
+const GPS_TABS = {pax: "Passenger audit", data: "Passenger data", import: "Import"};
 S.susLevel = S.susLevel ?? "high"; S.susStatus = S.susStatus || ""; S.susDrv = S.susDrv || ""; S.gpsReview = S.gpsReview || {};
 const SUS_STATUS = {open: "Open", discussed: "Discussed with driver", explained: "Explained – OK", confirmed: "Confirmed – private ride"};
 S.gpsTab = S.gpsTab || "pax"; S.gpsTerm = S.gpsTerm || ""; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
@@ -116,11 +116,10 @@ function gpsAudit(){
 
 /* ---------- views ---------- */
 function vGps(){
-  const tab = GPS_TABS[S.gpsTab] ? S.gpsTab : "audit";
-  const head = `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>GPS tracking</h2><p class="sub">The tracker's movements of each car checked against the platform trips – km driven off the platforms, cars moving without trips, and trips the tracker does not confirm.</p></div>
+  const tab = GPS_TABS[S.gpsTab] ? S.gpsTab : "pax";
+  const head = `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>GPS tracking</h2><p class="sub">The tracker's seat sensor (Trip Passenger report) checked against the platform trips – every journey with a passenger on board and no Uber / Bolt / Yango trip going on.</p></div>
     <div class="row"><a class="btn" href="${GPS_PORTAL}" target="_blank" rel="noopener">Open the tracking portal</a></div></div>${tabBtns("data-gpstab", tab, GPS_TABS)}</div>`;
-  if(tab === "import") return head + gpsImportView();
-  if(tab === "pax") return head + (window.PAX ? PAX.view() : "");
+  return head + (window.PAX ? PAX.view(tab === "pax" ? "audit" : tab) : "");   // the old km-based tabs (Activity report) are gone
   if(!S.db) return head;
   if(!S.gps || S.gps.key !== S.from + "|" + S.to){ if(!S.gps || !S.gps.loading) gpsLoad(); return head + `<div class="section"><p class="sub">Loading the GPS data…</p></div>`; }
   if(S.gps.loading) return head + `<div class="section"><p class="sub">Loading the GPS data…</p></div>`;

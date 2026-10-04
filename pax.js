@@ -76,20 +76,22 @@ const paxDur = m => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
 const paxLevel = l => `<span class="pill ${l === "high" ? "bad" : l === "medium" ? "warn" : ""}">${l === "high" ? "High" : l === "medium" ? "Medium" : "Short"}</span>`;
 
 /* ---------- the page on GPS tracking ---------- */
-function paxView(){
+function paxView(mode){
   const I = S.paxImp;
   const imp = `<div class="section"><div class="head"><div><h3 style="margin:0">Import the Trip Passenger report</h3><p class="sub">Tracking portal → Vehicle Reports → General → <b>Trip Passenger Excel Download</b> → From / To date, All Vehicles → Generate → download, then drop the file here. Journeys already imported are skipped.</p></div></div>
     <label class="drop" for="paxFile"><b>Drop the Trip Passenger report here (.xls / .xlsx / .csv)</b><br>or click to choose<input type="file" id="paxFile" accept=".xls,.xlsx,.csv" hidden></label>
     ${I ? `<div style="margin-top:10px"><b>${esc(I.file)}</b> – ${I.rows.length} passenger journeys · ${[...new Set(I.rows.map(r => r.d))].length} day(s) · ${fmt(sum(I.rows, r => r.km))} km${Object.entries(I.cars).some(([, v]) => !v) ? ` · <b class="neg">not in Vehicles: ${esc(Object.entries(I.cars).filter(([, v]) => !v).map(([p]) => p).join(", "))}</b>` : ""}
       <div class="row" style="margin-top:6px"><button class="btn primary" data-paxgo="1" ${S.canWrite ? "" : "disabled"}>Import ${I.rows.length} journeys</button><button class="btn ghost" data-paxcancel="1">Cancel</button></div></div>` : ""}</div>`;
-  if(!S.db) return imp;
-  if(!paxReady()){ if(!(S.pax && S.pax.loading)) paxLoad(); return imp + '<div class="section"><p class="sub">Loading the passenger journeys…</p></div>'; }
+  if(mode === "import") return imp + paxOldBox();
+  if(!S.db) return "";
+  if(!paxReady()){ if(!(S.pax && S.pax.loading)) paxLoad(); return '<div class="section"><p class="sub">Loading the passenger journeys…</p></div>'; }
   const all = paxAudit();
-  if(!all.length) return imp + `<div class="section"><div class="empty"><b>No passenger journeys for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</b>Import the Trip Passenger report above, or change the period.</div></div>`;
+  if(!all.length) return `<div class="section"><div class="empty"><b>No passenger journeys for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</b>Import the Trip Passenger report on the Import tab, or change the period.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn primary" data-gpstab="import">Import</button></div></div></div>`;
+  if(mode === "data") return paxDataView(all);
   const off = all.filter(x => !x.match), sus = off.filter(x => x.level !== "low");
   const L = all.filter(x => (!S.paxOnly || (!x.match && x.level !== "low")) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar)), pg = paged("pax", L);
   const drvs = [...new Set(all.map(x => x.dr).filter(Boolean))].sort((a, b) => dName(a).localeCompare(dName(b)));
-  return imp + `<div class="section"><div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Passenger journeys</div><div class="v">${all.length}</div><div class="n">${fmt(sum(all, x => x.km))} km</div></div>
+  return `<div class="section"><div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Passenger journeys</div><div class="v">${all.length}</div><div class="n">${fmt(sum(all, x => x.km))} km</div></div>
       <div class="kpi"><div class="l">On a platform trip</div><div class="v">${all.length - off.length}</div><div class="n">${Math.round(100 * (all.length - off.length) / all.length)}%</div></div>
       <div class="kpi"><div class="l">No platform trip</div><div class="v neg">${sus.length}</div><div class="n">${fmt(sum(sus, x => x.km))} km · ${sus.filter(x => x.level === "high").length} high</div></div>
       <div class="kpi"><div class="l">Confirmed private rides</div><div class="v ${sus.some(x => x.status === "confirmed") ? "neg" : ""}">${sus.filter(x => x.status === "confirmed").length}</div><div class="n">${sus.filter(x => x.status === "open").length} still open</div></div></div>
@@ -102,7 +104,37 @@ function paxView(){
       <td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}${x.how && !x.match ? `<div class="muted">${esc(x.how)}</div>` : ""}</td><td>${x.match ? '<span class="pill good">OK</span>' : paxLevel(x.level)}</td>
       <td>${x.match ? "" : `<select data-paxst="${esc(x.rid)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select>`}</td><td>${x.match ? "" : `<input data-paxnote="${esc(x.rid)}" value="${esc(x.note)}" placeholder="what the driver said" style="min-width:150px" ${S.canWrite ? "" : "disabled"}>`}</td></tr>`).join("") || '<tr><td colspan="11" class="muted">Nothing with these filters.</td></tr>'}
     </tbody><tfoot><tr><td colspan="4">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="6"></td></tr></tfoot></table></div>${pg.bar}
-    <p class="small muted" style="margin-top:6px">A passenger journey is on a platform trip when one of the car's Uber / Bolt / Yango trips runs at the same time (${PAX_TOL} min either side). One without a trip goes to the driver of his trips around it (else the nearest trip within the minutes set on GPS data, else the car's assigned driver). High: 3 km or more; Medium: 1–3 km; Short (under 1 km) is usually the sensor (a bag on the seat) and is left out of the reports.</p></div>`;
+    ${paxRangeForm()}
+    <p class="small muted" style="margin-top:6px">A passenger journey is on a platform trip when one of the car's Uber / Bolt / Yango trips runs at the same time (${PAX_TOL} min either side). One without a trip goes to the driver of his trips around it (else the nearest trip within the minutes set above, else the car's assigned driver). High: 3 km or more; Medium: 1–3 km; Short (under 1 km) is usually the sensor (a bag on the seat) and is left out of the reports.</p></div>`;
+}
+// the minutes for giving a journey without a trip to a driver (saved with the other tracker ranges)
+function paxRangeForm(){ const R = gpsRange();
+  return `<form class="form" id="fGpsRange" style="margin-top:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))"><input type="hidden" name="gpsPickupMin" value="${R.pickMin}"><input type="hidden" name="gpsPickupKm" value="${R.pickKm}"><input type="hidden" name="gpsParkKm" value="${R.parkKm}">
+    <div class="f"><label for="gra">Journey without a trip – driver of the nearest trip within (min)</label><input id="gra" name="gpsAttrMin" type="number" step="5" min="0" value="${R.attrMin}"></div><div class="f" style="align-self:end"><button class="btn" type="submit" ${S.canWrite ? "" : "disabled"}>Save</button></div></form>`; }
+/* ---------- Passenger data: every journey of the report as imported, with the platform trip it sits on ---------- */
+function paxDataView(all){
+  const L = all.filter(x => (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar)).sort((a, b) => a.d.localeCompare(b.d) || String(a.s).localeCompare(String(b.s)) || String(a.p).localeCompare(String(b.p))), pg = paged("paxdata", L);
+  const drvs = [...new Set(all.map(x => x.dr).filter(Boolean))].sort((a, b) => dName(a).localeCompare(dName(b))), days = [...new Set(all.map(x => x.d))].sort(), st = L.indexOf(pg.rows[0]);
+  return `<div class="section"><p class="sub">Every passenger journey of the Trip Passenger report in ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} (data from ${esc(dmyS(days[0]))} to ${esc(dmyS(days[days.length - 1]))}), with the platform trip it matches.</p>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px;gap:6px"><div class="row" style="gap:6px"><select id="paxDrv" aria-label="Driver">${opts(Object.fromEntries(drvs.map(d => [d, dName(d)])), S.paxDrv, "All drivers")}</select><select id="paxCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.paxCar, "All cars")}</select></div>${dlBtn("paxdata")}</div>
+    <div class="tbl"><table><thead><tr><th class="num">S.No</th><th>Date</th><th>Seat taken</th><th>Seat free</th><th class="num">Min</th><th>Car</th><th class="num">Seats</th><th class="num">km</th><th>From</th><th>To</th><th>Platform trip</th><th>Driver</th><th></th></tr></thead><tbody>
+    ${pg.rows.map((x, i) => `<tr><td class="num">${st + i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}</td><td>${esc(x.e)}</td><td class="num">${x.dur}</td><td>${esc(vName(x.v) || x.p)}</td><td class="num">${x.seats}</td><td class="num">${fmt(x.km)}</td>
+      <td class="small" style="white-space:normal;min-width:140px">${esc(x.from)}</td><td class="small" style="white-space:normal;min-width:140px">${esc(x.to)}</td><td class="small">${x.match ? `<button class="btn sm ghost" data-gototrip="${x.no}" style="padding:1px 6px">Trip ${x.no}</button>` : '<b class="neg">No trip</b>'}</td>
+      <td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}</td><td>${S.canWrite ? `<button class="btn sm ghost" data-paxdel="${esc(x.d + "|" + x.id)}" aria-label="Delete">✕</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="13" class="muted">Nothing with these filters.</td></tr>'}
+    </tbody><tfoot><tr><td colspan="7">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="5"></td></tr></tfoot></table></div>${pg.bar}</div>`;
+}
+DL.paxdata = () => { const L = paxAudit().filter(x => (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar));
+  return [`passenger_data_${S.from}_${S.to}.csv`, [["Date", "Seat taken", "Seat free", "Minutes", "Car", "Seats", "km", "From", "To", "Platform trip", "Driver"], ...L.map(x => [x.d, x.s, x.e, x.dur, vName(x.v) || x.p, x.seats, x.km, x.from, x.to, x.match ? "Trip " + x.no : "No trip", x.dr ? dName(x.dr) : ""])]]; };
+async function paxDel(key){ const [day, id] = key.split("|"), ref = S.db.doc("gpspax/" + day), snap = await ref.get(); if(!snap.exists) return;
+  const rows = {...(snap.data().rows || {})}; delete rows[id]; if(!await writeOk(ref.set({date: day, rows}))) return;
+  if(S.pax && S.pax.rows) S.pax.rows = S.pax.rows.filter(x => !(x.d === day && x.id === id)); toast("Journey deleted."); render(); }
+/* ---------- the old km-based GPS data (Activity report) – no longer used, removed on request ---------- */
+function paxOldBox(){
+  if(!S.db || !S.canWrite) return "";
+  if(S.gpsOld == null){ S.gpsOld = "…"; Promise.all([S.db.collection("gps").get(), S.db.collection("gpsreview").get()]).then(([a, b]) => { S.gpsOld = {gps: a.docs.map(d => d.id), rv: b.docs.map(d => d.id).filter(id => !/^pax_/.test(id))}; render(); }).catch(() => { S.gpsOld = {gps: [], rv: []}; render(); }); }
+  const O = S.gpsOld; if(typeof O !== "object" || !(O.gps.length + O.rv.length)) return "";
+  return `<div class="section"><h3 style="margin-top:0">Old GPS data (Activity report)</h3><p class="sub">${O.gps.length} day(s) of the old km-based GPS data and ${O.rv.length} review note(s) are still stored. The audit now uses only the Trip Passenger report – delete them to clear the old data (the passenger journeys and their notes stay).</p>
+    <button class="btn danger" data-gpsolddel="1">Delete the old GPS data</button></div>`;
 }
 DL.pax = () => { const L = paxAudit().filter(x => (!S.paxOnly || (!x.match && x.level !== "low")) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar));
   return [`passenger_audit_${S.from}_${S.to}.csv`, [["Date", "Seat taken", "Seat free", "Minutes", "Car", "Seats", "km", "From", "To", "Platform trip", "Driver", "Driver found by", "Level", "Status", "Note"], ...L.map(x => [x.d, x.s, x.e, x.dur, vName(x.v) || x.p, x.seats, x.km, x.from, x.to, x.match ? "Trip " + x.no : "No platform trip", x.dr ? dName(x.dr) : "unknown", x.how, x.match ? "" : x.level, x.match ? "" : SUS_STATUS[x.status], x.note])]]; };
@@ -180,6 +212,12 @@ document.addEventListener("click", async ev => {
   const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
   if(t.dataset.paxgo){ t.disabled = true; t.textContent = "Importing…"; await paxSave(); return; }
   if(t.dataset.paxcancel){ S.paxImp = null; render(); return; }
+  if(t.dataset.paxdel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Sure?"; return; } t.disabled = true; await paxDel(t.dataset.paxdel); return; }
+  if(t.dataset.gpsolddel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again – this cannot be undone"; return; }
+    t.disabled = true; t.textContent = "Deleting…"; const O = S.gpsOld; let n = 0;
+    for(const id of O.gps){ if(await writeOk(S.db.doc("gps/" + id).delete())) n++; }
+    for(const id of O.rv){ if(await writeOk(S.db.doc("gpsreview/" + id).delete())) n++; if(S.gpsReview) delete S.gpsReview[id]; }
+    S.gpsOld = null; S.gps = null; toast(n + " old GPS record(s) deleted."); render(); return; }
   if(t.dataset.paxpdf != null){ if(!t.dataset.paxpdf){ toast("Choose a driver first."); return; } t.disabled = true; await paxPdf(t.dataset.paxpdf); t.disabled = false; return; }
 });
 document.addEventListener("change", ev => {
