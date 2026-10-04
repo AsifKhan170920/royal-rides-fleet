@@ -129,7 +129,7 @@ document.addEventListener("submit", async ev => { if(ev.target.id !== "fPaxRange
   if(await writeOk(S.db.doc("settings/main").set({...S.settings, gpsParkKm: num(d.gpsParkKm), paxNearMin: num(d.paxNearMin), paxNearKm: num(d.paxNearKm), gpsAttrMin: num(d.gpsAttrMin)}))){ toast("Ranges saved."); setTimeout(render, 300); } });
 /* ---------- Passenger data: every journey of the report as imported, with the platform trip it sits on ---------- */
 function paxDataView(all){
-  const L = all.filter(x => (!S.paxTermF || x.term === S.paxTermF) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar)).sort((a, b) => a.d.localeCompare(b.d) || String(a.s).localeCompare(String(b.s)) || String(a.p).localeCompare(String(b.p))), pg = paged("paxdata", L);
+  const L = all.filter(x => (!S.paxTermF || x.term === S.paxTermF) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar)).sort((a, b) => b.d.localeCompare(a.d) || String(b.s).localeCompare(String(a.s)) || String(a.p).localeCompare(String(b.p))), pg = paged("paxdata", L);   // latest first
   const drvs = [...new Set(all.map(x => x.dr).filter(Boolean))].sort((a, b) => dName(a).localeCompare(dName(b))), days = [...new Set(all.map(x => x.d))].sort(), st = L.indexOf(pg.rows[0]);
   return `<div class="section"><p class="sub">Every passenger journey of the Trip Passenger report in ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))} (data from ${esc(dmyS(days[0]))} to ${esc(dmyS(days[days.length - 1]))}), with its term and the platform trip it belongs to.</p>
     <div class="kpis" style="margin-bottom:8px">${Object.entries(PAX_TERM).map(([k, l]) => { const c = all.filter(x => x.term === k); return `<div class="kpi"><div class="l">${l}</div><div class="v ${k === "none" && c.length ? "neg" : ""}">${c.length}</div><div class="n">${fmt(sum(c, x => x.km))} km</div></div>`; }).join("")}</div>
@@ -140,7 +140,7 @@ function paxDataView(all){
       <td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}</td><td>${S.canWrite ? `<button class="btn sm ghost" data-paxdel="${esc(x.d + "|" + x.id)}" aria-label="Delete">✕</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="14" class="muted">Nothing with these filters.</td></tr>'}
     </tbody><tfoot><tr><td colspan="7">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="6"></td></tr></tfoot></table></div>${pg.bar}</div>`;
 }
-DL.paxdata = () => { const L = paxAudit().filter(x => (!S.paxTermF || x.term === S.paxTermF) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar));
+DL.paxdata = () => { const L = paxAudit().filter(x => (!S.paxTermF || x.term === S.paxTermF) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar)).sort((a, b) => b.d.localeCompare(a.d) || String(b.s).localeCompare(String(a.s)));
   return [`passenger_data_${S.from}_${S.to}.csv`, [["Date", "Seat taken", "Seat free", "Minutes", "Car", "Seats", "km", "From", "To", "Term", "Trip No", "Driver"], ...L.map(x => [x.d, x.s, x.e, x.dur, vName(x.v) || x.p, x.seats, x.km, x.from, x.to, PAX_TERM[x.term] + (x.term === "none" ? " – " + x.level : ""), x.no, x.dr ? dName(x.dr) : ""])]]; };
 async function paxDel(key){ const [day, id] = key.split("|"), ref = S.db.doc("gpspax/" + day), snap = await ref.get(); if(!snap.exists) return;
   const rows = {...(snap.data().rows || {})}; delete rows[id]; if(!await writeOk(ref.set({date: day, rows}))) return;
