@@ -5,10 +5,10 @@
      (the trips were done in another car, or the plate on the trips is wrong).
    The tracker has no open API (its data pages work only inside its own login), so its reports are imported. */
 const GPS_PORTAL = "https://sharyoiot.in/VTSV15/Reports?pUserId=1260&pModuleId=30&pListSP=rptActivity&pLinkText=Activity";
-const GPS_TABS = {data: "GPS data", suspect: "Suspicious trips", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
+const GPS_TABS = {pax: "Passenger audit", data: "GPS data", suspect: "Suspicious trips", audit: "Audit by car", drivers: "Audit by driver", import: "Import"};
 S.susLevel = S.susLevel ?? "high"; S.susStatus = S.susStatus || ""; S.susDrv = S.susDrv || ""; S.gpsReview = S.gpsReview || {};
 const SUS_STATUS = {open: "Open", discussed: "Discussed with driver", explained: "Explained – OK", confirmed: "Confirmed – private ride"};
-S.gpsTab = S.gpsTab || "data"; S.gpsTerm = S.gpsTerm || ""; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
+S.gpsTab = S.gpsTab || "pax"; S.gpsTerm = S.gpsTerm || ""; S.gpsDay = S.gpsDay || ""; S.gpsOff = S.gpsOff || false; S.gps = S.gps || null; S.gpsImp = S.gpsImp || null; S.gpsFlag = S.gpsFlag ?? true; S.gpsCar = S.gpsCar || ""; S.gpsOpen = S.gpsOpen || "";
 /* What each stretch was, by ranges set on the GPS data tab (Settings keys gpsPickupMin / gpsPickupKm / gpsParkKm):
    Trip    – during a platform trip of the car (its start to its end, a few minutes either side)
    Pickup  – driving to the next trip: ends at most gpsPickupMin minutes before the trip starts and, with the other
@@ -120,6 +120,7 @@ function vGps(){
   const head = `<div class="section" style="padding-bottom:6px"><div class="head"><div><h2>GPS tracking</h2><p class="sub">The tracker's movements of each car checked against the platform trips – km driven off the platforms, cars moving without trips, and trips the tracker does not confirm.</p></div>
     <div class="row"><a class="btn" href="${GPS_PORTAL}" target="_blank" rel="noopener">Open the tracking portal</a></div></div>${tabBtns("data-gpstab", tab, GPS_TABS)}</div>`;
   if(tab === "import") return head + gpsImportView();
+  if(tab === "pax") return head + (window.PAX ? PAX.view() : "");
   if(!S.db) return head;
   if(!S.gps || S.gps.key !== S.from + "|" + S.to){ if(!S.gps || !S.gps.loading) gpsLoad(); return head + `<div class="section"><p class="sub">Loading the GPS data…</p></div>`; }
   if(S.gps.loading) return head + `<div class="section"><p class="sub">Loading the GPS data…</p></div>`;

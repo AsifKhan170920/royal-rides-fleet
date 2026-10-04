@@ -1,0 +1,195 @@
+/* Passenger audit – the tracker's seat sensor ("Trip Passenger" report): every journey with someone on a seat.
+   Each passenger journey is matched with the platform trips of the same car; a passenger journey with no Uber / Bolt /
+   Yango trip going on is the strongest sign of a ride taken off the apps. It is given to the driver of the trips
+   around it (or the car's assigned driver), can be marked Open / Discussed / Explained / Confirmed with a note, and is
+   printed with the driver's salary statement (a landscape page). This audit replaces the km-based GPS audit there. */
+S.pax = S.pax || null; S.paxImp = S.paxImp || null; S.paxOnly = S.paxOnly ?? true; S.paxDrv = S.paxDrv || ""; S.paxCar = S.paxCar || "";
+const PAX_TOL = 5;   // minutes either side when matching a passenger journey with a platform trip
+
+const paxWhen = v => { const s = String(v || "").trim();
+  if(/^\d{5}(\.\d+)?$/.test(s)){ const d = new Date(Math.round((+s - 25569) * 86400000)); return {d: d.toISOString().slice(0, 10), t: d.toISOString().slice(11, 16)}; }   // Excel serial (wall time)
+  const m = s.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})\D+(\d{1,2}):(\d{2})/); if(m) return {d: `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`, t: `${m[4].padStart(2, "0")}:${m[5]}`};
+  const n = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/); return n ? {d: `${n[1]}-${n[2]}-${n[3]}`, t: `${n[4].padStart(2, "0")}:${n[5]}`} : null; };
+const paxMin = t => { const m = String(t || "").match(/(\d{1,2}):(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; };
+const paxPlate = p => { const n = norm(p); return Object.values(S.vehicles).find(v => { const q = norm(v.plate); return q === n || q.replace(/\D/g, "") === n.replace(/\D/g, ""); }); };
+
+/* ---------- import ---------- */
+async function paxRead(file){
+  if(!window.XLSX){ toast("The Excel tool is still loading – try again in a moment."); return; }
+  const buf = await file.arrayBuffer(), head = new TextDecoder().decode(new Uint8Array(buf).slice(0, 400)).toLowerCase();
+  const wb = /<html|<table/.test(head) || /\.csv$/i.test(file.name) ? XLSX.read(new TextDecoder().decode(buf), {type: "string", raw: true}) : XLSX.read(buf, {type: "array", cellDates: false});
+  const out = []; let found = false;
+  for(const name of wb.SheetNames){
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], {header: 1, defval: "", raw: false}); let C = null;
+    aoa.forEach(r => { const L = r.map(c => String(c || "").toLowerCase().trim());
+      if(!C && L.some(c => /passenger/.test(c)) && L.some(c => /seat/.test(c))){ const col = re => L.findIndex(c => re.test(c)); C = {v: col(/vehicle/), s: col(/from date|start time|from/), e: col(/to date|end time|^to/), from: col(/start loc/), to: col(/end loc/), pax: col(/^passenger/), km: col(/distance/), seats: col(/seat/), drv: col(/driver/)}; found = true; return; }
+      if(!C) return; const plate = String(r[C.v] || "").trim(), s = paxWhen(r[C.s]), e = paxWhen(r[C.e]);
+      if(!plate || !s || !/^L?\s?\d/i.test(plate) || (C.pax >= 0 && /^no$/i.test(String(r[C.pax]).trim()))) return;
+      out.push({plate, d: s.d, s: s.t, e: e ? e.t : s.t, ed: e ? e.d : s.d, km: r2(num(String(r[C.km] || "").replace(/[^\d.]/g, ""))), seats: num(r[C.seats]) || 1,
+        from: String(r[C.from] || "").replace(/, *$/, "").slice(0, 90), to: String(r[C.to] || "").replace(/, *$/, "").slice(0, 90)}); });
+  }
+  if(!found){ toast("This is not the tracker's Trip Passenger report (Reports → Trip Passenger Excel Download)."); return; }
+  const cars = {}; out.forEach(r => { const v = paxPlate(r.plate); r.vid = v ? v.id : ""; cars[r.plate] = r.vid; });
+  S.paxImp = {file: file.name, rows: out, cars}; render();
+}
+async function paxSave(){
+  const I = S.paxImp; if(!I) return; const byDay = {}; I.rows.forEach(r => (byDay[r.d] ||= []).push(r)); let added = 0, dup = 0;
+  for(const [day, L] of Object.entries(byDay)){
+    const ref = S.db.doc("gpspax/" + day), snap = await ref.get(), rows = snap.exists ? {...(snap.data().rows || {})} : {};
+    for(const r of L){ const id = norm(r.plate + "_" + r.d + "_" + r.s).slice(0, 60); if(rows[id]){ dup++; continue; } rows[id] = {p: r.plate, v: r.vid, s: r.s, e: r.e, ed: r.ed, km: r.km, seats: r.seats, from: r.from, to: r.to}; added++; }
+    if(!await writeOk(ref.set({date: day, rows}))) return;
+  }
+  S.paxImp = null; S.pax = null; toast(`${added} passenger journey(s) imported, ${dup} already there.`); render();
+}
+
+/* ---------- data and matching ---------- */
+async function paxLoad(){
+  const key = S.from + "|" + S.to; S.pax = {key, loading: true};
+  try{ const snap = await S.db.collection("gpspax").where("date", ">=", S.from).where("date", "<=", S.to).get(), rows = [];
+    snap.docs.forEach(d => Object.entries((d.data() || {}).rows || {}).forEach(([id, r]) => rows.push({id, d: d.id, ...r, v: r.v || ((paxPlate(r.p) || {}).id || "")})));
+    try{ const rv = await S.db.collection("gpsreview").get(); S.gpsReview = S.gpsReview || {}; rv.docs.forEach(x => S.gpsReview[x.id] = x.data()); }catch(e){}
+    if(S.pax && S.pax.key === key) S.pax = {key, rows}; }
+  catch(e){ S.pax = {key, error: e.message}; }
+  render();
+}
+const paxReady = () => S.pax && S.pax.rows && S.pax.key === S.from + "|" + S.to;
+async function paxEnsure(){ if(!paxReady()) await paxLoad(); return paxReady(); }
+function paxAudit(){
+  if(!paxReady()) return [];
+  const R = typeof gpsRange === "function" ? gpsRange() : {attrMin: 180}, wins = {};
+  const seen = new Set(); (S.trips || []).filter(t => t.tr || t.f).forEach(t => { const v = vehicleForTrip(t), k = t.tr || t.id; if(!v || seen.has(k)) return; seen.add(k);
+    const a = paxMin(t.ts || t.t); if(a == null) return; let b = paxMin(t.te); if(b == null) b = a + Math.max(15, Math.round((t.km || 0) * 2)); if(b < a) b += 1440; (wins[v + "|" + t.d] ||= []).push({a, b, dr: t.dr, no: t.no || ""}); });
+  return S.pax.rows.map(x => { const a = paxMin(x.s), b0 = paxMin(x.e), b = b0 == null ? a : (b0 < a ? b0 + 1440 : b0), win = (wins[x.v + "|" + x.d] || []).sort((p, q) => p.a - q.a);
+    const w = win.find(w => Math.min(b, w.b + PAX_TOL) - Math.max(a, w.a - PAX_TOL) > 0), dur = b - a, id = "pax_" + x.id, rv = (S.gpsReview || {})[id] || {};
+    let dr = "", how = "", level = "";
+    if(w){ dr = w.dr; how = "his platform trip " + (w.no || ""); }
+    else { const who = typeof gpsWho === "function" ? gpsWho(x.v, x.d, {a, b}, win, R) : {dr: "", how: ""}; dr = who.dr; how = who.how; level = x.km >= 3 && dur >= 3 ? "high" : x.km >= 1 ? "medium" : "low"; }
+    return {...x, rid: id, a, b, dur, match: !!w, no: w ? w.no : "", dr: rv.dr || dr, how: rv.dr ? "set by hand" : how, level, status: rv.status || "open", note: rv.note || ""}; })
+    .sort((p, q) => q.d.localeCompare(p.d) || String(p.s).localeCompare(String(q.s)) || String(p.p).localeCompare(String(q.p)));
+}
+function paxDriver(id){
+  if(!paxReady()) return null; const all = paxAudit(), mine = all.filter(x => x.dr === id), on = mine.filter(x => x.match), off = mine.filter(x => !x.match), sus = off.filter(x => x.level !== "low"), c = st => sus.filter(x => x.status === st).length;
+  return {all: mine, on, off, sus, onKm: r2(sum(on, x => x.km)), offKm: r2(sum(sus, x => x.km)), high: sus.filter(x => x.level === "high").length, short: off.filter(x => x.level === "low").length,
+    explained: c("explained"), confirmed: c("confirmed"), open: c("open") + c("discussed"), cars: [...new Set(mine.map(x => x.v))], days: [...new Set(mine.map(x => x.d))].sort()};
+}
+const paxDur = m => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+const paxLevel = l => `<span class="pill ${l === "high" ? "bad" : l === "medium" ? "warn" : ""}">${l === "high" ? "High" : l === "medium" ? "Medium" : "Short"}</span>`;
+
+/* ---------- the page on GPS tracking ---------- */
+function paxView(){
+  const I = S.paxImp;
+  const imp = `<div class="section"><div class="head"><div><h3 style="margin:0">Import the Trip Passenger report</h3><p class="sub">Tracking portal → Vehicle Reports → General → <b>Trip Passenger Excel Download</b> → From / To date, All Vehicles → Generate → download, then drop the file here. Journeys already imported are skipped.</p></div></div>
+    <label class="drop" for="paxFile"><b>Drop the Trip Passenger report here (.xls / .xlsx / .csv)</b><br>or click to choose<input type="file" id="paxFile" accept=".xls,.xlsx,.csv" hidden></label>
+    ${I ? `<div style="margin-top:10px"><b>${esc(I.file)}</b> – ${I.rows.length} passenger journeys · ${[...new Set(I.rows.map(r => r.d))].length} day(s) · ${fmt(sum(I.rows, r => r.km))} km${Object.entries(I.cars).some(([, v]) => !v) ? ` · <b class="neg">not in Vehicles: ${esc(Object.entries(I.cars).filter(([, v]) => !v).map(([p]) => p).join(", "))}</b>` : ""}
+      <div class="row" style="margin-top:6px"><button class="btn primary" data-paxgo="1" ${S.canWrite ? "" : "disabled"}>Import ${I.rows.length} journeys</button><button class="btn ghost" data-paxcancel="1">Cancel</button></div></div>` : ""}</div>`;
+  if(!S.db) return imp;
+  if(!paxReady()){ if(!(S.pax && S.pax.loading)) paxLoad(); return imp + '<div class="section"><p class="sub">Loading the passenger journeys…</p></div>'; }
+  const all = paxAudit();
+  if(!all.length) return imp + `<div class="section"><div class="empty"><b>No passenger journeys for ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</b>Import the Trip Passenger report above, or change the period.</div></div>`;
+  const off = all.filter(x => !x.match), sus = off.filter(x => x.level !== "low");
+  const L = all.filter(x => (!S.paxOnly || (!x.match && x.level !== "low")) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar)), pg = paged("pax", L);
+  const drvs = [...new Set(all.map(x => x.dr).filter(Boolean))].sort((a, b) => dName(a).localeCompare(dName(b)));
+  return imp + `<div class="section"><div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Passenger journeys</div><div class="v">${all.length}</div><div class="n">${fmt(sum(all, x => x.km))} km</div></div>
+      <div class="kpi"><div class="l">On a platform trip</div><div class="v">${all.length - off.length}</div><div class="n">${Math.round(100 * (all.length - off.length) / all.length)}%</div></div>
+      <div class="kpi"><div class="l">No platform trip</div><div class="v neg">${sus.length}</div><div class="n">${fmt(sum(sus, x => x.km))} km · ${sus.filter(x => x.level === "high").length} high</div></div>
+      <div class="kpi"><div class="l">Confirmed private rides</div><div class="v ${sus.some(x => x.status === "confirmed") ? "neg" : ""}">${sus.filter(x => x.status === "confirmed").length}</div><div class="n">${sus.filter(x => x.status === "open").length} still open</div></div></div>
+    <div class="row" style="justify-content:space-between;margin-bottom:8px;gap:6px"><div class="row" style="gap:6px"><label class="small"><input type="checkbox" id="paxOnly" ${S.paxOnly ? "checked" : ""}> Only without a platform trip</label>
+      <select id="paxDrv" aria-label="Driver">${opts(Object.fromEntries(drvs.map(d => [d, dName(d)])), S.paxDrv, "All drivers")}</select><select id="paxCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.paxCar, "All cars")}</select></div>
+      <div class="row" style="gap:6px">${dlBtn("pax")}<button class="btn sm primary" data-paxpdf="${esc(S.paxDrv)}" ${S.paxDrv ? "" : 'disabled title="Choose a driver first"'}>Driver audit (PDF)</button></div></div>
+    <div class="tbl"><table><thead><tr><th>Date</th><th>Seat taken</th><th>Car</th><th class="num">Seats</th><th class="num">km</th><th>From → To</th><th>Platform trip</th><th>Driver</th><th>Level</th><th>Status</th><th>Note</th></tr></thead><tbody>
+    ${pg.rows.map(x => `<tr${x.match ? "" : ' style="background:var(--bad-bg, #fdecec)"'}><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}<div class="small muted">${paxDur(x.dur)}</div></td><td>${esc(vName(x.v) || x.p)}</td><td class="num">${x.seats}</td><td class="num">${fmt(x.km)}</td>
+      <td class="small" style="white-space:normal;min-width:200px">${esc(x.from)} → ${esc(x.to)}</td><td class="small">${x.match ? `<button class="btn sm ghost" data-gototrip="${x.no}" style="padding:1px 6px">Trip ${x.no}</button>` : "<b>No platform trip</b>"}</td>
+      <td class="small">${x.dr ? esc(dName(x.dr)) : '<span class="muted">unknown</span>'}${x.how && !x.match ? `<div class="muted">${esc(x.how)}</div>` : ""}</td><td>${x.match ? '<span class="pill good">OK</span>' : paxLevel(x.level)}</td>
+      <td>${x.match ? "" : `<select data-paxst="${esc(x.rid)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select>`}</td><td>${x.match ? "" : `<input data-paxnote="${esc(x.rid)}" value="${esc(x.note)}" placeholder="what the driver said" style="min-width:150px" ${S.canWrite ? "" : "disabled"}>`}</td></tr>`).join("") || '<tr><td colspan="11" class="muted">Nothing with these filters.</td></tr>'}
+    </tbody><tfoot><tr><td colspan="4">${L.length} journey(s)</td><td class="num">${fmt(sum(L, x => x.km))}</td><td colspan="6"></td></tr></tfoot></table></div>${pg.bar}
+    <p class="small muted" style="margin-top:6px">A passenger journey is on a platform trip when one of the car's Uber / Bolt / Yango trips runs at the same time (${PAX_TOL} min either side). One without a trip goes to the driver of his trips around it (else the nearest trip within the minutes set on GPS data, else the car's assigned driver). High: 3 km or more; Medium: 1–3 km; Short (under 1 km) is usually the sensor (a bag on the seat) and is left out of the reports.</p></div>`;
+}
+DL.pax = () => { const L = paxAudit().filter(x => (!S.paxOnly || (!x.match && x.level !== "low")) && (!S.paxDrv || x.dr === S.paxDrv) && (!S.paxCar || x.v === S.paxCar));
+  return [`passenger_audit_${S.from}_${S.to}.csv`, [["Date", "Seat taken", "Seat free", "Minutes", "Car", "Seats", "km", "From", "To", "Platform trip", "Driver", "Driver found by", "Level", "Status", "Note"], ...L.map(x => [x.d, x.s, x.e, x.dur, vName(x.v) || x.p, x.seats, x.km, x.from, x.to, x.match ? "Trip " + x.no : "No platform trip", x.dr ? dName(x.dr) : "unknown", x.how, x.match ? "" : x.level, x.match ? "" : SUS_STATUS[x.status], x.note])]]; };
+
+/* ---------- the driver's audit (RMS tab, salary statement) ---------- */
+const PAX_CSS = `.px{font:8.2pt/1.3 "Segoe UI",Arial,sans-serif;color:#111;padding:7mm 9mm;width:297mm;box-sizing:border-box;background:#fff}
+.px .hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2.5px solid #16213a;padding-bottom:5px;margin-bottom:7px}.px .co{font:700 14pt "Segoe UI",Arial;color:#16213a}
+.px .ttl{text-align:right;color:#16213a}.px .ttl b{display:block;font-size:11pt;letter-spacing:.06em}
+.px table{width:100%;border-collapse:collapse;margin:0 0 6px}.px th,.px td{border:1px solid #c5c9d2;padding:2px 5px;vertical-align:top;text-align:left}
+.px tr.sec th{background:#16213a;color:#fff;font-weight:600}.px th{background:#f3f4f7;font-weight:600;font-size:7.6pt}.px td.n,.px th.n{text-align:right;white-space:nowrap}
+.px tr.t td{font-weight:700;background:#f3f4f7}.px .bad{color:#b3261e;font-weight:700}.px .ans{min-width:48mm}
+.px .box{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:7px}.px .box div{border:1px solid #c5c9d2;padding:4px 6px}.px .box b{display:block;font-size:11pt}.px .box span{color:#555;font-size:7.4pt}
+.px .note{color:#555;font-size:7.4pt;margin:3px 0 6px}.px .sigs{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:10px;page-break-inside:avoid}.px .line{border-bottom:1px solid #333;height:26px}`;
+function paxAuditHtml(id){
+  const A = paxDriver(id); if(!A || !A.all.length) return "";
+  const d = S.drivers[id] || {}, st = S.settings || {}, co = st.company || "Royal Rides Limousine LLC";
+  const byDay = {}; A.all.forEach(x => { const k = x.d + "|" + x.v, o = byDay[k] ||= {d: x.d, v: x.v, n: 0, on: 0, off: 0, offKm: 0, km: 0}; o.n++; o.km += x.km; if(x.match) o.on++; else if(x.level !== "low"){ o.off++; o.offKm += x.km; } });
+  const days = Object.values(byDay).sort((p, q) => p.d.localeCompare(q.d) || vName(p.v).localeCompare(vName(q.v)));
+  return `<div class="px"><div class="hd"><div class="co">${esc(co)}</div><div class="ttl"><b>PASSENGER TRIPS AUDIT</b>${esc(d.name || "")} · ${esc(dmyS(S.from))} – ${esc(dmyS(S.to))}</div></div>
+    <div class="box"><div><span>Passenger journeys in his cars</span><b>${A.all.length}</b></div><div><span>On his platform trips</span><b>${A.on.length} · ${fmt(A.onKm)} km</b></div><div><span>With a passenger but NO platform trip</span><b class="${A.sus.length ? "bad" : ""}">${A.sus.length} · ${fmt(A.offKm)} km</b></div>
+      <div><span>Explained / confirmed private</span><b>${A.explained} / <span class="${A.confirmed ? "bad" : ""}" style="font-size:11pt;color:inherit">${A.confirmed}</span></b></div><div><span>Not yet settled</span><b>${A.open}</b></div></div>
+    <table><tr class="sec"><th colspan="13">1. Passenger journeys with no Uber / Bolt / Yango trip – to explain</th></tr>
+      <tr><th>#</th><th>Date</th><th>Seat taken – free</th><th>Time</th><th>Car</th><th class="n">Seats</th><th class="n">km</th><th>From</th><th>To</th><th>Why his</th><th>Level</th><th>Status</th><th class="ans">Driver's explanation</th></tr>
+      ${A.sus.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)} – ${esc(x.e)}</td><td>${paxDur(x.dur)}</td><td>${esc(vName(x.v) || x.p)}</td><td class="n">${x.seats}</td><td class="n">${fmt(x.km)}</td><td>${esc(x.from)}</td><td>${esc(x.to)}</td><td>${esc(x.how)}</td><td>${x.level === "high" ? "<b>High</b>" : "Medium"}</td><td>${esc(SUS_STATUS[x.status])}</td><td class="ans">${esc(x.note)}</td></tr>`).join("") || '<tr><td colspan="13">None – every passenger journey matched one of his platform trips.</td></tr>'}
+      ${A.sus.length ? `<tr class="t"><td colspan="6">Total</td><td class="n">${fmt(A.offKm)}</td><td colspan="6"></td></tr>` : ""}</table>
+    <table><tr class="sec"><th colspan="7">2. Day by day</th></tr><tr><th>Date</th><th>Car</th><th class="n">Passenger journeys</th><th class="n">On his platform trips</th><th class="n">No platform trip</th><th class="n">km with no trip</th><th class="n">Passenger km</th></tr>
+      ${days.map(r => `<tr><td>${esc(dmyS(r.d))}</td><td>${esc(vName(r.v))}</td><td class="n">${r.n}</td><td class="n">${r.on}</td><td class="n ${r.off ? "bad" : ""}">${r.off || ""}</td><td class="n">${r.offKm ? fmt(r.offKm) : ""}</td><td class="n">${fmt(r.km)}</td></tr>`).join("")}
+      <tr class="t"><td colspan="2">Total</td><td class="n">${A.all.length}</td><td class="n">${A.on.length}</td><td class="n">${A.sus.length}</td><td class="n">${fmt(A.offKm)}</td><td class="n">${fmt(sum(A.all, x => x.km))}</td></tr></table>
+    <div class="note">The car's seat sensor records every journey with someone on a seat. Each one is checked against the car's Uber / Bolt / Yango trips at that time (${PAX_TOL} minutes either side). A journey with a passenger and no platform trip is listed for explanation; it is his when it falls between his trips or near one, or when the car was assigned to him. Journeys under 1 km (${A.short}) are left out – usually the sensor.</div>
+    <div class="sigs"><div><b>Driver</b><div class="line"></div>${esc(d.name || "")} – signature & date</div><div><b>For ${esc(co)}</b><div class="line"></div>${esc(st.signatory || "")} – signature & date</div></div></div>`;
+}
+// 4 lines for the salary statement
+function paxSummaryRows(id){
+  const L = (label, v, kind = "") => ({label, v, kind, num: true}), A = paxDriver(id);
+  if(!paxReady() || !S.pax.rows.length) return [{label: '<span class="sub">No Trip Passenger report imported for this period</span>', v: null}];
+  if(!A || !A.all.length) return [{label: '<span class="sub">No passenger journeys in his cars in the period</span>', v: null}];
+  return [{...L("Passenger journeys on his platform trips", A.on.length), int: true}, {...L(`Passenger journeys with no platform trip (${fmt(A.offKm)} km, ${A.high} high)`, A.sus.length, A.sus.length ? "t" : ""), int: true},
+    {...L(`Explained ${A.explained} · confirmed private ${A.confirmed} · not settled`, A.open, A.confirmed ? "t" : ""), int: true}, {label: '<span class="sub">Details: Passenger trips audit (next page / RMS tab)</span>', v: null}];
+}
+// landscape pages added to a jsPDF document (salary PDFs)
+async function paxAddPages(doc, id){
+  const html = paxAuditHtml(id); if(!html) return 0;
+  const box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:297mm;background:#fff"; box.innerHTML = `<style>${PAX_CSS}</style>${html}`; document.body.appendChild(box); let n = 0;
+  try{ const canvas = await html2pdf().set({html2canvas: {scale: 2, backgroundColor: "#ffffff"}}).from(box.querySelector(".px")).toCanvas().get("canvas"), pageH = Math.round(canvas.width * 210 / 297);
+    for(let y = 0; y < canvas.height; y += pageH){ const c = document.createElement("canvas"); c.width = canvas.width; c.height = Math.min(pageH, canvas.height - y); c.getContext("2d").drawImage(canvas, 0, y, c.width, c.height, 0, 0, c.width, c.height);
+      doc.addPage("a4", "landscape"); doc.addImage(c.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, 297, 297 * c.height / c.width); n++; } }
+  finally{ box.remove(); }
+  return n;
+}
+async function paxPdf(id){
+  if(!window.html2pdf){ toast("The PDF tool is still loading – try again in a moment."); return; }
+  await paxEnsure(); const html = paxAuditHtml(id); if(!html){ toast("No passenger journeys for this driver in the period."); return; }
+  const d = S.drivers[id] || {}, box = document.createElement("div"); box.style.cssText = "position:fixed;left:-10000px;top:0;width:297mm;background:#fff"; box.innerHTML = `<style>${PAX_CSS}</style>${html}`; document.body.appendChild(box);
+  const name = `Passenger_audit_${(d.name || "driver").replace(/[^\w]+/g, "_")}_${S.from}_${S.to}.pdf`;
+  try{ await html2pdf().set({margin: 0, filename: name, image: {type: "jpeg", quality: 0.95}, html2canvas: {scale: 2, backgroundColor: "#ffffff"}, jsPDF: {unit: "mm", format: "a4", orientation: "landscape"}, pagebreak: {mode: ["css", "legacy"], avoid: ["tr", ".sigs", ".box"]}}).from(box.querySelector(".px")).save(); toast("Downloaded " + name);
+    for(const x of paxDriver(id).sus) if(x.status === "open") await susSave(x.rid, {status: "discussed", dr: x.dr}); render(); }
+  catch(e){ toast("Could not make the PDF. Try again."); }
+  box.remove();
+}
+// the driver's RMS tab
+function paxRmsHtml(id){
+  if(!paxReady()){ if(!(S.pax && S.pax.loading)) paxLoad(); return '<p class="sub">Loading the passenger journeys…</p>'; }
+  if(!S.pax.rows.length) return `<div class="empty"><b>No Trip Passenger report for this period</b>Import it on GPS tracking → Passenger audit.<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" data-nav="gps">GPS tracking</button></div></div>`;
+  const A = paxDriver(id);
+  return `<div class="kpis" style="margin-bottom:10px"><div class="kpi"><div class="l">Passenger journeys in his cars</div><div class="v">${A.all.length}</div></div><div class="kpi"><div class="l">On his platform trips</div><div class="v">${A.on.length}</div><div class="n">${fmt(A.onKm)} km</div></div>
+      <div class="kpi"><div class="l">No platform trip</div><div class="v ${A.sus.length ? "neg" : ""}">${A.sus.length}</div><div class="n">${fmt(A.offKm)} km · ${A.high} high</div></div><div class="kpi"><div class="l">Confirmed private</div><div class="v ${A.confirmed ? "neg" : ""}">${A.confirmed}</div><div class="n">${A.open} not settled</div></div></div>
+    <div class="row" style="justify-content:flex-end;margin-bottom:6px"><button class="btn sm primary" data-paxpdf="${esc(id)}">Passenger trips audit (PDF)</button></div>
+    <div class="tbl"><table><thead><tr><th>Date</th><th>Seat taken</th><th>Car</th><th class="num">Seats</th><th class="num">km</th><th>From → To</th><th>Why his</th><th>Level</th><th>Status</th><th>Note</th></tr></thead><tbody>
+    ${A.sus.map(x => `<tr><td>${esc(dmyS(x.d))}</td><td>${esc(x.s)}–${esc(x.e)}</td><td>${esc(vName(x.v) || x.p)}</td><td class="num">${x.seats}</td><td class="num">${fmt(x.km)}</td><td class="small" style="white-space:normal">${esc(x.from)} → ${esc(x.to)}</td><td class="small">${esc(x.how)}</td><td>${paxLevel(x.level)}</td>
+      <td><select data-paxst="${esc(x.rid)}" aria-label="Status" ${S.canWrite ? "" : "disabled"}>${opts(SUS_STATUS, x.status)}</select></td><td><input data-paxnote="${esc(x.rid)}" value="${esc(x.note)}" placeholder="what the driver said" ${S.canWrite ? "" : "disabled"}></td></tr>`).join("") || '<tr><td colspan="10" class="muted">Every passenger journey matched one of his platform trips.</td></tr>'}
+    </tbody></table></div><p class="small muted" style="margin-top:6px">From the tracker's seat sensor (Trip Passenger report). This audit is printed with his salary statement.</p>`;
+}
+
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
+  if(t.dataset.paxgo){ t.disabled = true; t.textContent = "Importing…"; await paxSave(); return; }
+  if(t.dataset.paxcancel){ S.paxImp = null; render(); return; }
+  if(t.dataset.paxpdf != null){ if(!t.dataset.paxpdf){ toast("Choose a driver first."); return; } t.disabled = true; await paxPdf(t.dataset.paxpdf); t.disabled = false; return; }
+});
+document.addEventListener("change", ev => {
+  const t = ev.target;
+  if(t.id === "paxFile" && t.files[0]) paxRead(t.files[0]).catch(e => toast("Could not read the file – " + e.message));
+  if(t.id === "paxOnly"){ S.paxOnly = t.checked; render(); }
+  if(t.id === "paxDrv"){ S.paxDrv = t.value; render(); }
+  if(t.id === "paxCar"){ S.paxCar = t.value; render(); }
+  if(t.dataset && t.dataset.paxst){ const x = paxAudit().find(y => y.rid === t.dataset.paxst); susSave(t.dataset.paxst, {status: t.value, dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Saved."); render(); }); }
+  if(t.dataset && t.dataset.paxnote){ const x = paxAudit().find(y => y.rid === t.dataset.paxnote); susSave(t.dataset.paxnote, {note: t.value.trim(), dr: x ? x.dr : ""}).then(ok => { if(ok) toast("Note saved."); }); }
+});
+["dragover", "drop"].forEach(n => document.addEventListener(n, ev => { const d = ev.target.closest && ev.target.closest("label[for=paxFile]"); if(!d) return; ev.preventDefault(); ev.stopPropagation(); if(n === "drop" && ev.dataTransfer.files[0]) paxRead(ev.dataTransfer.files[0]).catch(e => toast("Could not read the file – " + e.message)); }, true));
+window.PAX = {view: paxView, read: paxRead, load: paxLoad, ready: paxReady, ensure: paxEnsure, audit: paxAudit, driver: paxDriver, auditHtml: paxAuditHtml, css: PAX_CSS, summaryRows: paxSummaryRows, addPages: paxAddPages, pdf: paxPdf, rmsHtml: paxRmsHtml};
