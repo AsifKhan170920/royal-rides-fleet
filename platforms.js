@@ -133,6 +133,7 @@ function pltApiTab(pl){
   const envs = (a.authType || "oauth") === "oauth" ? [`${pre}_CLIENT_ID=`, `${pre}_CLIENT_SECRET=`] : a.authType === "apikey" ? [`${pre}_API_KEY=`] : a.authType === "bearer" ? [`${pre}_TOKEN=`] : [];
   return `<div class="banner ${a.enabled ? "info" : ""}"><b>${a.enabled ? "API on" : "File import"}</b> – ${a.enabled ? `the sync program on the office PC fetches ${esc(pName(pl))}'s trips every day (and with "4 - Sync platform APIs").` : `${esc(pName(pl))}'s trips come from the files dropped on Import trip data. Switch the API on when ${esc(pName(pl))} has given you API access.`}
     ${sy ? `<div style="margin-top:6px">Last sync: <b>${esc(new Date(sy.at).toLocaleString("en-GB"))}</b> · ${esc(dmyS(sy.from))} – ${esc(dmyS(sy.to))} · ${sy.error ? `<span class="pill bad">Failed</span> ${esc(sy.error)}` : `<span class="pill good">OK</span> ${sy.added} new trips, ${sy.dup} already there`}</div>` : a.enabled ? '<div style="margin-top:6px" class="small">Not run yet.</div>' : ""}</div>
+  ${apiKeysBox(pl)}
   ${PLT_PRESETS[pl] ? `<div class="row" style="margin-bottom:8px"><button class="btn" data-apipreset="${esc(pl)}">Fill in the ${esc(pName(pl))} API settings</button><span class="small muted">${esc(PLT_PRESETS[pl].note)}</span></div>` : ""}
   <form class="form" id="fApi" data-pl="${esc(pl)}">
     <div class="f"><label for="ap_en">Trips come by</label><select id="ap_en" name="enabled">${opts({false: "File import (Import trip data)", true: "API – fetched by the office sync program"}, String(!!a.enabled))}</select></div>
@@ -144,10 +145,79 @@ function pltApiTab(pl){
     ${fld("listPath", "Where the list is in the answer", "data.orders")}${fld("filter", "Only rows where (e.g. order_status=finished)", "order_status=finished")}${fld("companiesUrl", "Accounts URL – for {companyIds} (optional)")}${fld("companiesPath", "Where the account ids are", "data.company_ids")}${fld("pageSize", "Page size (blank = one page)", "100")}${fld("maxDays", "Days per request (blank = whole period)", "15")}${fld("pageStart", "First page number", "0")}
     <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Fields</b> <span class="small muted">– the name of each field in a list item: dots for nested fields (order_price.ride_price), /1000 to divide (metres → km), ?field=value to take it only then (order_price.ride_price?payment_method=cash), + to add fields</span></div>
     ${API_FIELDS.map(([k, l]) => `<div class="f"><label for="apf_${k}">${l}</label><input id="apf_${k}" name="f_${k}" value="${esc(F[k] || "")}"></div>`).join("")}
-    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Through Google Apps Script</b> <span class="small muted">– no office PC needed: deploy apps-script/bolt-proxy.gs as a web app (the secret stays in its Script Properties), then paste its URL and access key here and use "Sync now".</span></div>
+    <div class="f wide" style="margin-top:6px;border-top:1px solid var(--line);padding-top:10px"><b>Or through Google Apps Script</b> <span class="small muted">– optional, instead of the keys above: deploy apps-script/bolt-proxy.gs as a web app (the secret stays in its Script Properties), then paste its URL and access key here and use "Sync now".</span></div>
     ${fld("proxyUrl", "Apps Script web app URL", "https://script.google.com/macros/s/…/exec", ' style="min-width:420px"')}${fld("proxyKey", "Access key (ACCESS_KEY in the script)")}
     <div class="f wide"><div class="small" style="background:var(--bg);padding:8px;border-radius:6px">With the office sync program instead, the secrets go only in <b class="mono">uber-sync/.env</b> on the office PC – never here:<br>${envs.map(x => `<span class="mono">${esc(x)}</span>`).join("<br>") || "–"}</div></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save API settings</button></div></form>`;
+}
+
+/* ---------- the platform's API called straight from the software ----------
+   The client id / secret are saved in their own record (secrets/<platform>), read only when syncing and never shown
+   again; the page gets a token, the account ids and the orders itself (Bolt allows calls from this site). */
+S.apiKeys = S.apiKeys || {};
+async function loadApiKeys(pl){ try{ const d = await S.db.doc("secrets/" + pl).get(); S.apiKeys[pl] = d.exists ? d.data() : {}; }catch(e){ S.apiKeys[pl] = {error: e.message}; } return S.apiKeys[pl]; }
+function apiKeysBox(pl){
+  const k = S.apiKeys[pl], a = (S.platforms[pl] || {}).api || {};
+  if(k === undefined){ loadApiKeys(pl).then(() => { if(S.pltView === pl && S.pltTab === "api") render(); }); }
+  const has = k && k.clientSecret, kk = k || {};
+  return `<form class="form section" id="fApiKeys" data-pl="${esc(pl)}" style="padding:12px 14px">
+    <div class="f wide"><b>API keys – sync straight from the software</b> <span class="small muted">– from the ${esc(pName(pl))} fleet portal (API credentials). Saved once; then "Sync now" above fetches the trips. No office PC or script needed.</span>
+      ${has ? `<div style="margin-top:4px"><span class="pill good">Keys saved</span> <span class="small muted">${kk.at ? "on " + esc(new Date(kk.at).toLocaleString("en-GB")) : ""} – the secret is not shown again; enter a new one only to change it.</span></div>` : k && k.error ? `<div class="small" style="margin-top:4px"><span class="pill bad">Could not read</span> ${esc(k.error)}</div>` : ""}</div>
+    <div class="f"><label for="ak_id">Client ID</label><input id="ak_id" name="clientId" value="${esc(kk.clientId || "")}" autocomplete="off" style="min-width:300px"></div>
+    <div class="f"><label for="ak_sec">Client secret</label><input id="ak_sec" name="clientSecret" type="password" autocomplete="new-password" placeholder="${has ? "saved – leave blank to keep" : ""}" style="min-width:300px"></div>
+    <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite ? "" : "disabled"}>Save keys</button>${has ? `<button class="btn" type="button" data-apitest="${esc(pl)}">Test connection</button><button class="btn ghost" type="button" data-apikeysdel="${esc(pl)}">Remove keys</button>` : ""}
+      ${a.tokenUrl ? "" : '<span class="small muted">Then click "Fill in the API settings" below (or set the token / trips URLs).</span>'}</div></form>`;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function apiFetch(url, opt){
+  for(let i = 0; i < 5; i++){
+    const r = await fetch(url, opt);
+    if(r.status === 429){ await sleep([2000, 5000, 15000, 30000, 30000][i]); continue; }
+    const txt = await r.text(); let j; try{ j = JSON.parse(txt); }catch(e){ j = null; }
+    if(!r.ok) throw new Error(`HTTP ${r.status} ${(j && (j.message || j.error_description || j.error)) || txt.slice(0, 120)}`);
+    return j;
+  }
+  throw new Error("the platform kept saying too many requests – try again in a few minutes");
+}
+async function apiToken(api, keys){
+  if((api.authType || "oauth") !== "oauth") return keys.clientSecret;
+  if(!api.tokenUrl) throw new Error("set the token URL (Fill in the API settings)");
+  const body = new URLSearchParams({client_id: keys.clientId, client_secret: keys.clientSecret, grant_type: "client_credentials"}); if(api.scope) body.set("scope", api.scope);
+  const j = await apiFetch(api.tokenUrl, {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded"}, body});
+  if(!j || !j.access_token) throw new Error("no token in the answer – check the client id and secret");
+  return j.access_token;
+}
+function apiHeaders(api, token){
+  const h = {Accept: "application/json"};
+  if((api.authType || "oauth") === "apikey") h[api.keyHeader || "X-API-Key"] = token; else if(api.authType !== "none") h.Authorization = "Bearer " + token;
+  return h;
+}
+async function apiCompanies(api, token){
+  if(!api.companiesUrl) return [];
+  const j = await apiFetch(api.companiesUrl, {headers: apiHeaders(api, token)});
+  return pdig(j, api.companiesPath || "data.company_ids") || [];
+}
+async function directOrders(pl, fromTs, toTs){
+  const api = (S.platforms[pl] || {}).api || {}, keys = await loadApiKeys(pl);
+  if(!keys.clientSecret) throw new Error("save the API keys first");
+  if(!api.tripsUrl) throw new Error("set the trips URL (Fill in the API settings)");
+  const token = await apiToken(api, keys), companies = await apiCompanies(api, token), H = apiHeaders(api, token);
+  const span = (num(api.maxDays) || 3650) * 86400, limit = num(api.pageSize) || 0, all = {}, list = [];
+  const fill = (t, v) => String(t || "").replace(/\{(\w+)\}/g, (m, k) => k in v ? (typeof v[k] === "object" ? JSON.stringify(v[k]) : v[k]) : m);
+  for(let a = fromTs; a <= toTs; a += span){
+    const b = Math.min(toTs, a + span - 1);
+    for(let pg = 0; pg < 200; pg++){
+      const v = {fromTs: a, toTs: b, from: iso(new Date(a * 1000)), to: iso(new Date(b * 1000)), offset: pg * (limit || 0), page: pg + (num(api.pageStart) || 0), limit: limit || 1000, companyIds: companies};
+      const opt = {method: api.method || "GET", headers: {...H}};
+      if(opt.method === "POST"){ opt.headers["Content-Type"] = "application/json"; opt.body = fill(api.body, v); }
+      const j = await apiFetch(fill(api.tripsUrl, v), opt);
+      if(j && typeof j.code === "number" && j.code !== 0) throw new Error(`${pName(pl)}: ${j.code} ${j.message || ""}`);
+      const rows = pdig(j, api.listPath) || [];
+      rows.forEach(o => { const id = ppick(o, (api.fields || {}).id); if(id != null && id !== ""){ all[id] = o; } else list.push(o); });
+      if(!limit || rows.length < limit) break;
+    }
+  }
+  return {companies, orders: [...Object.values(all), ...list]};
 }
 
 /* ---------- fetching through a Google Apps Script proxy, straight from the browser ----------
@@ -168,10 +238,12 @@ function preadDate(v){
 }
 async function browserSync(pl, days){
   const p = S.platforms[pl], api = (p || {}).api || {}, F = api.fields || {};
-  if(!api.proxyUrl || !api.proxyKey) throw new Error("set the Apps Script URL and access key first");
   const to = new Date(), from = new Date(to.getTime() - days * 86400000), fromTs = Math.floor(new Date(iso(from) + "T00:00:00").getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
-  const r = await fetch(`${api.proxyUrl}${api.proxyUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(api.proxyKey)}&from=${fromTs}&to=${toTs}`);
-  const j = await r.json(); if(!j.ok) throw new Error(j.error || "the Apps Script answered with an error");
+  let j, via;
+  if(api.direct){ j = await directOrders(pl, fromTs, toTs); via = "API"; }
+  else if(api.proxyUrl && api.proxyKey){ const r = await fetch(`${api.proxyUrl}${api.proxyUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(api.proxyKey)}&from=${fromTs}&to=${toTs}`);
+    j = await r.json(); if(!j.ok) throw new Error(j.error || "the Apps Script answered with an error"); via = "Apps Script"; }
+  else throw new Error("save the API keys first");
   const rows = (Array.isArray(j.orders) ? j.orders : pdig(j, api.listPath) || []).filter(o => pkeep(o, api.filter));
   const trips = rows.map(o => { const dt = preadDate(ppick(o, F.date)); if(!dt) return null; const n = k => num(ppick(o, F[k])); const id = String(ppick(o, F.id) ?? "").trim() || `${dt.date}|${ppick(o, F.driverName)}|${n("fare")}`;
     return {id: pl + ":" + norm(id), tr: pl + ":" + norm(id), d: dt.date, t: dt.time, name: String(ppick(o, F.driverName) ?? "").trim(), uuid: String(ppick(o, F.driverId) ?? "").trim(), p: String(ppick(o, F.plate) ?? "").trim(),
@@ -192,7 +264,7 @@ async function browserSync(pl, days){
     for(const t of L){ if(ex[t.id]){ dup++; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
     if(!await writeOk(ref.set({date: day, rows: merged}))) throw new Error("could not save the trips");
   }
-  const {id: _, ...b} = S.platforms[pl]; await writeOk(S.db.doc("platforms/" + pl).set({...b, sync: {at: new Date().toISOString(), from: iso(from), to: iso(to), added, dup, error: "", via: "Apps Script"}}));
+  const {id: _, ...b} = S.platforms[pl]; await writeOk(S.db.doc("platforms/" + pl).set({...b, sync: {at: new Date().toISOString(), from: iso(from), to: iso(to), added, dup, error: "", via}}));
   return {orders: (j.orders || []).length, kept: rows.length, added, dup};
 }
 
@@ -202,8 +274,8 @@ function syncBox(only){
   const r = S.syncReq || {}, alive = r.listener && (Date.now() - new Date(r.listener).getTime()) < 3 * 60000, st = r.status;
   const when = x => x ? new Date(x).toLocaleString("en-GB") : "";
   return `<div class="section" style="padding:10px 14px"><div class="row" style="justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-    <div><b>Sync now</b> <span class="small muted">– fetch the trips from the platform APIs${only ? "" : " (and Uber, if ticked)"}${(() => { const px = Object.values(S.platforms).filter(p => p.api && p.api.proxyUrl && (!only || p.id === only)).map(p => p.name || p.id); return px.length ? ` – ${esc(px.join(", "))} straight through Google Apps Script${only ? "" : ", the others"}` : ""; })()}${only && S.platforms[only] && S.platforms[only].api && S.platforms[only].api.proxyUrl ? "" : " through the office PC"}.</span>
-      <div class="small" style="margin-top:3px">Office PC listener: ${alive ? '<span class="pill good">Online</span>' : '<span class="pill bad">Offline</span> <span class="muted">– start "5 - Start sync listener" on the office PC</span>'}
+    <div><b>Sync now</b> <span class="small muted">– fetch the trips from the platform APIs${only ? "" : " (and Uber, if ticked)"}${(() => { const px = Object.values(S.platforms).filter(p => p.api && (p.api.direct || p.api.proxyUrl) && (!only || p.id === only)).map(p => p.name || p.id); return px.length ? ` – ${esc(px.join(", "))} straight from here${only ? "" : ", the others"}` : ""; })()}${only && S.platforms[only] && S.platforms[only].api && (S.platforms[only].api.direct || S.platforms[only].api.proxyUrl) ? "" : " through the office PC"}.</span>
+      <div class="small" style="margin-top:3px${only && S.platforms[only] && S.platforms[only].api && S.platforms[only].api.direct ? ";display:none" : ""}">Office PC listener: ${alive ? '<span class="pill good">Online</span>' : '<span class="pill bad">Offline</span> <span class="muted">– start "5 - Start sync listener" on the office PC</span>'}
       ${st ? ` · last request ${when(r.at)}: ${st === "done" ? `<span class="pill good">Done</span> ${when(r.doneAt)}` : st === "error" ? '<span class="pill bad">Failed</span>' : st === "running" ? '<span class="pill warn">Running…</span>' : '<span class="pill warn">Waiting for the PC…</span>'}` : ""}</div>
       ${r.log && r.log.length && (st === "done" || st === "error") ? `<div class="small muted" style="margin-top:3px;white-space:pre-line">${esc(r.log.slice(-6).join("\n"))}</div>` : ""}</div>
     <div class="row" style="gap:6px;align-items:center">${only ? "" : `<label class="small"><input type="checkbox" id="syncUber"> Uber too</label>`}<label class="small">Days <input id="syncDays" type="number" min="1" max="62" value="2" style="width:56px"></label>
@@ -226,14 +298,21 @@ document.addEventListener("click", async ev => {
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, payoutConfirm: !p.payoutConfirm}))) toast(p.payoutConfirm ? "Payouts are taken as received again." : "Reconciliation on – match each payout with the bank credit."); render(); return; }
   if(t.dataset.pomatch != null){ S.poMatch = t.dataset.pomatch ? {pl: t.dataset.pl, id: t.dataset.pomatch} : null; render(); return; }
   if(t.dataset.syncnow != null){ const days0 = Math.max(1, Math.min(62, num(($("#syncDays") || {}).value) || 2)), only = t.dataset.syncnow;
-    const direct = Object.values(S.platforms).filter(p => p.api && p.api.proxyUrl && p.api.proxyKey && (!only || p.id === only));
+    const direct = Object.values(S.platforms).filter(p => p.api && (p.api.direct || (p.api.proxyUrl && p.api.proxyKey)) && (!only || p.id === only));
     if(direct.length){ t.disabled = true; const lines = [];
-      for(const p of direct){ t.textContent = "Fetching " + (p.name || p.id) + "…"; try{ const x = await browserSync(p.id, days0); lines.push(`${p.name || p.id}: ${x.kept} trips, ${x.added} new, ${x.dup} already there`); }catch(e){ lines.push(`${p.name || p.id}: failed – ${e.message}`); } }
+      for(const p of direct){ t.textContent = "Fetching " + (p.name || p.id) + "…"; try{ const x = await browserSync(p.id, days0); lines.push(`${p.name || p.id}: ${x.kept} trips, ${x.added} new, ${x.dup} already there`); }catch(e){ lines.push(`${p.name || p.id}: failed – ${e.message}`);
+        const q = S.platforms[p.id]; if(q){ const {id: _, ...b} = q; await writeOk(S.db.doc("platforms/" + p.id).set({...b, sync: {at: new Date().toISOString(), from: iso(new Date(Date.now() - days0 * 86400000)), to: iso(new Date()), added: 0, dup: 0, error: e.message, via: b.api && b.api.direct ? "API" : "Apps Script"}})); } } }
       await loadPeriod(); S.ledger = null; toast(lines.join(" · ")); render(); if(only && direct.some(p => p.id === only)) return; }
     const days = days0, uber = !!(($("#syncUber") || {}).checked);
     const prev = S.syncReq || {}; if(await writeOk(S.db.doc("settings/syncRequest").set({...prev, status: "waiting", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", days, uber, only: t.dataset.syncnow || "", log: []}))) toast(prev.listener && (Date.now() - new Date(prev.listener).getTime()) < 180000 ? "Sync requested – the office PC is fetching the trips." : "Sync requested – it runs when the listener on the office PC is started."); return; }
+  if(t.dataset.apitest){ const pl = t.dataset.apitest; t.disabled = true; t.textContent = "Testing…";
+    try{ const api = (S.platforms[pl] || {}).api || {}; if(!api.tokenUrl) throw new Error('click "Fill in the API settings" first'); const keys = await loadApiKeys(pl), tok = await apiToken(api, keys), c = await apiCompanies(api, tok);
+      toast(`Connected to ${pName(pl)} – ${c.length ? c.length + " company account(s): " + c.join(", ") : "token OK"}.`); }catch(e){ toast("Connection failed – " + e.message); }
+    render(); return; }
+  if(t.dataset.apikeysdel){ const pl = t.dataset.apikeysdel; if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; }
+    if(await writeOk(S.db.doc("secrets/" + pl).delete())){ S.apiKeys[pl] = {}; const p = S.platforms[pl]; if(p){ const {id, ...b} = p; await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...(b.api || {}), direct: false}})); } toast("API keys removed."); render(); } return; }
   if(t.dataset.apipreset){ const p = S.platforms[t.dataset.apipreset], pr = PLT_PRESETS[t.dataset.apipreset]; if(!p || !pr) return; const {id, ...b} = p;
-    if(await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...(p.api || {}), ...pr.api}}))) toast(`${pName(id)} API settings filled in – the secrets stay in uber-sync/.env.`); render(); return; }
+    if(await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...(p.api || {}), ...pr.api}}))) toast(`${pName(id)} API settings filled in.`); render(); return; }
   if(t.dataset.pladjdel){ if(t.dataset.confirm !== "1"){ t.dataset.confirm = "1"; t.textContent = "Click again"; return; } if(await writeOk(S.db.doc("pladj/" + t.dataset.pladjdel).delete())){ toast("Adjustment deleted."); render(); } return; }
   if(t.dataset.pounmatch){ if(await writeOk(S.db.doc("payouts/" + t.dataset.pounmatch).delete())){ S.poMatch = null; toast("Match removed – the payout is in transit again."); render(); } return; }
   if(t.dataset.feeedit != null){ S.feeEdit = t.dataset.feeedit ? {pl: t.dataset.pl || S.pltView, id: t.dataset.feeedit === "new" ? "" : t.dataset.feeedit} : null; render(); return; }
@@ -241,12 +320,18 @@ document.addEventListener("click", async ev => {
 });
 document.addEventListener("change", ev => { if(ev.target.id === "pltGrp"){ S.pltGroup = ev.target.value; render(); } });
 document.addEventListener("submit", async ev => {
-  const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv" && f.id !== "fApi") return; ev.preventDefault(); if(!S.db) return;
+  const f = ev.target; if(f.id !== "fPoMatch" && f.id !== "fFeeInv" && f.id !== "fApi" && f.id !== "fApiKeys") return; ev.preventDefault(); if(!S.db) return;
+  if(f.id === "fApiKeys"){ const pl = f.dataset.pl, d = Object.fromEntries(new FormData(f).entries()), old = S.apiKeys[pl] || {}, p = S.platforms[pl]; if(!p) return;
+    const rec = {clientId: d.clientId.trim(), clientSecret: d.clientSecret.trim() || old.clientSecret || "", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || ""};
+    if(!rec.clientId || !rec.clientSecret){ toast("Enter the client ID and the client secret."); return; }
+    if(!await writeOk(S.db.doc("secrets/" + pl).set(rec))) return; S.apiKeys[pl] = rec;
+    const {id, ...b} = p, pr = PLT_PRESETS[pl]; await writeOk(S.db.doc("platforms/" + id).set({...b, api: {...((pr && !(b.api || {}).tokenUrl) ? pr.api : {}), ...(b.api || {}), direct: true}}));
+    toast(`${pName(pl)} API keys saved – click "Test connection", then "Sync now".`); render(); return; }
   if(f.id === "fApi"){ const d = Object.fromEntries(new FormData(f).entries()), p = S.platforms[f.dataset.pl]; if(!p) return; const {id, ...b} = p, fields = {};
     Object.keys(d).filter(k => k.startsWith("f_")).forEach(k => { if(d[k].trim()) fields[k.slice(2)] = d[k].trim(); delete d[k]; });
     // anything that looks like a secret is refused – it belongs in the .env file on the office PC
     if(Object.values(d).some(v => /secret|password/i.test(v) && v.length > 20)){ toast("Do not enter secrets here – put them in uber-sync/.env on the office PC."); return; }
-    const api = {...d, enabled: d.enabled === "true", maxDays: d.maxDays ? num(d.maxDays) : "", pageSize: d.pageSize ? num(d.pageSize) : "", pageStart: d.pageStart ? num(d.pageStart) : "", fields};
+    const api = {...d, direct: !!(p.api && p.api.direct), enabled: d.enabled === "true", maxDays: d.maxDays ? num(d.maxDays) : "", pageSize: d.pageSize ? num(d.pageSize) : "", pageStart: d.pageStart ? num(d.pageStart) : "", fields};
     if(api.enabled && (!api.tripsUrl || !fields.date)){ toast("Set at least the URL and the date field before switching the API on."); return; }
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, api}))){ toast(api.enabled ? "Saved – the office sync program will fetch these trips." : "Saved."); render(); } return; }
   const d = Object.fromEntries(new FormData(f).entries()), by = (S.user && (S.user.name || S.user.id)) || "";
