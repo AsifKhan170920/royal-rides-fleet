@@ -223,6 +223,8 @@ async function susReport(drId){
   box.remove();
 }
 
+// a place: its name, or a map link when the tracker gave only the position ("25.27786 55.32955" from its raw data)
+const gpsPlace = p => { const m = String(p || "").match(/^(-?\d+\.\d+)[ ,]+(-?\d+\.\d+)$/); return m ? `<a href="https://www.google.com/maps?q=${m[1]},${m[2]}" target="_blank" rel="noopener">Map ${(+m[1]).toFixed(4)}, ${(+m[2]).toFixed(4)}</a>` : esc(p); };
 /* every stretch the tracker recorded in the period, with the trip it belongs to (or none) */
 function gpsSegs(A){ return A.flatMap(x => x.segs.map(g => ({...g, v: x.v, d: x.d}))).sort((a, b) => b.d.localeCompare(a.d) || vName(a.v).localeCompare(vName(b.v)) || String(a.s).localeCompare(String(b.s))); }
 function gpsDataView(A){
@@ -239,7 +241,7 @@ function gpsDataView(A){
         <div class="f"><label for="grp">Parking – km at most</label><input id="grp" name="gpsParkKm" type="number" step="0.5" min="0" value="${R.parkKm}"></div><div class="f"><label for="gra">Driver of parking / no trip – nearest trip within (min)</label><input id="gra" name="gpsAttrMin" type="number" step="5" min="0" value="${R.attrMin}"></div><div class="f" style="align-self:end"><button class="btn" type="submit" ${S.canWrite ? "" : "disabled"}>Save ranges</button></div></form>`; })()}
     <div class="row" style="justify-content:space-between;margin-bottom:8px"><div class="row" style="gap:6px"><select id="gpsTerm" aria-label="Term">${opts(TERM_LABEL, S.gpsTerm, "All terms")}</select><select id="gpsCar" aria-label="Car">${listOpts(S.vehicles, v => vName(v.id), S.gpsCar, "All cars")}</select><select id="gpsDay" aria-label="Day">${opts(Object.fromEntries(days.map(d => [d, dmyS(d)])), S.gpsDay, "All days")}</select></div>${dlBtn("gpsdata")}</div>
     <div class="tbl"><table><thead><tr><th>S.No</th><th>Date</th><th>Car</th><th>Start</th><th>End</th><th>Duration</th><th class="num">km</th><th>From</th><th>To</th><th>Term</th><th>Trip No</th><th>Driver</th></tr></thead><tbody>
-    ${pg.rows.map(g => `<tr${g.term === "none" ? ' style="background:var(--bad-bg, #fdecec)"' : ""}><td class="mono">${g.sn}</td><td>${esc(dmyS(g.d))}</td><td>${esc(vName(g.v))}</td><td>${esc(g.s)}</td><td>${esc(g.e)}</td><td class="small">${dur(g)}</td><td class="num">${fmt(g.km)}</td><td class="small" style="white-space:normal">${esc(g.from)}</td><td class="small" style="white-space:normal">${esc(g.to)}</td>
+    ${pg.rows.map(g => `<tr${g.term === "none" ? ' style="background:var(--bad-bg, #fdecec)"' : ""}><td class="mono">${g.sn}</td><td>${esc(dmyS(g.d))}</td><td>${esc(vName(g.v))}</td><td>${esc(g.s)}</td><td>${esc(g.e)}</td><td class="small">${dur(g)}</td><td class="num">${fmt(g.km)}</td><td class="small" style="white-space:normal">${gpsPlace(g.from)}</td><td class="small" style="white-space:normal">${gpsPlace(g.to)}</td>
       <td><span class="pill ${g.term === "trip" ? "good" : g.term === "pickup" ? "info" : g.term === "parking" ? "" : "bad"}">${TERM_LABEL[g.term]}</span></td><td class="mono">${g.no ? `<button class="btn sm ghost" data-gototrip="${g.no}" style="padding:1px 6px">${g.no}</button>` : ""}</td><td class="small">${g.dr ? esc(dName(g.dr)) : '<span class="muted">unknown</span>'}${g.how && g.term !== "trip" ? `<div class="muted">${esc(g.how)}</div>` : ""}</td></tr>`).join("") || '<tr><td colspan="12" class="muted">No stretches match.</td></tr>'}
     </tbody><tfoot><tr><td colspan="6">${L.length} stretch(es)</td><td class="num">${fmt(sum(L, g => g.km))}</td><td colspan="5"></td></tr></tfoot></table></div>${pg.bar}</div>`;
 }
