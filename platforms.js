@@ -352,7 +352,7 @@ async function browserSync(pl, days){
   const byId = {}, byName = {}; Object.values(S.drivers).forEach(d => { if((d.platformIds || {})[pl]) byId[d.platformIds[pl]] = d.id; byName[norm(d.name)] = d.id; });
   const plates = {}; Object.values(S.vehicles).forEach(v => plates[norm(v.plate)] = v.id);
   for(const t of trips){
-    let id = (t.uuid && byId[t.uuid]) || (t.name && byName[norm(t.name)]) || (t.name && driverByShortName(t.name, pl));
+    let id = (t.uuid && byId[t.uuid]) || (t.name && byName[norm(t.name)]) || (t.name && (window.matchDriver ? matchDriver(t.name, pl) : driverByShortName(t.name, pl)));
     if(!id){ id = "d-" + (norm(t.name).slice(0, 20) || norm(t.uuid).slice(0, 12) || uid()); const rec = {name: t.name || "Unnamed driver", platformIds: t.uuid ? {[pl]: t.uuid} : {}, payModel: "", commissionPct: 0, active: true, createdFromImport: true}; await writeOk(S.db.doc("drivers/" + id).set(rec)); S.drivers[id] = {id, ...rec}; }
     else if(t.uuid && !((S.drivers[id] || {}).platformIds || {})[pl]){ const {id: _, ...b} = S.drivers[id]; const rec = {...b, platformIds: {...(b.platformIds || {}), [pl]: t.uuid}}; await writeOk(S.db.doc("drivers/" + id).set(rec)); S.drivers[id] = {id, ...rec}; }
     byId[t.uuid] = id; byName[norm(t.name)] = id; t.dr = id;

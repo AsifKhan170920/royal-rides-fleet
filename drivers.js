@@ -688,3 +688,51 @@ document.addEventListener("submit", async ev => {
   }
   S.tripEdit = null; await loadPeriod(); render(); toast("Trip saved.");
 });
+
+/* ---------- duplicate drivers: find and merge ----------
+   The same person can come in from Uber, Bolt, Yango and the RTA file under different spellings. A merge moves every
+   reference of the duplicate (trips, trip details, expenses, invoices, payroll, fines, documents, ledger parties "d:<id>")
+   to the driver kept, joins their platform ids, and deletes the duplicate. */
+const MERGE_COLS = ["trips", "tripinfo", "entries", "emppay", "payroll", "invpay", "fines", "rtablocks", "rtadep", "rtalic", "documents", "pdcs", "loans", "reminders", "vehicles", "terminals", "cardtx", "payouts", "pladj", "feeinv", "rcptmeta", "employees", "settings"];
+const drvScore = d => (d.licenceNo ? 100 : 0) + (d.terms && d.terms.length ? 20 : 0) + (d.payModel ? 10 : 0) + nameWordsU(d.name).length + Object.keys(d.platformIds || {}).length;
+function driverDupes(){
+  const D = Object.values(S.drivers), out = [], used = new Set();
+  D.forEach(a => D.forEach(b => { if(a.id >= b.id || used.has(a.id) || used.has(b.id) || !sameName(a.name, b.name)) return;
+    const [keep, drop] = drvScore(a) >= drvScore(b) ? [a, b] : [b, a];
+    // one platform account each: two different Uber / Bolt / Yango ids are two people
+    const clash = (keep.uberUuid && drop.uberUuid && keep.uberUuid !== drop.uberUuid) || Object.keys(drop.platformIds || {}).some(k => (keep.platformIds || {})[k] && keep.platformIds[k] !== drop.platformIds[k]);
+    if(clash) return; out.push({keep: keep.id, drop: drop.id}); used.add(drop.id); }));
+  return out;
+}
+function swapIds(x, from, to){
+  if(Array.isArray(x)){ let ch = false; const a = x.map(v => { const r = swapIds(v, from, to); if(r !== v) ch = true; return r; }); return ch ? a : x; }
+  if(x && typeof x === "object"){ let ch = false; const o = {}; for(const [k, v] of Object.entries(x)){ const k2 = k === from ? to : k, v2 = swapIds(v, from, to); if(k2 !== k || v2 !== v) ch = true; o[k2] = v2; } return ch ? o : x; }
+  if(x === from) return to; if(x === "d:" + from) return "d:" + to; return x;
+}
+async function mergeDrivers(keepId, dropId){
+  const keep = S.drivers[keepId], drop = S.drivers[dropId]; if(!keep || !drop || keepId === dropId) return 0; let n = 0;
+  for(const c of MERGE_COLS){ const snap = await S.db.collection(c).get();
+    for(const doc of snap.docs){ const v = doc.data(), v2 = swapIds(v, dropId, keepId); if(v2 !== v){ n++; if(!await writeOk(S.db.doc(c + "/" + doc.id).set(v2))) return -1; } } }
+  const {id: _k, ...kb} = keep, {id: _d, ...db} = drop;
+  const rec = {...db, ...kb, platformIds: {...(db.platformIds || {}), ...(kb.platformIds || {})}, uberUuid: kb.uberUuid || db.uberUuid || "", aliases: [...new Set([...(kb.aliases || []), ...(db.aliases || []), drop.name].filter(Boolean))]};
+  if(!await writeOk(S.db.doc("drivers/" + keepId).set(rec))) return -1;
+  if(!await writeOk(S.db.doc("drivers/" + dropId).delete())) return -1;
+  return n;
+}
+function dupesPanel(){
+  if(!S.dupOpen) return "";
+  const L = driverDupes();
+  return `<div class="section"><div class="head"><div><h2>Duplicate drivers</h2><p class="sub">The same person under different spellings from Uber, Bolt, Yango and the RTA file. Merge keeps the first name shown and moves every trip, expense, payslip, fine and ledger line of the second to it.</p></div><div class="row">${L.length ? `<button class="btn primary" data-dupall="1" ${S.canWrite ? "" : "disabled"}>Merge all ${L.length}</button>` : ""}<button class="btn ghost" data-dupopen="">Close</button></div></div>
+    ${L.length ? `<div class="tbl"><table><thead><tr><th>Keep</th><th>Linked to</th><th>Merge into it</th><th>Linked to</th><th></th></tr></thead><tbody>${L.map(x => { const k = S.drivers[x.keep], dr = S.drivers[x.drop], lk = d => [d.uberUuid ? "Uber" : "", ...Object.keys(d.platformIds || {}).map(pName)].filter(Boolean).join(", ") || "–";
+      return `<tr><td><b>${esc(k.name)}</b></td><td class="small">${esc(lk(k))}</td><td>${esc(dr.name)}</td><td class="small">${esc(lk(dr))}</td><td><button class="btn sm" data-dupmerge="${esc(x.keep)}" data-drop="${esc(x.drop)}" ${S.canWrite ? "" : "disabled"}>Merge</button> <button class="btn sm ghost" data-dupswap="${esc(x.drop)}" data-drop="${esc(x.keep)}" title="Keep the other name instead">Keep other</button></td></tr>`; }).join("")}</tbody></table></div>` : '<p class="muted">No duplicates found.</p>'}</div>`;
+}
+document.addEventListener("click", async ev => {
+  const t = ev.target.closest && ev.target.closest("button"); if(!t) return;
+  if(t.dataset.dupopen != null){ S.dupOpen = !!t.dataset.dupopen; render(); return; }
+  if(t.dataset.dupmerge || t.dataset.dupswap){ const keep = t.dataset.dupmerge || t.dataset.dupswap, drop = t.dataset.drop; t.disabled = true; t.textContent = "Merging…";
+    const n = await mergeDrivers(keep, drop); await loadPeriod(); S.ledger = null; toast(n < 0 ? "Merge stopped – could not save." : `Merged – ${n} record(s) moved to ${(S.drivers[keep] || {}).name || "the driver"}.`); render(); return; }
+  if(t.dataset.dupall){ const L = driverDupes(); t.disabled = true; let done = 0;
+    for(const x of L){ t.textContent = `Merging ${done + 1} of ${L.length}…`; if(await mergeDrivers(x.keep, x.drop) < 0) break; done++; }
+    await loadPeriod(); S.ledger = null; toast(`${done} duplicate driver(s) merged.`); render(); return; }
+});
+window.dupesPanel = dupesPanel; window.driverDupes = driverDupes; window.mergeDrivers = mergeDrivers;

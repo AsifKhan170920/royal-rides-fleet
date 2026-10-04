@@ -35,6 +35,7 @@ function findDriver(name, lic){
   const L = norm(lic); if(L){ const d = Object.values(S.drivers).find(d => norm(d.licenceNo) === L); if(d) return d; }
   const t = nameWords(name); let best = null, sc = 0;
   Object.values(S.drivers).forEach(d => { const w = nameWords(d.name), c = w.filter(x => t.includes(x)).length, s = c / Math.min(w.length || 1, t.length || 1); if(c >= 2 && s >= 0.66 && s > sc){ sc = s; best = d; } });
+  if(!best && window.matchDriver){ const id = matchDriver(name, ""); if(id) best = S.drivers[id]; }
   return best;
 }
 const findVeh = (no, code) => { const n = norm(no); return Object.values(S.vehicles).find(v => { const p = norm(v.plate); return p === norm((code || "") + no) || p.replace(/^[a-z]+/, "") === n || p.replace(/\D/g, "") === n; }); };

@@ -448,6 +448,32 @@ function acctName(a){
   const id = Object.keys(S.platforms).find(k => clearingAcct(k) === a) || (STD_PLATFORMS.find(x => x[3] === a) || [])[0];
   return id ? pName(id) + " clearing (receivable)" : (ACCT[a] || a);
 }
+/* ---------- one driver, many spellings ----------
+   Uber: first name + surname ("Ahsan Khalid" + "Khalid"), Bolt: short name, Yango: other word order ("Siddique Saeed Ahmed"),
+   RTA: full name with the father's name ("Ahsan Khalid Muhammad Khalid"). Two names are the same person when every word
+   of the shorter is in the longer (any order, a one-letter slip allowed in long words: Coleman / Colemann), or the
+   shorter written together starts the longer (Abu Bakkar / Abubakkar Sedeeq Abdullah). */
+const nameWordsU = n => [...new Set(String(n || "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(w => w.length > 1))];
+function oneSlip(a, b){ if(Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, d = 0; while(i < a.length && j < b.length){ if(a[i] === b[j]){ i++; j++; continue; } if(++d > 1) return false; if(a.length > b.length) i++; else if(b.length > a.length) j++; else { i++; j++; } } return d + (a.length - i) + (b.length - j) <= 1; }
+const wordEq = (a, b) => a === b || (a.length >= 5 && b.length >= 5 && oneSlip(a, b));
+const NOT_A_PERSON = /\b(llc|l l c|limousine|transport|company|unnamed)\b/i;
+function sameName(a, b){
+  if(NOT_A_PERSON.test(a) || NOT_A_PERSON.test(b)) return false;
+  let x = nameWordsU(a), y = nameWordsU(b); if(x.length > y.length) [x, y] = [y, x];
+  if(x.length >= 2 && x.every(w => y.some(v => wordEq(w, v)))) return true;
+  const xj = x.join(""), yj = y.join(""); return x.length >= 2 && xj.length >= 8 && yj.startsWith(xj) && y.length > x.length;
+}
+// the existing driver for a name from a platform / file: same name exactly, else the one driver with the same name in
+// another spelling who is not yet linked to another account on that platform (several → the same first word decides)
+function matchDriver(name, pl){
+  if(!name) return ""; const n = norm(name), D = Object.values(S.drivers);
+  const ex = D.find(d => norm(d.name) === n || (d.aliases || []).some(x => norm(x) === n)); if(ex) return ex.id;   // a merged spelling stays known
+  const linked = d => pl === "uber" ? !!d.uberUuid : !!(pl && (d.platformIds || {})[pl]);
+  let c = D.filter(d => !linked(d) && sameName(name, d.name));
+  if(c.length > 1){ const f = nameWordsU(name)[0]; c = c.filter(d => nameWordsU(d.name)[0] === f); }
+  return c.length === 1 ? c[0].id : "";
+}
+window.sameName = sameName; window.matchDriver = matchDriver;
 function vehicleForTrip(t){
   if(t.p){ const v = Object.values(S.vehicles).find(v => norm(v.plate) === norm(t.p)); if(v) return v.id; }
   return vehAt(t.dr, t.d);   // the driver's car on the trip date
@@ -1064,7 +1090,7 @@ async function runImport(){
   Object.values(S.drivers).forEach(d => { if(pid(d)) byUuid[pid(d)] = d.id; byName[norm(d.name)] = d.id; });
   const newDrivers = {};
   for(const t of rows){
-    let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]);
+    let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]) || matchDriver(t.name, isUber ? "uber" : pl);
     const ids = t.uuid && !isUber ? {platformIds: {[pl]: t.uuid}} : {};
     if(!id){ id = "d-" + (norm(t.uuid).slice(0,12) || norm(t.name).slice(0,20) || uid()); byUuid[t.uuid] = id; byName[norm(t.name)] = id; newDrivers[id] = {name: t.name || "Unnamed driver", uberUuid: isUber ? (t.uuid || "") : "", ...ids, payModel:"", commissionPct:0, active:true, createdFromImport:true}; }
     else if(t.uuid && S.drivers[id] && !pid(S.drivers[id]) && !newDrivers[id]) newDrivers[id] = isUber ? {...S.drivers[id], uberUuid:t.uuid} : {...S.drivers[id], platformIds: {...(S.drivers[id].platformIds||{}), [pl]: t.uuid}};
@@ -1101,7 +1127,8 @@ async function runActivityImport(){
   const byUuid = {}, byName = {};
   Object.values(S.drivers).forEach(d => { if(d.uberUuid) byUuid[d.uberUuid] = d.id; byName[norm(d.name)] = d.id; });
   for(const t of a){
-    let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]);
+    let id = (t.uuid && byUuid[t.uuid]) || (t.name && byName[norm(t.name)]) || matchDriver(t.name, "uber");
+    if(id && t.uuid && !byUuid[t.uuid] && S.drivers[id] && !S.drivers[id].uberUuid){ byUuid[t.uuid] = id; const {id: _, ...b} = S.drivers[id]; S.drivers[id] = {id, ...b, uberUuid: t.uuid}; if(!await writeOk(S.db.doc("drivers/" + id).set({...b, uberUuid: t.uuid}))) return; }
     if(!id){ id = "d-" + (norm(t.name).slice(0,20) || norm(t.uuid).slice(0,12) || uid()); byUuid[t.uuid] = id; byName[norm(t.name)] = id;
       if(!await writeOk(S.db.doc("drivers/"+id).set({name: t.name || "Unnamed driver", uberUuid: t.uuid || "", payModel:"", commissionPct:0, active:true, createdFromImport:true}))) return; }
     t.dr = id;
@@ -1128,7 +1155,8 @@ function vDrivers(){
   const C = compute(); const list = Object.values(S.drivers).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const e = S.edit && S.edit.kind === "driver" ? S.edit : null; const d = e ? (S.drivers[e.id] || {}) : null;
   if(S.drvView && S.drivers[S.drvView] && window.driverDetail) return (e ? driverForm(e.id, d) : "") + driverDetail(S.drvView);
-  return `${e ? driverForm(e.id, d) : ""}${window.bulkFinPanel ? bulkFinPanel() : ""}${window.bulkPanel ? bulkPanel() : ""}
+  const dups = window.driverDupes ? driverDupes().length : 0;
+  return `${e ? driverForm(e.id, d) : ""}${dups && !S.dupOpen ? `<div class="banner">${dups} driver(s) look like duplicates of another (same person, other spelling from Uber / Bolt / Yango / RTA). <button class="btn sm primary" data-dupopen="1">Review &amp; merge</button></div>` : ""}${window.dupesPanel ? dupesPanel() : ""}${window.bulkFinPanel ? bulkFinPanel() : ""}${window.bulkPanel ? bulkPanel() : ""}
   <div class="section"><div class="head"><div><h2>Drivers</h2><p class="sub">Each driver has their own pay terms. Drivers found in an Uber import are added automatically and flagged until terms are set.</p></div><div class="row"><button class="btn" data-bfopen="1">Bulk salary finalisation</button><button class="btn" data-bulkopen="1">Bulk salary statements</button><button class="btn primary" data-edit="driver" data-id="">Add driver</button></div></div>
   ${list.length ? `<div class="tbl"><table><thead><tr><th>Driver</th><th>Uber ID</th><th>Car</th><th>Pay terms</th><th class="num">Trips</th><th class="num">Net earnings</th><th>Targets met</th><th></th></tr></thead><tbody>
   ${list.map(x=>{ const c = C.D[x.id] || {}; const tl = termList(x, DRV_TERMS), cur = termAt(tl, iso(new Date())); const terms = !(cur && cur.payModel) ? `<span class="pill warn">Terms needed</span>` : esc(drvTermText(cur)) + (tl.length > 1 ? ` <span class="pill">${tl.length} versions</span>` : "");
@@ -2093,17 +2121,17 @@ boot();
 </script>
 <script src="docs.js?v=6"></script>
 <script src="books.js?v=23"></script>
-<script src="drivers.js?v=24"></script>
+<script src="drivers.js?v=25"></script>
 <script src="pdc.js?v=2"></script>
 <script src="employees.js?v=13"></script>
 <script src="investors.js?v=4"></script>
 <script src="fleetfin.js?v=11"></script>
 <script src="loans.js?v=4"></script>
 <script src="rta.js?v=9"></script>
-<script src="rta-import.js?v=2"></script>
+<script src="rta-import.js?v=3"></script>
 <script src="reminders.js?v=5"></script>
 <script src="purchases.js?v=10"></script>
-<script src="platforms.js?v=19"></script>
+<script src="platforms.js?v=20"></script>
 <script src="settings.js?v=3"></script>
 
 </body></html>
