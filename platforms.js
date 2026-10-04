@@ -269,10 +269,12 @@ function preadDate(v){
   return UberParse.parseTripDate(v);
 }
 // platforms send a short name ("Ahsan Khalid"), the RTA record has the full one ("Ahsan Khalid Muhammad Khalid"):
-// same first word, every word of the short name in the full one, only one such driver, not yet linked on this platform
+// Yango puts the words in another order ("Siddique Saeed Ahmed"): every word of the platform name in the full one,
+// in any order; several such drivers → the one with the same first word; only one, not yet linked on this platform
 function driverByShortName(name, pl){
-  const w = x => String(x || "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean), nw = w(name); if(nw.length < 2) return "";
-  const c = Object.values(S.drivers).filter(d => { const dw = w(d.name); return dw[0] === nw[0] && nw.every(x => dw.includes(x)) && !((d.platformIds || {})[pl]); });
+  const w = x => [...new Set(String(x || "").toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean))], nw = w(name); if(nw.length < 2) return "";
+  let c = Object.values(S.drivers).filter(d => { const dw = w(d.name); return nw.every(x => dw.includes(x)) && !((d.platformIds || {})[pl]); });
+  if(c.length > 1) c = c.filter(d => w(d.name)[0] === nw[0]);
   return c.length === 1 ? c[0].id : "";
 }
 async function browserSync(pl, days){
