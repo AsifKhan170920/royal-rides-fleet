@@ -40,10 +40,11 @@ function tripShare(t){
 // the period's computation without the trips left out of this salary
 function selX(id, x0){
   const ex = new Set(selDoc(id).excluded || []); if(!x0 || !ex.size) return x0;
-  const x = {...x0}, out = S.trips.filter(t => t.dr === id && ex.has(t.id)), tips2 = setting("tipsToDriver", true);
+  const x = {...x0}, out = S.trips.filter(t => t.dr === id && ex.has(t.id)), tips2 = setting("tipsToDriver", true), bon2 = setting("bonusToDriver", true);
   out.forEach(t => { const net = (t.f||0) - (t.sf||0) - (t.tx||0), sh = tripShare(t), tp = tips2 ? (t.tp||0) : 0;
     x.fare -= t.f||0; x.fee -= t.sf||0; x.tax -= t.tx||0; x.net -= net; x.tip -= t.tp||0; x.tipsDue -= tp; x.cash -= t.c||0; x.ref -= t.rf||0; x.km -= t.km||0;
-    x.ent -= sh; x.balance -= sh + tp - (t.c||0); });
+    const bn = UberParse.bonusOf(t), bd = bon2 ? bn : 0; x.bonus = (x.bonus || 0) - bn; x.bonusDue = (x.bonusDue || 0) - bd;
+    x.ent -= sh; x.balance -= sh + tp + bd - (t.c||0); });
   x.n -= new Set(out.filter(t => t.tr || t.f).map(t => t.tr || t.id)).size; x.excluded = out.length;
   return x;
 }
@@ -89,7 +90,7 @@ function dTrips(id){
 }
 
 /* ---------- view / edit / delete a trip row (trips/{day}) ---------- */
-const TRIP_FIELDS = [["f","Fare"],["sf","Platform fee"],["tx","VAT on fee"],["tp","Tip"],["rf","Refunds / tolls"],["c","Cash collected"],["oe","Other earnings"],["po","Paid to bank"],["km","Distance (km)"]];
+const TRIP_FIELDS = [["f","Fare"],["sf","Platform fee"],["tx","VAT on fee"],["tp","Tip"],["rf","Refunds / tolls"],["c","Cash collected"],["bn","Bonus"],["oe","Other earnings (incl. bonus)"],["po","Paid to bank"],["km","Distance (km)"]];
 function tripEditor(){
   const e = S.tripEdit; if(!e) return "";
   const t = S.trips.find(x => x.id === e.id && x.d === e.day); if(!t){ S.tripEdit = null; return ""; }
@@ -198,12 +199,12 @@ function recovTbl(id, locked){
    arrives later with a date inside a finalised period (platform reports are by date and time, so a trip
    can be missed) is "unsettled": it is listed under the next salary computation and settled there. */
 const salaryOf = x => r2(num(x.balance) - num(x.books) + num(x.paid) - num(x.recv));
-const moneyRow = t => !!(t.f || t.sf || t.tx || t.tp || t.c || t.rf);
+const moneyRow = t => !!(t.f || t.sf || t.tx || t.tp || t.c || t.rf || UberParse.bonusOf(t));
 // what one trip row adds to the driver's salary: his share of the net, tips, less the cash he kept
 function tripEffect(t){
   const tm = termAt(termList(S.drivers[t.dr] || {}, DRV_TERMS), t.d) || {}, net = (t.f||0) - (t.sf||0) - (t.tx||0);
   const share = net * shareRate(tm, t.dr, t.d);
-  return share + (setting("tipsToDriver", true) ? (t.tp || 0) : 0) - (t.c || 0);   // not rounded per trip, so sums match the computation
+  return share + (setting("tipsToDriver", true) ? (t.tp || 0) : 0) + (setting("bonusToDriver", true) ? UberParse.bonusOf(t) : 0) - (t.c || 0);   // not rounded per trip, so sums match the computation
 }
 function settledMap(id){ const m = {}; Object.values(S.payroll).filter(p => p.driverId === id).forEach(p => (p.rows || []).forEach(r => m[r] = p)); return m; }
 // trips dated inside a finalised period (one that recorded its trips) but not settled by any period
@@ -250,7 +251,7 @@ function salaryModel(id, x, late, lateEff, T){
   const rentAmt = r2(num(x.rentAmt)), rta = r2(num(x.rta)), base = r2(mode === "before" ? x.ent - x.deduct : x.ent);
   const coShare = r2(netEarn - base - rentAmt - rta);
   const pens = Object.values(S.drvAdj || {}).filter(a => a.driverId === id && a.kind === "penalty" && a.date >= S.from && a.date <= S.to);
-  const salary = r2(base + x.tipsDue - num(x.penalty));
+  const salary = r2(base + x.tipsDue + num(x.bonusDue) - num(x.penalty));
   const items = Object.values(S.ditems).filter(it => it.driverId === id).map(it => ({it, amt: r2(sum(itemPlan(it).inst.filter(q => q.date >= S.from && q.date <= S.to), q => q.amt) + sum((it.repayments || []).filter(r => r.paidTo === "2100" && r.date >= S.from && r.date <= S.to), r => num(r.amount)))})).filter(o => o.amt);
   const viaInc = r2(sum(S.entries.filter(e => e.driverId === id && e.type === "income" && e.paidFrom === "driver"), e => num(e.amount) + num(e.vat))), viaExp = r2(x.viaDriver + viaInc);
   const entitled = r2(salary - x.inst - x.adv - (mode === "after" ? x.deduct : 0) + viaExp);
@@ -258,7 +259,7 @@ function salaryModel(id, x, late, lateEff, T){
   const paidIn = r2(x.balance - salaryOf(x)), payable = T ? r2(T.before + due + paidIn) : null;
   // cash reconciliation
   const otherGross = r2(sum(S.entries.filter(e => e.driverId === id && e.type === "income"), e => num(e.amount) + num(e.vat)));
-  const receivable = r2(x.fare + x.tip + x.ref + otherGross), app = r2(x.fare + x.tip + x.ref - x.cash), otherCo = r2(otherGross - viaInc);
+  const receivable = r2(x.fare + x.tip + x.ref + num(x.bonus) + otherGross), app = r2(x.fare + x.tip + x.ref + num(x.bonus) - x.cash), otherCo = r2(otherGross - viaInc);
   const expected = r2(x.cash + viaInc - x.card);
   // cash the driver gave back: "Received from driver" entries, receipts from him (Receipts → driver → cash handed over), and company costs he paid from that cash
   const fromReceipts = window.BOOKS ? sum(BOOKS.driverLines(S.entries, id).filter(l => l.ref && l.ref.type === "receipt"), l => l.cr || 0) : 0;
@@ -292,6 +293,7 @@ function salaryRows(M){
   if(model === "tiered" && x.tierParts && M.mode === "after") x.tierParts.forEach(p => S4.push(L(`${p.pct}% on ${fmt(p.base)} (${p.label})`, r2(p.amt))));
   S4.push(L(payLabel, M.base));
   if(x.tipsDue) S4.push(L("Tips from platforms", x.tipsDue));
+  if(num(x.bonusDue)) S4.push(L("Bonus from platform <span class=\"sub\">competitions, quests, incentives</span>", r2(x.bonusDue)));
   M.pens.forEach(a => S4.push({...L(`Violation deduction${a.pct ? " " + num(a.pct) + "%" : ""}${a.reason ? " – " + esc(a.reason) : ""}`, -num(a.amount)), pen: a.id}));
   S4.push(L("Salary for the period", M.salary, "g"));
   const S5 = [L("Salary for the period", M.salary)];
@@ -474,7 +476,7 @@ async function printSalary(id){
 }
 
 function dSalary(id){
-  const C = compute(), x = selX(id, C.D[id]) || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
+  const C = compute(), x = selX(id, C.D[id]) || {n:0, fare:0, fee:0, tax:0, net:0, ent:0, tipsDue:0, bonus:0, bonusDue:0, cash:0, card:0, deduct:0, adv:0, inst:0, viaDriver:0, books:0, paid:0, recv:0, balance:0, daysWorked:0, rentDays:0};
   const runs = Object.values(S.payroll).filter(p => p.driverId === id).sort((a,b) => b.from.localeCompare(a.from));
   const overlap = runs.find(p => p.from <= S.to && p.to >= S.from), same = runs.find(p => p.from === S.from && p.to === S.to);
   const next = runs.length ? addDays(runs[0].to, 1) : null, ready = historyReady(), T = ready ? drvTx(id) : null;
@@ -522,7 +524,7 @@ async function finalise(id){
   if(!historyReady()){ toast("Still loading the history – try again in a moment."); return; }
   const x = selX(id, compute().D[id]) || {}, T = drvTx(id), late = lateSelected(id) || [], lateEff = r2(sum(late, tripEffect)), exSet = new Set(selDoc(id).excluded || []);
   const periodTrips = S.trips.filter(t => t.dr === id && moneyRow(t) && !exSet.has(t.id) && !settleStatus(t).ok);
-  const k = ["n","daysWorked","fare","fee","tax","net","ent","tipsDue","cash","card","deduct","adv","inst","viaDriver","books","paid","recv","balance"];
+  const k = ["n","daysWorked","fare","fee","tax","net","ent","tipsDue","bonusDue","cash","card","deduct","adv","inst","viaDriver","books","paid","recv","balance"];
   const rec = {driverId: id, from: S.from, to: S.to, termsText: x.termsText || "", ...Object.fromEntries(k.map(f => [f, r2(num(x[f]))])),
     salary: r2(salaryOf(x) + lateEff), nonTrip: r2(salaryOf(x) - sum(periodTrips, tripEffect)), lateEffect: lateEff,
     entitled: (() => { const M = salaryModel(id, x, late, lateEff, T); return r2(M.due + x.cash + M.viaInc - x.card + sum(late, t => t.c || 0)); })(),

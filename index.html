@@ -198,7 +198,7 @@ const EXP_CATS = {
 const ACCT = {
   "1100":"Bank","1110":"Cash in hand","1120":"Card machine receipts (not yet in bank)","1150":"Uber clearing (receivable)","1160":"Cash held by drivers","1170":"Driver loans & recoverables","1300":"Input VAT",
   "2100":"Driver accounts (payable / receivable)","2150":"Card receipts – terminal not assigned","2200":"Investor payables","2300":"Output VAT",
-  "4000":"Ride fare revenue (platforms)","4010":"Toll & fee recoveries","4020":"Platform other earnings / incentives","4100":"Direct booking revenue","4210":"Deductions from drivers (violations)",
+  "4000":"Ride fare revenue (platforms)","4010":"Toll & fee recoveries","4020":"Platform other earnings","4025":"Platform bonuses / incentives","4100":"Direct booking revenue","4210":"Deductions from drivers (violations)",
   "5000":"Platform service fee / commission","5010":"Non-recoverable VAT","5100":"Driver earnings share","5900":"Investor profit share",
   ...EXP_CATS
 };
@@ -539,9 +539,9 @@ function termsInPeriod(list, from, to, text){
 function compute(){
   const from = S.from, to = S.to, calDays = daysBetween(from,to);
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
-  const tips2drv = setting("tipsToDriver", true);
+  const tips2drv = setting("tipsToDriver", true), bon2drv = setting("bonusToDriver", true);
   const D = {}, V = {}, DT = {};
-  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0, byDay:{}, card:0, rentAmt:0, rta:0, rtaDays:0, other:0, otherShare:0};
+  const dget = id => D[id] ||= {id, fare:0, fee:0, tax:0, tip:0, ref:0, cash:0, oe:0, bonus:0, n:0, km:0, days:new Set(), byV:{}, trips:new Set(), entTrip:0, dayNet:{}, rentDays:0, byDay:{}, card:0, rentAmt:0, rta:0, rtaDays:0, other:0, otherShare:0};
   const vget = id => V[id] ||= {id, fare:0, fee:0, tax:0, ref:0, n:0, km:0, drvCost:0, exp:0, expList:[], trips:new Set(), seg:{}};
   const vday = (vid, day) => vget(vid).seg[day] ||= {fare:0, fee:0, tax:0, ref:0, drv:0, exp:0, rm:0};
   const dTerms = id => DT[id] ||= termList(S.drivers[id] || {}, DRV_TERMS);
@@ -556,7 +556,8 @@ function compute(){
   for(const t of S.trips){
     const d = dget(t.dr||"unknown"); const vid = vehicleForTrip(t) || "unassigned"; const v = vget(vid);
     const trip = t.tr || ((t.f||t.sf||t.tp) ? t.id : ""), firstRow = trip && !d.trips.has(trip);
-    d.fare += t.f||0; d.fee += t.sf||0; d.tax += t.tx||0; d.tip += t.tp||0; d.ref += t.rf||0; d.cash += t.c||0; d.oe += t.oe||0;
+    d.fare += t.f||0; d.fee += t.sf||0; d.tax += t.tx||0; d.tip += t.tp||0; d.ref += t.rf||0; d.cash += t.c||0; d.oe += t.oe||0; const bn = UberParse.bonusOf(t); d.bonus += bn;
+    if(bn && t.d){ const bb = d.byDay[t.d] ||= {share:0, tip:0, cash:0, n:0}; bb.bonus = (bb.bonus || 0) + bn; }
     if(trip){ d.trips.add(trip); d.days.add(t.d); } if(firstRow) d.km += t.km||0; d.n = d.trips.size;
     const net = (t.f||0) - (t.sf||0) - (t.tx||0); d.byV[vid] = (d.byV[vid]||0) + net;
     v.fare += t.f||0; v.fee += t.sf||0; v.tax += t.tx||0; v.ref += t.rf||0; if(firstRow) v.km += t.km||0; if(trip) v.trips.add(trip); v.n = v.trips.size;
@@ -604,13 +605,14 @@ function compute(){
     d.paid = sum(mine.filter(e => e.type === "driver_payment"), e => num(e.amount));
     d.recv = sum(mine.filter(e => e.type === "driver_receipt"), e => num(e.amount));
     d.tipsDue = tips2drv ? d.tip : 0;
+    d.bonusDue = bon2drv ? d.bonus : 0;   // platform bonuses / competition prizes earned by the driver
     const items = Object.values(S.ditems||{}).filter(it => it.driverId === d.id);
     d.inst = sum(items, it => sum(itemPlan(it).inst.filter(x => x.date >= from && x.date <= to), x => x.amt) + sum((it.repayments || []).filter(r => r.paidTo === "2100" && r.date >= from && r.date <= to), r => num(r.amount)));   // instalments + extra recoveries through the salary
     d.loanOut = sum(items, it => itemOutstanding(it, to));
     // company costs the driver paid from his cash (+), company money he collected (−)
     d.viaDriver = sum(mine.filter(e => e.paidFrom === "driver" && e.type === "expense"), e => num(e.amount) + num(e.vat)) - sum(mine.filter(e => e.paidFrom === "driver" && e.type === "income"), e => num(e.amount) + num(e.vat));
-    d.balance = d.ent + d.tipsDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver + d.card - d.penalty + (d.books = window.BOOKS ? BOOKS.driverNet(S.entries, d.id) : 0);
-    d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) - d.ent;
+    d.balance = d.ent + d.tipsDue + d.bonusDue - d.cash - d.deduct - d.adv - d.paid + d.recv - d.inst + d.viaDriver + d.card - d.penalty + (d.books = window.BOOKS ? BOOKS.driverNet(S.entries, d.id) : 0);
+    d.contrib = d.net + d.ref + (tips2drv ? 0 : d.tip) + (bon2drv ? 0 : d.bonus) - d.ent;
   }
   // car expenses, by date
   // the company's part of a car expense (all of it, or what is left after the driver's share)
@@ -667,8 +669,8 @@ function journal(C){
   const add = (acct, dr, cr, memo, date) => { dr = r2(dr); cr = r2(cr); if(dr || cr) L.push({acct, dr, cr, memo, date: date || day || S.to, ...(add.src ? {ref: add.src} : {})}); };
   add.src = null;   // set by whoever posts: an entry, a document, a payslip, a loan, a fine…
   const feeVatRec = setting("feeVatRecoverable", false), inVatRec = setting("inputVatRecoverable", false), fareStd = setting("fareVat","exempt") === "standard";
-  const tips2drv = setting("tipsToDriver", true);
-  const tot = ts => ({f:sum(ts,t=>t.f), sf:sum(ts,t=>t.sf), tx:sum(ts,t=>t.tx), tp:sum(ts,t=>t.tp), rf:sum(ts,t=>t.rf), c:sum(ts,t=>t.c), oe:sum(ts,t=>t.oe), po:sum(ts,t=>t.po)});
+  const tips2drv = setting("tipsToDriver", true), bon2drv = setting("bonusToDriver", true);
+  const tot = ts => ({f:sum(ts,t=>t.f), sf:sum(ts,t=>t.sf), tx:sum(ts,t=>t.tx), tp:sum(ts,t=>t.tp), rf:sum(ts,t=>t.rf), c:sum(ts,t=>t.c), oe:sum(ts,t=>t.oe), bn:sum(ts,t=>UberParse.bonusOf(t)), po:sum(ts,t=>t.po)});
   const T = tot(S.trips);
   const memoT = "Platform trips";
   // each platform's receivable: what it collected for us, less its fees and the cash drivers kept, less what it paid to the bank
@@ -680,7 +682,8 @@ function journal(C){
     const into = window.PLT && PLT.confirm(pl) ? "1158" : bank;
     ts.filter(t => t.po).forEach(t => { add(into, t.po, 0, nm + " payout to bank", t.d); add(c, 0, t.po, nm + " payout to bank", t.d); });
   }
-  add("4020", 0, T.oe, "Platform other earnings");
+  add("4020", 0, T.oe - T.bn, "Platform other earnings");
+  add(bon2drv ? "2100" : "4025", 0, T.bn, "Platform bonuses / incentives");
   add("1160", T.c, 0, memoT);
   add("5000", T.sf, 0, memoT);
   add(feeVatRec ? "1300" : "5010", T.tx, 0, memoT);
@@ -1021,7 +1024,7 @@ function vImport(fixed){
   }
   if(st && st.kind === "payments"){
     const m = st.map; const prev = previewRows();
-    const T = {f:sum(prev,t=>t.f), sf:sum(prev,t=>t.sf), tx:sum(prev,t=>t.tx), tp:sum(prev,t=>t.tp), rf:sum(prev,t=>t.rf), c:sum(prev,t=>t.c), oe:sum(prev,t=>t.oe), po:sum(prev,t=>t.po)};
+    const T = {f:sum(prev,t=>t.f), sf:sum(prev,t=>t.sf), tx:sum(prev,t=>t.tx), tp:sum(prev,t=>t.tp), rf:sum(prev,t=>t.rf), c:sum(prev,t=>t.c), oe:sum(prev,t=>t.oe), bn:sum(prev,t=>t.bn||0), po:sum(prev,t=>t.po)};
     const ours = UberParse.balanceOf(prev), trips = new Set(prev.filter(t=>t.tr).map(t=>t.tr)).size;
     const days = [...new Set(prev.map(t=>t.d))].sort();
     const bad = prev.filter(t=>!t.d).length;
@@ -1033,7 +1036,7 @@ function vImport(fixed){
       <div class="kpi"><div class="l">Fare</div><div class="v">${fmt(T.f)}</div></div><div class="kpi"><div class="l">Platform fee</div><div class="v">${fmt(T.sf)}</div></div>
       <div class="kpi"><div class="l">VAT on fee</div><div class="v">${fmt(T.tx)}</div></div><div class="kpi"><div class="l">Tips</div><div class="v">${fmt(T.tp)}</div></div>
       <div class="kpi"><div class="l">Refunds</div><div class="v">${fmt(T.rf)}</div></div><div class="kpi"><div class="l">Cash</div><div class="v">${fmt(T.c)}</div></div>
-      <div class="kpi"><div class="l">Other earnings</div><div class="v">${fmt(T.oe)}</div></div><div class="kpi"><div class="l">Paid to bank</div><div class="v">${fmt(T.po)}</div></div>
+      <div class="kpi"><div class="l">Bonus</div><div class="v">${fmt(T.bn)}</div><div class="n">competitions, quests, incentives</div></div><div class="kpi"><div class="l">Other earnings</div><div class="v">${fmt(T.oe - T.bn)}</div></div><div class="kpi"><div class="l">Paid to bank</div><div class="v">${fmt(T.po)}</div></div>
     </div>
     ${st.paid != null ? (Math.abs(ours - st.paid) < 0.05 ? `<div class="banner info">✓ Checked: these rows add up to the report's “Paid to you” total of AED ${fmt(st.paid)}.</div>`
       : `<div class="banner">These rows add up to AED ${fmt(ours)}, but the report's “Paid to you” total is AED ${fmt(st.paid)} – a difference of <b>AED ${fmt(r2(st.paid - ours))}</b>. A column may be missing (a charge or earning the software has no field for) or counted twice – check the mapping below.
@@ -1135,7 +1138,7 @@ async function runImport(){
   for(const [day, list] of Object.entries(byDay)){
     const ref = S.db.doc("trips/"+day); const snap = await ref.get(); const existing = snap.exists ? (snap.data().rows||{}) : {};
     const merged = {...existing};
-    for(const t of list){ if(existing[t.id]){ dup++; continue; } merged[t.id] = {tr:t.tr||"", d:t.d, t:t.t, dr:t.dr, p:t.p, f:t.f, sf:t.sf, tx:t.tx, tp:t.tp, rf:t.rf, c:t.c, oe:t.oe||0, po:t.po||0, km:t.km, ...(isUber ? {} : {pl})}; added++; }
+    for(const t of list){ if(existing[t.id]){ dup++; continue; } merged[t.id] = {tr:t.tr||"", d:t.d, t:t.t, dr:t.dr, p:t.p, f:t.f, sf:t.sf, tx:t.tx, tp:t.tp, rf:t.rf, c:t.c, oe:t.oe||0, bn:t.bn||0, po:t.po||0, km:t.km, ...(isUber ? {} : {pl})}; added++; }
     if(!await writeOk(ref.set({date:day, rows:merged}))) return;
   }
   const days = Object.keys(byDay).sort();
@@ -1510,17 +1513,18 @@ async function loadLedger(){
   render();
 }
 function ledgerLines(drId){
-  const L = S.ledger, start = setting("ledgerStart", "2026-09-01"), tips2drv = setting("tipsToDriver", true);
+  const L = S.ledger, start = setting("ledgerStart", "2026-09-01"), tips2drv = setting("tipsToDriver", true), bon2drv = setting("bonusToDriver", true);
   const keep = {trips:S.trips, entries:S.entries, from:S.from, cardtx:S.cardtx};
   S.trips = L.trips; S.entries = L.entries; S.from = start; S.cardtx = L.cards || [];
   let C; try{ C = compute(); } finally { S.trips = keep.trips; S.entries = keep.entries; S.from = keep.from; S.cardtx = keep.cardtx; }
   const d = C.D[drId] || {byDay:{}}, lines = [], G = {};
   const gk = day => { let k = S.ledgerGroup === "day" ? day : S.ledgerGroup === "month" ? monthEnd(day.slice(0,7)) : weekEnd(day);
     if(day < S.from && k >= S.from) k = addDays(S.from, -1); if(k > S.to) k = S.to; return k; };
-  Object.entries(d.byDay).forEach(([day, b]) => { const g = G[gk(day)] ||= {share:0, tip:0, cash:0, n:0, card:0, a:day, z:day}; g.card += b.card || 0; g.share += b.share; g.tip += b.tip; g.cash += b.cash; g.n += b.n; if(day < g.a) g.a = day; if(day > g.z) g.z = day; });
+  Object.entries(d.byDay).forEach(([day, b]) => { const g = G[gk(day)] ||= {share:0, tip:0, cash:0, n:0, card:0, bonus:0, a:day, z:day}; g.card += b.card || 0; g.bonus += b.bonus || 0; g.share += b.share; g.tip += b.tip; g.cash += b.cash; g.n += b.n; if(day < g.a) g.a = day; if(day > g.z) g.z = day; });
   Object.entries(G).forEach(([k, g]) => { const per = g.a === g.z ? dmyS(g.a) : dmyS(g.a) + " – " + dmyS(g.z);
     if(r2(g.share)) lines.push({date:k, desc:`${g.share >= 0 ? "Earnings share" : "Rent / charges over earnings"} · ${g.n} trips · ${per}`, ...(g.share >= 0 ? {cr:g.share} : {dr:-g.share})});
     if(tips2drv && r2(g.tip)) lines.push({date:k, desc:`Tips · ${per}`, cr:g.tip});
+    if(bon2drv && r2(g.bonus)) lines.push({date:k, desc:`Bonus from platform · ${per}`, cr:g.bonus});
     if(r2(g.card)) lines.push({date:k, desc:`Card payments on company terminal · ${per}`, cr:g.card});
     if(r2(g.cash)) lines.push({date:k, desc:`Cash collected from riders · ${per}`, dr:g.cash}); });
   L.entries.filter(e => e.driverId === drId).forEach(e => {
@@ -1811,15 +1815,15 @@ function vSettlement(){
   const C = compute(); const ds = Object.values(C.D).filter(d => d.n || d.adv || d.inst || d.viaDriver || d.card || d.paid || d.deduct || d.recv || (S.drivers[d.id] && S.drivers[d.id].active !== false && d.ent)).sort((a,b)=>dName(a.id).localeCompare(dName(b.id)));
   if(!ds.length) return `<div class="empty"><b>Nothing to settle for this period</b>Import Uber trips for these dates first.</div>`;
   return `<div class="section"><div class="head"><div><h2>Driver settlement · ${esc(S.from)} to ${esc(S.to)}</h2><p class="sub">Positive balance = pay the driver. Negative = the driver holds more cash than they earned and owes the company.</p></div><button class="btn" id="expSettle">Export CSV</button></div>
-  <div class="tbl"><table><thead><tr><th>Driver</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare</th><th class="num">Uber fee+VAT</th><th class="num">Net</th><th class="num">Driver share</th><th class="num">Tips</th><th class="num">Cash held</th><th class="num">Deductions</th><th class="num">Advances</th><th class="num">Card on terminal</th><th class="num">Loan instalments</th><th class="num">Driver's cash used</th><th class="num">Paid</th><th class="num">Received</th><th class="num">Balance</th><th class="num">Company contribution</th></tr></thead><tbody>
-  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small" style="white-space:normal;min-width:160px">${d.termsText && d.termsText !== "No terms" ? esc(d.termsText) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.card)}</td><td class="num">${fmt(d.inst)}</td><td class="num">${aed(d.viaDriver)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
-  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(ds,d=>d.n)}</td><td class="num">${fmt(sum(ds,d=>d.fare))}</td><td class="num">${fmt(sum(ds,d=>d.fee+d.tax))}</td><td class="num">${fmt(sum(ds,d=>d.net))}</td><td class="num">${fmt(sum(ds,d=>d.ent))}</td><td class="num">${fmt(sum(ds,d=>d.tipsDue))}</td><td class="num">${fmt(sum(ds,d=>d.cash))}</td><td class="num">${fmt(sum(ds,d=>d.deduct))}</td><td class="num">${fmt(sum(ds,d=>d.adv))}</td><td class="num">${fmt(sum(ds,d=>d.card))}</td><td class="num">${fmt(sum(ds,d=>d.inst))}</td><td class="num">${fmt(sum(ds,d=>d.viaDriver))}</td><td class="num">${fmt(sum(ds,d=>d.paid))}</td><td class="num">${fmt(sum(ds,d=>d.recv))}</td><td class="num">${fmt(sum(ds,d=>d.balance))}</td><td class="num">${fmt(sum(ds,d=>d.contrib))}</td></tr></tfoot></table></div>
-  <p class="small muted" style="margin-top:8px">Balance = driver share + tips − cash held + card payments taken on the company terminal − deductions − advances − loan instalments ± driver's cash used for company costs or collections − payments + amounts received from the driver. This is the movement for the period; the running balance and loans are on the Driver ledger page. Company contribution = net + refunds − driver share.</p></div>
+  <div class="tbl"><table><thead><tr><th>Driver</th><th>Terms</th><th class="num">Trips</th><th class="num">Fare</th><th class="num">Uber fee+VAT</th><th class="num">Net</th><th class="num">Driver share</th><th class="num">Tips</th><th class="num">Bonus</th><th class="num">Cash held</th><th class="num">Deductions</th><th class="num">Advances</th><th class="num">Card on terminal</th><th class="num">Loan instalments</th><th class="num">Driver's cash used</th><th class="num">Paid</th><th class="num">Received</th><th class="num">Balance</th><th class="num">Company contribution</th></tr></thead><tbody>
+  ${ds.map(d=>`<tr><td>${esc(dName(d.id))}</td><td class="small" style="white-space:normal;min-width:160px">${d.termsText && d.termsText !== "No terms" ? esc(d.termsText) : '<span class="pill warn">Terms needed</span>'}</td><td class="num">${d.n}</td><td class="num">${fmt(d.fare)}</td><td class="num">${fmt(d.fee+d.tax)}</td><td class="num">${fmt(d.net)}</td><td class="num">${aed(d.ent)}</td><td class="num">${fmt(d.tipsDue)}</td><td class="num">${fmt(d.bonusDue)}</td><td class="num">${fmt(d.cash)}</td><td class="num">${fmt(d.deduct)}</td><td class="num">${fmt(d.adv)}</td><td class="num">${fmt(d.card)}</td><td class="num">${fmt(d.inst)}</td><td class="num">${aed(d.viaDriver)}</td><td class="num">${fmt(d.paid)}</td><td class="num">${fmt(d.recv)}</td><td class="num"><b>${aed(d.balance)}</b></td><td class="num">${aed(d.contrib)}</td></tr>`).join("")}
+  </tbody><tfoot><tr><td colspan="2">Total</td><td class="num">${sum(ds,d=>d.n)}</td><td class="num">${fmt(sum(ds,d=>d.fare))}</td><td class="num">${fmt(sum(ds,d=>d.fee+d.tax))}</td><td class="num">${fmt(sum(ds,d=>d.net))}</td><td class="num">${fmt(sum(ds,d=>d.ent))}</td><td class="num">${fmt(sum(ds,d=>d.tipsDue))}</td><td class="num">${fmt(sum(ds,d=>d.bonusDue))}</td><td class="num">${fmt(sum(ds,d=>d.cash))}</td><td class="num">${fmt(sum(ds,d=>d.deduct))}</td><td class="num">${fmt(sum(ds,d=>d.adv))}</td><td class="num">${fmt(sum(ds,d=>d.card))}</td><td class="num">${fmt(sum(ds,d=>d.inst))}</td><td class="num">${fmt(sum(ds,d=>d.viaDriver))}</td><td class="num">${fmt(sum(ds,d=>d.paid))}</td><td class="num">${fmt(sum(ds,d=>d.recv))}</td><td class="num">${fmt(sum(ds,d=>d.balance))}</td><td class="num">${fmt(sum(ds,d=>d.contrib))}</td></tr></tfoot></table></div>
+  <p class="small muted" style="margin-top:8px">Balance = driver share + tips + bonus − cash held + card payments taken on the company terminal − deductions − advances − loan instalments ± driver's cash used for company costs or collections − payments + amounts received from the driver. This is the movement for the period; the running balance and loans are on the Driver ledger page. Company contribution = net + refunds − driver share.</p></div>
   <div class="grid2">${ds.filter(d=>d.n || d.inst || d.adv).map(d=>`<div class="statement"><h3>${esc(dName(d.id))}</h3><div class="small muted">${esc(S.from)} to ${esc(S.to)} · ${d.n} trips · ${d.daysWorked} days</div>
     <div class="ln"><span>Fares</span><span>${fmt(d.fare)}</span></div><div class="ln"><span>Uber service fee</span><span>-${fmt(d.fee)}</span></div><div class="ln"><span>VAT on fee</span><span>-${fmt(d.tax)}</span></div>
     <div class="ln"><span>Net earnings</span><span>${fmt(d.net)}</span></div>
     <div class="ln"><span>Your share (${esc(d.termsText)}${d.rentDays ? `, rent for ${d.rentDays} days` : ""})</span><span>${fmt(d.ent)}</span></div>
-    <div class="ln"><span>Tips</span><span>${fmt(d.tipsDue)}</span></div><div class="ln"><span>Cash you collected</span><span>-${fmt(d.cash)}</span></div>
+    <div class="ln"><span>Tips</span><span>${fmt(d.tipsDue)}</span></div>${d.bonusDue ? `<div class="ln"><span>Bonus from platform</span><span>${fmt(d.bonusDue)}</span></div>` : ""}<div class="ln"><span>Cash you collected</span><span>-${fmt(d.cash)}</span></div>
     ${d.deduct?`<div class="ln"><span>Fines / tolls deducted</span><span>-${fmt(d.deduct)}</span></div>`:""}${d.adv?`<div class="ln"><span>Advances</span><span>-${fmt(d.adv)}</span></div>`:""}${d.books?`<div class="ln"><span>Receipts, payments & journal entries</span><span>${d.books < 0 ? "-" : ""}${fmt(Math.abs(d.books))}</span></div>`:""}${d.card?`<div class="ln"><span>Card payments on company terminal</span><span>${fmt(d.card)}</span></div>`:""}${d.inst?`<div class="ln"><span>Loan / advance / shared-cost instalments</span><span>-${fmt(d.inst)}</span></div>`:""}${d.viaDriver?`<div class="ln"><span>${d.viaDriver > 0 ? "Company costs you paid from your cash" : "Company money you collected"}</span><span>${d.viaDriver > 0 ? "" : "-"}${fmt(Math.abs(d.viaDriver))}</span></div>`:""}${d.paid?`<div class="ln"><span>Already paid</span><span>-${fmt(d.paid)}</span></div>`:""}${d.recv?`<div class="ln"><span>Received from you</span><span>${fmt(d.recv)}</span></div>`:""}
     <div class="ln tot"><span>${d.balance >= 0 ? "Payable to you" : "You owe the company"}</span><span>AED ${fmt(Math.abs(d.balance))}</span></div>${d.loanOut ? `<div class="small muted" style="margin-top:6px">Loan balance still to recover after ${esc(dmyS(S.to))}: AED ${fmt(d.loanOut)}</div>` : ""}</div>`).join("")}</div>`;
 }
@@ -1875,6 +1879,7 @@ function vSettings(){
     <div class="f"><label for="stc">Completion (%)</label><input id="stc" name="tgCompletion" type="number" step="1" value="${esc(s.tgCompletion ?? 80)}"></div>
     <div class="f"><label for="srd">Remind before visa / EID / document expiry (days)</label><input id="srd" name="remindDays" type="number" step="1" value="${esc(s.remindDays ?? 30)}"></div>
     <div class="f"><label for="stp">Tips belong to</label><select id="stp" name="tipsToDriver">${opts({true:"Driver", false:"Company"}, String(s.tipsToDriver ?? true))}</select></div>
+    <div class="f"><label for="sbn">Platform bonuses (competitions, quests) belong to</label><select id="sbn" name="bonusToDriver">${opts({true:"Driver", false:"Company"}, String(s.bonusToDriver ?? true))}</select></div>
     <div class="row wide"><button class="btn primary" type="submit" ${S.canWrite && S.db?"":"disabled"}>Save settings</button></div>
   </form></div>
   <div class="section"><h2>How data flows</h2><div class="tbl"><table><thead><tr><th>Source</th><th>Where it goes</th></tr></thead><tbody>
@@ -1938,7 +1943,7 @@ document.addEventListener("click", async ev => {
     return;
   }
   if(t.id === "expLedger" || t.dataset.legacy === "expLedger"){ const R = window.drvTx ? drvTx(S.ledgerDriver) : ledgerLines(S.ledgerDriver); saveCsv(`driver_ledger_${norm(dName(S.ledgerDriver))}_${S.from}_${S.to}.csv`, [["Date","Description","Debit (driver owes)","Credit (owed to driver)","Balance"], [S.from, "Balance brought forward", "", "", r2(R.before).toFixed(2)], ...R.shown.map(l => [l.date, l.desc, l.dr ? r2(l.dr).toFixed(2) : "", l.cr ? r2(l.cr).toFixed(2) : "", r2(l.bal).toFixed(2)])]); return; }
-  if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Cash held","Deductions","Advances","Card on terminal","Loan instalments","Driver's cash used","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.cash,d.deduct,d.adv,d.card,d.inst,d.viaDriver,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
+  if(t.id === "expSettle"){ const C = compute(); saveCsv(`driver_settlement_${S.from}_${S.to}.csv`, [["Driver","Trips","Fare","Uber fee","VAT","Net","Driver share","Tips","Bonus","Cash held","Deductions","Advances","Card on terminal","Loan instalments","Driver's cash used","Paid","Received","Balance"], ...Object.values(C.D).filter(d=>d.n||d.balance).map(d => [dName(d.id), d.n, ...[d.fare,d.fee,d.tax,d.net,d.ent,d.tipsDue,d.bonusDue,d.cash,d.deduct,d.adv,d.card,d.inst,d.viaDriver,d.paid,d.recv,d.balance].map(x=>r2(x).toFixed(2))])]); return; }
 });
 /* Reports: every download goes through saveCsv(name, rows); the button pressed (data-fmt) picks the format –
    "csv", "xlsx" (Excel, SheetJS) or "pdf" (table on the letterhead, landscape for wide reports). */
@@ -2083,7 +2088,7 @@ document.addEventListener("submit", async ev => {
   ev.preventDefault(); const f = ev.target; const fd = Object.fromEntries(new FormData(f).entries());
   const numF = ["commissionPct","tier1Upto","tier1Pct","tier2Upto","tier2Pct","tier3Pct","rentPerDay","salary","rtaPerDay","invPct","invFixed","mgmtFixed","mgmtPct","amount","vat","creditDays","openingBalance"];
   numF.forEach(k => { if(k in fd) fd[k] = fd[k] === "" ? (f.id === "fPlatform" && k === "commissionPct" ? "" : 0) : num(fd[k]); });
-  ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver","ownTargets"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
+  ["active","recover","feeVatRecoverable","inputVatRecoverable","tipsToDriver","bonusToDriver","ownTargets"].forEach(k => { if(k in fd) fd[k] = fd[k] === "true"; });
   if(!S.db) return;
   if(f.id === "fDriver" || f.id === "fVehicle" || f.id === "fInvestor" || f.id === "fPlatform" || f.id === "fTerminal"){
     const col = {fDriver:"drivers", fVehicle:"vehicles", fInvestor:"investors", fPlatform:"platforms", fTerminal:"terminals"}[f.id];

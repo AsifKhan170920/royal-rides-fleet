@@ -114,7 +114,7 @@ async function importCsv(file) {
     for (const [day, list] of Object.entries(byDay)) {
       const snap = await getDoc(ref('trips', day)); const existing = snap.exists() ? (snap.data().rows || {}) : {};
       const merged = { ...existing };
-      for (const t of list) { if (existing[t.id]) { dup++; continue; } merged[t.id] = { tr: t.tr || '', d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km }; added++; }
+      for (const t of list) { if (existing[t.id]) { dup++; continue; } merged[t.id] = { tr: t.tr || '', d: t.d, t: t.t, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, bn: t.bn || 0, po: t.po || 0, km: t.km }; added++; }
       await setDoc(ref('trips', day), { date: day, rows: merged });
     }
     label = 'Uber Sync: ';

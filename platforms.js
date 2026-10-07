@@ -363,7 +363,7 @@ async function browserSync(pl, days){
     const ref = S.db.doc("trips/" + day), snap = await ref.get(), ex = snap.exists ? (snap.data().rows || {}) : {}, merged = {...ex};
     for(const t of L){ if(ex[t.id]){ dup++; const e = ex[t.id], fix = {};
         // a row already there gets what it was missing (end time, Yango fee / VAT)
-        if(t.te && !e.te) fix.te = t.te; if(t.sf && !e.sf) fix.sf = t.sf; if(t.tx && !e.tx) fix.tx = t.tx; if(Object.keys(fix).length) merged[t.id] = {...e, ...fix}; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, te: t.te, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, po: t.po || 0, km: t.km || 0, pl}; added++; }
+        if(t.te && !e.te) fix.te = t.te; if(t.sf && !e.sf) fix.sf = t.sf; if(t.tx && !e.tx) fix.tx = t.tx; if(Object.keys(fix).length) merged[t.id] = {...e, ...fix}; continue; } merged[t.id] = {tr: t.tr, d: t.d, t: t.t, te: t.te, dr: t.dr, p: t.p, f: t.f, sf: t.sf, tx: t.tx, tp: t.tp, rf: t.rf, c: t.c, oe: t.oe || 0, ...(t.bn != null ? {bn: t.bn} : {}), po: t.po || 0, km: t.km || 0, pl}; added++; }
     if(!await writeOk(ref.set({date: day, rows: merged}))) throw new Error("could not save the trips");
   }
   const {id: _, ...b} = S.platforms[pl]; await writeOk(S.db.doc("platforms/" + pl).set({...b, sync: {at: new Date().toISOString(), from: iso(from), to: iso(to), added, dup, error: "", via}}));

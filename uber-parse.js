@@ -33,7 +33,8 @@
     ["txId", "Transaction ID (one row per money movement)", false], ["tripId", "Trip ID", false], ["date", "Date / time", false],
     ["driverUuid", "Driver UUID", false], ["driverFirst", "Driver first name", false], ["driverLast", "Driver surname", false], ["driverName", "Driver full name", false], ["plate", "Vehicle plate", false],
     ["fare", "Fare (if there is a fare total, only that column)", true], ["fee", "Platform service fee / commission", true], ["tax", "VAT / taxes charged by the platform", true], ["tip", "Tip", true],
-    ["refund", "Refunds & expenses (tolls, airport, surcharges)", true], ["cash", "Cash collected", true], ["other", "Other earnings / incentives", true],
+    ["refund", "Refunds & expenses (tolls, airport, surcharges)", true], ["cash", "Cash collected", true], ["other", "Other earnings / incentives (bonuses included)", true],
+    ["desc", "Description (tells a bonus apart)", false],
     ["payout", "Payouts transferred to the bank", true], ["km", "Distance (km)", true],
   ];
 
@@ -60,6 +61,7 @@
       other: many(/other earnings|incentive|promotion|bonus|quest|referral/),
       payout: many(/transferred to bank|transferred to bank account|payouts:transferred|instant pay|cash ?out to/),
       km: many(/distance|\bkm\b/),
+      desc: one(/^description$|^transaction description$|^memo$/),
     };
   }
 
@@ -76,13 +78,17 @@
     rows.forEach((r, i) => {
       const f = s(r, "fare"), sf = s(r, "fee", true), tx = s(r, "tax", true), tp = s(r, "tip"), rf = s(r, "refund"), c = s(r, "cash", true),
         oe = s(r, "other"), po = s(r, "payout", true), km = s(r, "km");
+      /* the bonus part of other earnings: a row described as a bonus / competition / quest / promotion, or other earnings
+         paid with no trip (a weekly competition prize), or a column named as a bonus */
+      const ds = String(g(r, "desc") || ""), trId = String(g(r, "tripId") || "");
+      const bn = !oe ? 0 : (BONUS_RE.test(ds) || (!trId && !f)) ? oe : (map.other || []).filter(c => BONUS_RE.test(low(c))).reduce((a, c) => a + num(r[c]), 0);
       if (!f && !sf && !tx && !tp && !rf && !c && !oe && !po) return;
       const dt = parseTripDate(g(r, "date"));
       const name = (g(r, "driverName") || [g(r, "driverFirst"), g(r, "driverLast")].filter(Boolean).join(" ") || "").trim();
       const tr = String(g(r, "tripId") || "");
       let id = g(r, "txId") || tr; if (!id) id = "row-" + norm(JSON.stringify(r)).slice(0, 40) + "-" + i;
       out.push({ id: String(id), tr, d: dt ? dt.date : "", t: dt ? dt.time : "", uuid: g(r, "driverUuid") || "", name, p: g(r, "plate") || "",
-        f: r2(f), sf: r2(sf), tx: r2(tx), tp: r2(tp), rf: r2(rf), c: r2(c), oe: r2(oe), po: r2(po), km: r2(km) });
+        f: r2(f), sf: r2(sf), tx: r2(tx), tp: r2(tp), rf: r2(rf), c: r2(c), oe: r2(oe), bn: r2(bn), po: r2(po), km: r2(km) });
     });
     return out;
   }
@@ -111,7 +117,12 @@
   // what our rows add up to (same formula as the Uber clearing account in the ledger)
   const balanceOf = rows => r2(rows.reduce((a, t) => a + t.f + t.tp + t.rf + t.oe - t.sf - t.tx - t.c - t.po, 0));
 
-  const API = { num, r2, norm, parseTripDate, detect, FIELDS, guessMap, paymentRows, activityRows, paidToYou, balanceOf };
+  /* Bonus / incentive paid by the platform (competitions, quests, promotions, referral rewards). It is part of
+     "other earnings" (oe keeps the total, so the platform balance is unchanged) and is kept apart as bn.
+     Rows imported before bn existed: other earnings with no trip and no fare count as a bonus. */
+  const BONUS_RE = /bonus|incentive|promotion|quest|competition|challenge|reward|referral|boost|guarantee|win\b/i;
+  const bonusOf = t => !t ? 0 : t.bn != null ? (t.bn || 0) : (!t.tr && !t.f && t.oe ? t.oe : 0);
+  const API = { num, r2, norm, parseTripDate, detect, FIELDS, guessMap, paymentRows, activityRows, paidToYou, balanceOf, BONUS_RE, bonusOf };
   root.UberParse = API;
   if (typeof module !== "undefined" && module.exports) module.exports = API;
 })(typeof window !== "undefined" ? window : globalThis);
