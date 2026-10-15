@@ -334,9 +334,15 @@ async function yangoFees(pl, fromTs, toTs){
   }
   return out;
 }
-async function browserSync(pl, days){
+/* the period asked for: {from, to} (YYYY-MM-DD, both days included; "to" today = up to now) or a number of days back */
+function syncSpan(range){
+  if(typeof range === "number"){ const to = new Date(); return {from: new Date(iso(new Date(to.getTime() - range * 86400000)) + "T00:00:00"), to}; }
+  const now = new Date(), to = !range.to || range.to >= iso(now) ? now : new Date(range.to + "T23:59:59");
+  return {from: new Date(range.from + "T00:00:00"), to};
+}
+async function browserSync(pl, range){
   const p = S.platforms[pl], api = (p || {}).api || {}, F = {end: (((PLT_PRESETS[pl] || {}).api || {}).fields || {}).end, ...(api.fields || {})};
-  const to = new Date(), from = new Date(to.getTime() - days * 86400000), fromTs = Math.floor(new Date(iso(from) + "T00:00:00").getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
+  const {from, to} = syncSpan(range), fromTs = Math.floor(from.getTime() / 1000), toTs = Math.floor(to.getTime() / 1000);
   let j, via;
   if(api.direct){ j = await directOrders(pl, fromTs, toTs); via = "API"; }
   else if(api.proxyUrl && api.proxyKey){ const r = await fetch(`${api.proxyUrl}${api.proxyUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(api.proxyKey)}&from=${fromTs}&to=${toTs}`);
@@ -382,7 +388,7 @@ function syncBox(only){
       <div class="small" style="margin-top:3px${only && S.platforms[only] && S.platforms[only].api && S.platforms[only].api.direct ? ";display:none" : ""}">Office PC listener: ${alive ? '<span class="pill good">Online</span>' : '<span class="pill bad">Offline</span> <span class="muted">– start "5 - Start sync listener" on the office PC</span>'}
       ${st ? ` · last request ${when(r.at)}: ${st === "done" ? `<span class="pill good">Done</span> ${when(r.doneAt)}` : st === "error" ? '<span class="pill bad">Failed</span>' : st === "running" ? '<span class="pill warn">Running…</span>' : '<span class="pill warn">Waiting for the PC…</span>'}` : ""}</div>
       ${r.log && r.log.length && (st === "done" || st === "error") ? `<div class="small muted" style="margin-top:3px;white-space:pre-line">${esc(r.log.slice(-6).join("\n"))}</div>` : ""}</div>
-    <div class="row" style="gap:6px;align-items:center">${only ? "" : `<label class="small"><input type="checkbox" id="syncUber"> Uber too</label>`}<label class="small">Days <input id="syncDays" type="number" min="1" max="62" value="2" style="width:56px"></label>
+    <div class="row" style="gap:6px;align-items:center">${only ? "" : `<label class="small"><input type="checkbox" id="syncUber"> Uber too</label>`}<label class="small">From <input id="syncFrom" type="date" value="${esc(S.syncFrom || iso(new Date(Date.now() - 2 * 86400000)))}" max="${iso(new Date())}"></label><label class="small">To <input id="syncTo" type="date" value="${esc(S.syncTo || iso(new Date()))}" max="${iso(new Date())}"></label>
       <button class="btn primary" data-syncnow="${esc(only || "")}" ${S.canWrite && !busy ? "" : "disabled"}>${busy ? "Syncing…" : "Sync now"}</button></div></div></div>`;
 }
 
@@ -406,14 +412,16 @@ document.addEventListener("click", async ev => {
   if(t.dataset.poconfirm){ const p = S.platforms[t.dataset.poconfirm]; if(!p){ toast("Add the platform on Platforms & contracts first."); return; } const {id, ...b} = p;
     if(await writeOk(S.db.doc("platforms/" + id).set({...b, payoutConfirm: !p.payoutConfirm}))) toast(p.payoutConfirm ? "Payouts are taken as received again." : "Reconciliation on – match each payout with the bank credit."); render(); return; }
   if(t.dataset.pomatch != null){ S.poMatch = t.dataset.pomatch ? {pl: t.dataset.pl, id: t.dataset.pomatch} : null; render(); return; }
-  if(t.dataset.syncnow != null){ const days0 = Math.max(1, Math.min(62, num(($("#syncDays") || {}).value) || 2)), only = t.dataset.syncnow;
+  if(t.dataset.syncnow != null){ const today = iso(new Date()); let f0 = ($("#syncFrom") || {}).value || iso(new Date(Date.now() - 2 * 86400000)), t0 = ($("#syncTo") || {}).value || today, only = t.dataset.syncnow;
+    if(t0 > today) t0 = today; if(f0 > t0){ toast("The From date is after the To date."); return; }
+    S.syncFrom = f0; S.syncTo = t0; const range = {from: f0, to: t0}, days0 = Math.max(1, Math.round((new Date(today) - new Date(f0)) / 86400000) + 1);
     const direct = Object.values(S.platforms).filter(p => p.api && (p.api.direct || (p.api.proxyUrl && p.api.proxyKey)) && (!only || p.id === only));
     if(direct.length){ t.disabled = true; const lines = [];
-      for(const p of direct){ t.textContent = "Fetching " + (p.name || p.id) + "…"; try{ const x = await browserSync(p.id, days0); lines.push(`${p.name || p.id}: ${x.kept} trips, ${x.added} new, ${x.dup} already there`); }catch(e){ lines.push(`${p.name || p.id}: failed – ${e.message}`);
-        const q = S.platforms[p.id]; if(q){ const {id: _, ...b} = q; await writeOk(S.db.doc("platforms/" + p.id).set({...b, sync: {at: new Date().toISOString(), from: iso(new Date(Date.now() - days0 * 86400000)), to: iso(new Date()), added: 0, dup: 0, error: e.message, via: b.api && b.api.direct ? "API" : "Apps Script"}})); } } }
+      for(const p of direct){ t.textContent = "Fetching " + (p.name || p.id) + "…"; try{ const x = await browserSync(p.id, range); lines.push(`${p.name || p.id}: ${x.kept} trips, ${x.added} new, ${x.dup} already there`); }catch(e){ lines.push(`${p.name || p.id}: failed – ${e.message}`);
+        const q = S.platforms[p.id]; if(q){ const {id: _, ...b} = q; await writeOk(S.db.doc("platforms/" + p.id).set({...b, sync: {at: new Date().toISOString(), from: f0, to: t0, added: 0, dup: 0, error: e.message, via: b.api && b.api.direct ? "API" : "Apps Script"}})); } } }
       await loadPeriod(); S.ledger = null; toast(lines.join(" · ")); render(); if(only && direct.some(p => p.id === only)) return; }
     const days = days0, uber = !!(($("#syncUber") || {}).checked);
-    const prev = S.syncReq || {}; if(await writeOk(S.db.doc("settings/syncRequest").set({...prev, status: "waiting", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", days, uber, only: t.dataset.syncnow || "", log: []}))) toast(prev.listener && (Date.now() - new Date(prev.listener).getTime()) < 180000 ? "Sync requested – the office PC is fetching the trips." : "Sync requested – it runs when the listener on the office PC is started."); return; }
+    const prev = S.syncReq || {}; if(await writeOk(S.db.doc("settings/syncRequest").set({...prev, status: "waiting", at: new Date().toISOString(), by: (S.user && (S.user.name || S.user.id)) || "", days, from: f0, to: t0, uber, only: t.dataset.syncnow || "", log: []}))) toast(prev.listener && (Date.now() - new Date(prev.listener).getTime()) < 180000 ? "Sync requested – the office PC is fetching the trips." : "Sync requested – it runs when the listener on the office PC is started."); return; }
   if(t.dataset.apitest){ const pl = t.dataset.apitest; t.disabled = true; t.textContent = "Testing…";
     try{ const api = (S.platforms[pl] || {}).api || {};
       if(api.authType === "yango"){ const now = Math.floor(Date.now() / 1000), x = await directOrders(pl, now - 86400, now); toast(`Connected to ${pName(pl)} – ${x.orders.length} completed order(s) in the last 24 hours.`); render(); return; }
